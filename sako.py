@@ -27,7 +27,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 TASK_ID = re.compile(r"\bT-\d+\b")
 MARKER = re.compile(r"sk-\d{4}-[0-9a-f]{12}")

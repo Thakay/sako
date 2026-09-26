@@ -33,6 +33,7 @@ Homepage = "https://github.com/Thakay/sako"
 Documentation = "https://github.com/Thakay/sako/tree/main/docs"
 Issues = "https://github.com/Thakay/sako/issues"
 Source = "https://github.com/Thakay/sako"
+Changelog = "https://github.com/Thakay/sako/blob/main/CHANGELOG.md"
 
 [project.scripts]
 sako = "sako:main"
@@ -56,4 +57,4 @@ bypass-selection = true
 # match a local install's .sako/sako.py, which only .git/info/exclude keeps out of Git.
 [tool.hatch.build.targets.sdist]
 include = ["/sako.py", "/SAKO.md", "/README.md", "/LICENSE", "/CONTRIBUTING.md", "/AGENTS.md",
-           "/SECURITY.md", "/templates/TASKS.md", "/skills/", "/docs/", "/tests/"]
+           "/SECURITY.md", "/CHANGELOG.md", "/templates/TASKS.md", "/skills/", "/docs/", "/tests/"]

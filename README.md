@@ -18,24 +18,23 @@ Markdown, and the runtime is one Python file with no service or account to set u
 
 SAKO stands for Simple Agentic Kit for Operations, pronounced "sah-ko".
 
-**Alpha:** commands and file formats can change in any 0.x release. Install from a
-checkout using the steps below.
+**Alpha:** commands and file formats can change in any 0.x release.
 
 ## Quickstart
 
-You need Python 3.10 or newer, Git 2.31 or newer, and a coding agent that can run
-commands. SAKO runs on Linux, WSL, macOS, and Windows.
+You need Python 3.10 or newer, Git 2.31 or newer,
+[uv](https://docs.astral.sh/uv/getting-started/installation/), and a coding agent
+that can run commands. SAKO runs on Linux, WSL, macOS, and Windows.
 
 On Windows, use `python` wherever these instructions say `python3`. Check that
 `python --version` reports 3.10 or newer in Git Bash, where Claude Code runs
 SAKO's hooks
 ([platform notes](https://github.com/Thakay/sako/blob/main/docs/limits.md#environment)).
 
-From your project's Git repository, clone SAKO alongside it and install:
+From your project's Git repository, install SAKO:
 
 ```sh
-git clone https://github.com/Thakay/sako.git ../sako
-python3 ../sako/sako.py init
+uvx sako init
 ```
 
 In a project containing `CLAUDE.md`, the installer sets up Claude Code's hooks and
@@ -48,9 +47,6 @@ Records: .sako/work/TASKS.md and DONE.md. They are not in Git yet; git clean -x 
   Commit them with the code:                    uvx sako init --shared
 Hooks written: Claude Code (.claude/settings.local.json), chosen from CLAUDE.md. Start a session to begin. Change the client with: uvx sako init --client claude|codex|none.
 ```
-
-The output uses `uvx sako` in its suggested commands. For this checkout install,
-replace that prefix with `python3 ../sako/sako.py`.
 
 Next, set your project's check command in `.sako/config.json`. For example, a
 Python project using unittest would set
