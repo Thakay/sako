@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sako"
+dynamic = ["version"]
+description = "A task ledger and finish gate for coding agents"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Kasra Aminiyeganeh" }]
+keywords = ["coding agents", "task ledger", "finish gate", "claude code", "codex", "agentic development"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/Thakay/sako"
+Documentation = "https://github.com/Thakay/sako/tree/main/docs"
+Issues = "https://github.com/Thakay/sako/issues"
+Source = "https://github.com/Thakay/sako"
+
+[project.scripts]
+sako = "sako:main"
+
+[tool.hatch.version]
+path = "sako.py"
+
+# The wheel is the kit folder. The one runtime file installs as sako/__init__.py
+# next to the documents it copies into a project; nothing moves in the checkout.
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"sako.py" = "sako/__init__.py"
+"SAKO.md" = "sako/SAKO.md"
+"templates/TASKS.md" = "sako/templates/TASKS.md"
+"skills/sako/SKILL.md" = "sako/skills/sako/SKILL.md"
+
+# The source archive carries the tests and every document they read, so its tests pass.
+# A leading slash anchors each pattern to this folder: unanchored, "sako.py" would also
+# match a local install's .sako/sako.py, which only .git/info/exclude keeps out of Git.
+[tool.hatch.build.targets.sdist]
+include = ["/sako.py", "/SAKO.md", "/README.md", "/LICENSE", "/CONTRIBUTING.md", "/AGENTS.md",
+           "/SECURITY.md", "/templates/TASKS.md", "/skills/", "/docs/", "/tests/"]
