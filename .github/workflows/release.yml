@@ -1,6 +1,16 @@
 name: release
 
 # A version tag (v0.5.0) publishes to PyPI; a manual run publishes to TestPyPI.
+#
+# To release:
+# 1. Set VERSION in sako.py, add the CHANGELOG.md entry, and regenerate the demo:
+#    python3 tests/demo.py > docs/demo.md
+# 2. Push to main and wait for the checks workflow to pass.
+# 3. Tag and push: git tag -a v0.5.0 -m "SAKO 0.5.0" && git push origin v0.5.0
+# 4. Approve the pypi deployment on the run's page; only v* tags may deploy there.
+# 5. Once PyPI has it, publish the GitHub Release with the changelog entry:
+#    gh release create v0.5.0 --verify-tag --notes-file <entry with absolute links>
+# A version on PyPI can never be reused; yank a bad release instead.
 on:
   push:
     tags: ["v*"]
