@@ -31,6 +31,9 @@ SAKO = HERE.parent / "sako.py"
 WINDOWS = sys.platform == "win32"
 LEASE = "on Windows presence is the 24-hour lease: SAKO reads no process there"
 NO_CODEX = "on Windows Codex gets no hooks: it runs them in PowerShell"
+# SAKO resolves every path, so the fixtures start from resolved ones: macOS links /var
+# to /private/var, and Windows may name the temporary folder in its short 8.3 form.
+tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
 
 ENV = dict(os.environ,
            GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null",
@@ -691,7 +694,7 @@ def scenario_existing_project_reuses_context_and_checks(ws: Path) -> None:
     expect((repo / "product/brief.md").read_text() == brief, "reuse the specification")
     expect(not (repo / ".sako/work/TASKS.md").exists(), "custom records have no duplicate default")
     expect(not (repo / "docs/PRD.md").exists(), "no second specification")
-    expect((repo / ".codex/hooks.json").is_file(), "selected clients get hooks by default")
+    expect((repo / ".codex/hooks.json").is_file() != WINDOWS, "selected clients get hooks by default; " + NO_CODEX)
     succeeds(installed(repo, "add", "Numeric strings total as numbers; existing assertion fails with concatenation", "--scope", "src", "--scope", "tests"))
     baseline = installed(repo, "verify")
     expect(baseline.returncode == 1, baseline.stdout + baseline.stderr)

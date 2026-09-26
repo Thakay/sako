@@ -197,7 +197,7 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 2, err)
         self.assertIn("covered by no task you claimed or closed: wt", err)
 
-    @unittest.skipIf(fixture.WINDOWS, "Windows file names are Unicode: no byte name exists")
+    @unittest.skipIf(sys.platform in ("win32", "darwin"), "macOS and Windows file names are Unicode: no byte name exists")
     def test_an_odd_worktree_path_never_makes_the_gate_skip(self):
         self.start("s1")
         fixture.git(self.root, "worktree", "add", "-q", "-b", "odd", str(self.base / os.fsdecode(b"wt-\xff")))
