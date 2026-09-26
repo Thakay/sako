@@ -20,9 +20,10 @@ platform:
   placeholder only prints a message. A failed `init --repo URL` there can leave
   read-only Git files in `.sako/`; delete the folder before trying again. How Claude
   Code and Codex run hooks on Windows is in [compatibility](compatibility.md#windows).
-- **macOS:** allowed, on the same POSIX code as Linux, and unverified: no test suite
-  has run on a Mac. A stock Mac's `python3` is 3.9, below the floor; install Python
-  3.10 or newer.
+- **macOS:** both test suites in CI on GitHub's macOS runner with Python 3.10 and
+  3.14, on the same POSIX code as Linux; one test skips by name, since macOS refuses
+  a file name that is not UTF-8. No live client session has run on a Mac. A stock
+  Mac's `python3` is 3.9, below the floor; install Python 3.10 or newer.
 
 SAKO's hooks and printed commands use `python3`, or `python` on Windows. Parent
 discovery reads `/proc` and falls back to `ps`, including when the shell is `fish`.
