@@ -17,7 +17,7 @@ behavior in full.
 | 6 | **Writes under one lock, across worktrees.** Parallel adds get distinct IDs, one claim wins, overlaps and live owners are refused, a stale takeover needs a reason, and repeated intake reuses its task | Concurrent adds from two worktrees, claim races, unverified holders, repeat intake; scenarios `presence_peers_and_stale_claims`, `scopes_and_overlap`, `interruption_recovery`, `worktrees_share_presence`, `external_plan_intake_and_completion` | Across machines: one writer at a time, stated, not tested |
 | 7 | **One command, nothing tracked changes.** `init` needs no flags, leaves `git status` clean and instructions untouched, names the clients it wired and why, and refuses unsupported platforms and layouts before any write | Detection from each client signal, `--client`, tracked client files left alone, refusals, the package and a checkout installing the same files; scenarios `init_and_hook_dispatch`, `root_refusals`, `invalid_install_has_no_partial_assets`; an offline `uvx` install from the wheel | Live hook delivery beyond the sessions in [compatibility](compatibility.md); Cursor unchecked |
 | 8 | **One method document, any planner.** SAKO.md alone, its required part within the 1,500-word reading budget; intake keeps source references; a default planner serves projects without one | The reading-budget and routing test (measured in [Measured fixture overhead](#measured-fixture-overhead)); scenarios `greenfield_adoption_and_fresh_pickup`, `existing_project_reuses_context_and_checks`, `unstructured_project_and_completed_goal`, `replanning_preserves_authority_and_blockers`; the [intake recipes](intake-recipes.md), each run once | Planning judgment by outside users |
-| 9 | **The whole loop, shown.** The demo is generated from a real run of its task, and a test keeps the page current | The demo, regenerated in a test and compared with the page | A newcomer's own timing |
+| 9 | **The whole loop, shown.** The finish-gate and two-session demos use real SAKO output from scripted runs | Both transcripts and the [README storyboard](assets/readme/working-together.svg), regenerated in a test and compared with the files | Live AI collaboration and a newcomer's own timing |
 | 10 | **Records leave with you.** `remove` keeps `config.json` and `work/` byte for byte and clears every worktree's hooks; an update replaces only unmodified kit files; unrelated settings, skills and instructions survive | Removal and update tests, local-change and older-release refusals; scenarios `update_and_removal_preserve_project_data`, `package_adoption_pickup_and_removal`; the [tracker recipes](move-to-a-tracker.md) | No move to a tracker observed |
 | 11 | **Three footprints, one folder.** The footprint is recorded and checked against Git; switching keeps the records byte for byte; `--shared` commits nothing; worktrees share the main checkout's folder, except in shared | The repo and shared footprint tests: nested repository, clone and remote, conflict refusal, both gate forms, removal warnings, per-branch copies, switches | None |
 
@@ -33,7 +33,7 @@ They also run inside discovery, so the counts overlap. The skill meets the Agent
 Skills format. No independent agent or outside user has validated adoption
 judgment.
 
-Last local run on 2026-09-23, on WSL2 (Ubuntu 24.04, Linux 6.18) with Git 2.43.0:
+Last local run on 2026-09-29, on WSL2 (Linux 6.18) with Git 2.43.0:
 both suites pass on Python 3.10.20 and 3.12.3, with 180 tests and 22 scenarios.
 
 ## Native Windows
@@ -64,9 +64,9 @@ passed.
 | [test_workflow.py](../tests/test_workflow.py) | Commands end to end: parallel adds and claims, repeat intake, prerequisites, interrupted closes, receipts, handoff folders, `--session` on every command |
 | [test_footprint.py](../tests/test_footprint.py) | The three footprints and the switches between them, worktrees, and one regression per defect the reviews found |
 | [test_compatibility.py](../tests/test_compatibility.py) | Client detection and `--client`, both clients' hook commands and session defaults, presence across process namespaces, refused older installations, unrelated settings kept |
-| [test_release.py](../tests/test_release.py) | Process identity, the package's contents, documentation covered by the check, the budgets, the [demo](demo.md) against a fresh run, and the links |
+| [test_release.py](../tests/test_release.py) | Process identity, the package's contents, documentation covered by the check, the budgets, both demo transcripts and the README storyboard against fresh runs, and the links |
 | [selftest.py](../tests/selftest.py) | 22 scenarios, from adoption to recovery; they supply the planning choices, so they prove the mechanics, not an agent's judgment |
-| [demo.py](../tests/demo.py), [measure.py](../tests/measure.py) | Generate the demo page and the measurements |
+| [demo.py](../tests/demo.py), [measure.py](../tests/measure.py) | Generate the demo pages, the README storyboard and the measurements |
 | [planning-cases.md](../tests/planning-cases.md) | Manual planning trials for outside adopters |
 
 Tests whose premise Windows lacks skip there with a named reason; the Windows-only

@@ -148,7 +148,7 @@ review what you install, and update on purpose
 
 ## What SAKO does not do
 
-Beyond the [README's table](../README.md#sako-is-and-is-not): SAKO does not start,
+Beyond [how SAKO works](../README.md#how-it-works): SAKO does not start,
 direct or message subagents, merge their edits, fetch issues, sync trackers, create
 applications, or make branches, worktrees, commits, pushes or deployments. The gate
 names the commit a finished task needs, and you or your agent make it.

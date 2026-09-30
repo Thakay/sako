@@ -12,8 +12,10 @@ context prints.
 
 ## Daily loop
 
-1. **Start.** The session-start hook prints the context and your session ID.
-   Without it, run `start --session <id>` with an ID unique to this conversation.
+1. **Check in.** The session-start hook registers your existing agent session
+   with SAKO and prints context and your session ID. Without the hook, run
+   `start --session <id>` with an ID unique to this conversation. This checks
+   you in; it does not launch an agent.
    Pass the same ID to every command; in Claude Code and Codex, a command
    without `--session` uses the client's session ID, the one the hook used.
 2. **Choose and claim.** Follow the owner's priority. `next` names the task to

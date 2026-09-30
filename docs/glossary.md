@@ -5,6 +5,7 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Word | Meaning here |
 |---|---|
 | Check | The project's own command, such as its tests, set as `verify_command` in `.sako/config.json`; `verify` runs it |
+| Check-in | Register an existing agent session with SAKO and get its context, through a session-start hook or the `start` command |
 | Claim | A session's ownership of a task, in the task's Status. A live claim cannot be replaced |
 | Client | The program an agent runs in. SAKO wires hooks for Claude Code and Codex; with others, the agent runs the commands |
 | Completion condition | The observable result that makes a task done: its "Done when" cell |
@@ -22,6 +23,7 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Presence | SAKO's record of which sessions are live, which protects live claims |
 | Receipt | What `close` writes for a finished task: the completion condition, the evidence, the closing session, the date and what the check said |
 | Scope | The path prefixes a task may change |
+| Session | A conversation opened in an agent client; `start` registers it with SAKO and `end` removes its presence record |
 | Source | The exact reference to the planner item a task came from, such as `PLAN.md#N1` |
 | Stamp | The record of a passing check on a fingerprint of the checked content |
 | Takeover | Claiming a task whose holder is no longer live, with a reason |

@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "How SAKO fits your project",
+    "output": "how-it-works.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Thakay/sako.git",
+      "revision": "a8455bfb77cc967f975d4c6c34fbdab0bb6bb3d9",
+      "provider": "github",
+      "link_mode": "web"
+    }
+  },
+  "components": [
+    {
+      "id": "owner",
+      "type": "external",
+      "icon": "person",
+      "label": "You",
+      "pos": [
+        24,
+        24
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "SAKO.md",
+          "line": 19,
+          "end_line": 28
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "type": "backend",
+      "icon": "none",
+      "label": "Agent sessions",
+      "pos": [
+        330,
+        24
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "SAKO.md",
+          "line": 15,
+          "end_line": 38
+        },
+        {
+          "path": "sako.py",
+          "line": 1675,
+          "end_line": 1706
+        }
+      ]
+    },
+    {
+      "id": "sako",
+      "type": "backend",
+      "icon": "none",
+      "label": "SAKO",
+      "pos": [
+        330,
+        238
+      ],
+      "size": [
+        160,
+        72
+      ],
+      "sources": [
+        {
+          "path": "sako.py",
+          "line": 875,
+          "end_line": 898
+        },
+        {
+          "path": "sako.py",
+          "line": 936,
+          "end_line": 999
+        }
+      ]
+    },
+    {
+      "id": "records",
+      "type": "database",
+      "icon": "none",
+      "label": "Task records",
+      "pos": [
+        24,
+        238
+      ],
+      "size": [
+        150,
+        72
+      ],
+      "sources": [
+        {
+          "path": "sako.py",
+          "line": 456,
+          "end_line": 465
+        },
+        {
+          "path": "sako.py",
+          "line": 1639,
+          "end_line": 1671
+        }
+      ]
+    },
+    {
+      "id": "checks",
+      "type": "backend",
+      "icon": "none",
+      "label": "Your checks",
+      "pos": [
+        330,
+        460
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "sako.py",
+          "line": 663,
+          "end_line": 693
+        }
+      ]
+    },
+    {
+      "id": "git",
+      "type": "external",
+      "icon": "none",
+      "label": "Git",
+      "pos": [
+        24,
+        460
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "sako.py",
+          "line": 936,
+          "end_line": 999
+        },
+        {
+          "path": "SAKO.md",
+          "line": 29,
+          "end_line": 33
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "direction",
+      "from": "owner",
+      "to": "agents",
+      "label": "direct"
+    },
+    {
+      "id": "commands",
+      "from": "agents",
+      "to": "sako",
+      "label": "commands / hooks"
+    },
+    {
+      "id": "context",
+      "from": "sako",
+      "to": "agents",
+      "label": "context / findings",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right",
+      "via": [
+        [
+          595,
+          274
+        ],
+        [
+          595,
+          56
+        ]
+      ]
+    },
+    {
+      "id": "record-io",
+      "from": "sako",
+      "to": "records",
+      "label": "read / write"
+    },
+    {
+      "id": "check-run",
+      "from": "sako",
+      "to": "checks",
+      "label": "run checks"
+    },
+    {
+      "id": "git-read",
+      "from": "sako",
+      "to": "git",
+      "label": "read changes"
+    }
+  ]
+}

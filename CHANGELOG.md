@@ -5,6 +5,35 @@ Notable changes to SAKO, one entry per release. The format follows
 [Semantic Versioning](https://semver.org/). SAKO is alpha software: commands and file
 formats can change in any 0.x release.
 
+## [0.5.1] - 2026-09-29
+
+A clearer first page and session check-in wording. Runtime behavior, commands
+and task record formats are unchanged. SAKO remains alpha software.
+
+From your project's Git repository, install with `uvx sako@0.5.1 init`, or
+update an existing installation with `uvx sako@0.5.1 init --update`.
+
+### Added
+
+- A README storyboard from a reproducible two-session example, with its full
+  command transcript and checks that keep it current.
+- A compact diagram of how SAKO fits a project, with editable visual sources.
+
+### Changed
+
+- A shorter README organized around getting started, working with parallel
+  agents, and bringing clarity to an existing project.
+- The method, skill and demos describe `start` as registering an existing agent
+  session. Your coding tool launches agents; SAKO coordinates their task records
+  and checks. `end` clears presence without stopping the agent process.
+
+### Validation
+
+- Both suites pass on Python 3.10 and 3.12 locally, with 180 tests and 22
+  scenarios; these counts overlap.
+- CI checks Python 3.10 and 3.14 on Linux, macOS and Windows, plus package
+  building and installation. The known [platform limits](docs/limits.md) remain.
+
 ## [0.5.0] - 2026-09-25
 
 The first public release.
@@ -42,3 +71,4 @@ Install from your project's Git repository with `uvx sako init`. To update later
   on Windows.
 
 [0.5.0]: https://github.com/Thakay/sako/releases/tag/v0.5.0
+[0.5.1]: https://github.com/Thakay/sako/releases/tag/v0.5.1

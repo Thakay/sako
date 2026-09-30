@@ -4,10 +4,11 @@ What each client needs to run SAKO, and how it behaves there. Behavior is define
 [the method](../SAKO.md); boundaries are in [limits](limits.md).
 
 SAKO needs an agent that can read project files and run commands, in a local Git
-repository ([environment](limits.md#environment)). Hooks are optional adapters that
-run three commands for the agent: SessionStart prints the start context, Stop runs
-the finish gate, and SessionEnd removes the session's presence. Without hooks, the
-agent runs `start`, `check --gate` and `end` itself, as the method says.
+repository ([environment](limits.md#environment)). Hooks are optional adapters:
+the client's SessionStart event checks the existing session in with SAKO and
+prints context, Stop runs the finish gate, and SessionEnd removes the session's
+presence. Without hooks, the agent runs `start`, `check --gate` and `end` itself,
+as the method says.
 
 ## Per client
 

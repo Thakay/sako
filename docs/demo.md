@@ -29,11 +29,11 @@ The check is the project's own `check.py`, set in `.sako/config.json` as `"verif
 
 ## 2. The agent says it is done too early
 
-A session starts; the hook gives the agent its context. The owner asks for a greeting by name, and the agent records the task.
+The owner opens the agent in their coding tool. Its hook registers the existing session with SAKO and prints context. The owner asks for a greeting by name, and the agent records the task.
 
 ```text
 $ # Claude Code's SessionStart hook (demo-agent)
-sako 0.5.0 · work /work/greeting (main @ 689762746)
+sako 0.5.1 · work /work/greeting (main @ 689762746)
 This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-agent
@@ -138,11 +138,11 @@ $ tail -1 .sako/work/DONE.md
 
 ## 5. A fresh session picks up
 
-A new conversation, with no chat history, gets the records and the next task from the files.
+The owner opens a new conversation in the coding tool. Its hook checks it in with SAKO and gets the records and next task from the files.
 
 ```text
 $ # Claude Code's SessionStart hook (demo-next)
-sako 0.5.0 · work /work/greeting (main @ 8b1102e9b)
+sako 0.5.1 · work /work/greeting (main @ 8b1102e9b)
 This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next

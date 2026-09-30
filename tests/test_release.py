@@ -215,12 +215,15 @@ class Budgets(unittest.TestCase):
 
 class Demo(unittest.TestCase):
     @unittest.skipIf(fixture.WINDOWS, "the published demo is a Linux run: python3 and POSIX paths")
-    def test_the_published_demo_matches_a_fresh_run(self):
-        run = subprocess.run([sys.executable, str(Path(__file__).parent / "demo.py")], capture_output=True, text=True,
-                             env=fixture.ENV, cwd=Path(__file__).parent)
-        self.assertEqual(run.returncode, 0, run.stderr)
-        page = (fixture.SAKO.parent / "docs/demo.md").read_text()
-        self.assertEqual(run.stdout, page, "regenerate: python3 tests/demo.py > docs/demo.md")
+    def test_the_published_demos_match_fresh_runs(self):
+        for args, path in (([], "docs/demo.md"), (["--coordination"], "docs/coordination-demo.md"),
+                           (["--readme-svg"], "docs/assets/readme/working-together.svg")):
+            with self.subTest(path=path):
+                run = subprocess.run([sys.executable, str(Path(__file__).parent / "demo.py"), *args],
+                                     capture_output=True, text=True, env=fixture.ENV, cwd=Path(__file__).parent)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                page = (fixture.SAKO.parent / path).read_text()
+                self.assertEqual(run.stdout, page, f"regenerate: python3 tests/demo.py {' '.join(args)} > {path}")
 
 
 class Links(unittest.TestCase):
@@ -272,6 +275,8 @@ class Links(unittest.TestCase):
                 problems.append(f"{name}: has an em dash")
             for target in re.findall(r"\]\(\s*<?([^)\s>]+)", self.prose(text)):
                 local, base = re.match(re.escape(repository) + r"/(?:blob|tree)/main/(.+)", target), page.parent
+                raw_base = repository.replace("https://github.com/", "https://raw.githubusercontent.com/")
+                local = local or re.match(re.escape(raw_base) + r"/main/(.+)", target)
                 if local:
                     absolute += 1
                     target, base = local.group(1), self.ROOT
