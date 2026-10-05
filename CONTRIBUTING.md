@@ -55,7 +55,7 @@ needed. Read [SAKO.md](SAKO.md) before changing behavior.
 | `templates/` | The empty task table |
 | `docs/` | Compatibility, the demo, the glossary, intake recipes, limits, moving to a tracker, update and removal, validation |
 | `tests/` | Unit, concurrent-process, adoption, recovery and documentation checks |
-| `.github/` | CI, the bug form and Dependabot |
+| `.github/` | CI, the bug form, the pull request template and Dependabot |
 
 ## Check the change
 
@@ -119,10 +119,19 @@ the kit's lifecycle.
 
 ## AI-assisted contributions
 
-They are welcome under four rules: you reviewed the change and can explain it; both
-suites pass; you wrote the pull request description yourself; and each commit names
-the tools that helped, with a `Co-authored-by:` trailer as
-[AGENTS.md](AGENTS.md#commits) describes. No session links.
+Pull requests made with AI tools are welcome, including those an agent opens with no
+person in the loop. They are reviewed like any other change, under three rules:
+
+- **Name the tool.** Each commit ends with one `Co-authored-by:` trailer per AI tool
+  that did the work, as [AGENTS.md](AGENTS.md#commits) describes, and the pull
+  request's AI tool field names the same tools. Work by a person alone carries no
+  trailer, and that field says "none".
+- **Show the checks.** Both suites pass, and the pull request carries their output.
+- **Answer review.** Someone, the agent or the person running it, answers review
+  questions on the pull request.
+
+No session links. Agents working from a fork follow
+[AGENTS.md](AGENTS.md#work-from-a-fork).
 
 ## How the project runs
 

@@ -43,6 +43,18 @@ evidence (validation).
 - The scenario suite starts `sleep` processes as stand-ins for agent sessions. An
   interrupted run leaves them until they exit on their own, within an hour.
 
+## Work from a fork
+
+- First look for an open pull request on the issue (`gh pr list --repo Thakay/sako
+  --search "<issue number>"`, or the issue's linked pull requests). If one exists,
+  choose another issue.
+- One issue per pull request. Fill in every part of the pull request template.
+- Run the [Checks](#checks) and paste their output in the pull request.
+- Leave `.github/` alone, and stay within the
+  [design budgets](CONTRIBUTING.md#design-budgets).
+- Name each AI tool that did the work in a `Co-authored-by:` trailer, as
+  [Commits](#commits) describes.
+
 ## Checks
 
 From the checkout root:
@@ -58,8 +70,8 @@ Run both suites on the oldest supported Python when it is available. A change to
 
 ## Commits
 
-Commit under the author and committer identity already configured for this
-repository; never replace it with a tool identity or change global settings.
+Commit under the author and committer identity Git already uses in your checkout;
+never replace it with a tool identity or change global settings.
 
 Every agent-created commit ends, after a blank line, with one trailer per tool that
 did the work, each exactly once:
@@ -69,8 +81,9 @@ Co-authored-by: Codex <noreply@openai.com>
 Co-authored-by: Claude <noreply@anthropic.com>
 ```
 
-Use the Codex trailer for Codex work and the Claude trailer for Claude work. Credit both
-only when both materially contributed. Review-only involvement belongs in review
+Use the Codex trailer for Codex work and the Claude trailer for Claude work; another
+tool uses its own name and address in the same form. Credit a tool only when it
+materially contributed. Review-only involvement belongs in review
 evidence, not co-authorship. Commits made by a person alone carry no tool trailer.
 Keep each trailer exactly once when amending or squashing. These trailers are the
 whole attribution: no `Claude-Session` trailer, no session links.

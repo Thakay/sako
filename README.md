@@ -1,5 +1,9 @@
 # SAKO
 
+[![Latest release on PyPI](https://img.shields.io/pypi/v/sako)](https://pypi.org/project/sako/)
+[![Status of the checks on main](https://github.com/Thakay/sako/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/Thakay/sako/actions/workflows/checks.yml)
+[![Supported Python versions](https://img.shields.io/pypi/pyversions/sako)](https://pypi.org/project/sako/)
+
 **Simple Agentic Kit for Operations**
 
 **Start simple. Keep your agents coordinated.**
@@ -118,6 +122,9 @@ A repeated stop or a hook error can let a session end. Read the
 [Limits](https://github.com/Thakay/sako/blob/main/docs/limits.md) ·
 [Validation](https://github.com/Thakay/sako/blob/main/docs/validation.md) ·
 [Glossary](https://github.com/Thakay/sako/blob/main/docs/glossary.md)
+
+**Help wanted:** start with an open
+[good first issue](https://github.com/Thakay/sako/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
 
 Questions and discoveries are welcome in
 [issues](https://github.com/Thakay/sako/issues). See
