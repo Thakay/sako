@@ -411,6 +411,130 @@ class Gate(unittest.TestCase):
         self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
         self.assertIn("verify before closing", refusal.stderr)
 
+    def test_a_records_only_task_needs_no_check_while_only_others_moved_checked_content(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.write(self.root, {"src/app.py": "print('a draft from before this session')\n"})
+        self.start("s1")
+        for number in (1, 2, 3):
+            fixture.succeeds(fixture.installed_copy(self.root, "add", f"Plan step {number}", "--done-when", "Written",
+                                                    "--scope", f".sako/work/plan-{number}.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s1"))
+        refusal = fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Docs", "--session", "s1")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("evidence is stale", refusal.stderr, "a product task still needs the check")
+        done = self.root / ".sako/work/DONE.md"
+        for task, stamp in (("T-10", "stale"), ("T-11", "missing"), ("T-12", "fresh")):
+            with self.subTest(stamp=stamp):
+                if stamp == "missing":
+                    (self.root / ".sako/state/stamp.json").unlink()
+                elif stamp == "fresh":
+                    fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+                self.assertIn(f"evidence: {'none' if stamp == 'missing' else stamp}", self.run_in(self.root, "check")[1])
+                fixture.succeeds(fixture.installed_copy(self.root, "claim", task, "--session", "s1"))
+                fixture.succeeds(fixture.installed_copy(self.root, "close", task, "--evidence", "Written", "--session", "s1"))
+                receipt = next(r.evidence for r in sako.parse_rows({"done": done.read_text()}) if r.id == task)
+                self.assertRegex(receipt, rf"\[{sako.marker_for('s1')}; closed [\d-]+; no automated check \(records only\)\]$")
+                if stamp == "stale":
+                    code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+                    self.assertEqual(code, 0, out + err)
+        fixture.write(self.root, {"notes.txt": "this session's own change\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: notes.txt", err)
+        self.assertNotIn("Proven:", err)
+
+    def test_a_records_only_task_needs_the_check_once_this_session_moved_checked_content(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        fixture.git(self.root, "checkout", "-qb", "side")
+        fixture.write(self.root, {"src/app.py": "print(9)\n"})
+        fixture.commit_all(self.root, "side change")
+        fixture.git(self.root, "checkout", "-q", "main")
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Record the merge", "--done-when", "Logged",
+                                                "--scope", ".sako/work/merges.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.git(self.root, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+        refusal = fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Merged", "--session", "s1")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("verify before closing", refusal.stderr)
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Merged", "--session", "s1"))
+        self.assertIn("Merged [sk-", (self.root / ".sako/work/DONE.md").read_text())
+        self.assertIn("; check pass ", (self.root / ".sako/work/DONE.md").read_text())
+        fixture.write(self.root, {"src/app.py": "print(10)\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Proven: T-10 closed after checked content changed since you started", err)
+
+    def test_an_own_edit_or_a_merge_of_commits_older_than_the_session_needs_the_check_for_records_only_tasks(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.git(self.root, "checkout", "-qb", "side")
+        fixture.write(self.root, {"src/app.py": "print(9)\n"})
+        env = dict(fixture.ENV, GIT_COMMITTER_DATE="2001-01-01T00:00:00Z", GIT_AUTHOR_DATE="2001-01-01T00:00:00Z")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], env=env, check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "old work"], env=env, check=True)
+        fixture.git(self.root, "checkout", "-q", "main")
+        self.start("s1")
+        for number in (1, 2):
+            fixture.succeeds(fixture.installed_copy(self.root, "add", f"Log merge {number}", "--done-when", "Logged",
+                                                    "--scope", f".sako/work/merge-{number}.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.write(self.root, {"src/extra.py": "x = 1\n"})
+        refusal = fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Logged", "--session", "s1")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("evidence is stale", refusal.stderr, "this session's own uncommitted edit counts")
+        (self.root / "src/extra.py").unlink()
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Logged", "--session", "s1"))
+        self.assertIn("no automated check (records only)]", (self.root / ".sako/work/DONE.md").read_text())
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
+        fixture.git(self.root, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+        refusal = fixture.installed_copy(self.root, "close", "T-11", "--evidence", "Merged", "--session", "s1")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("evidence is stale", refusal.stderr, "a merge here is this session's, whenever its commits were made")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Proven: T-10 closed after checked content changed since you started", err)
+        self.assertNotIn("Recorded:", err, "a merged commit older than the session is not its change to record")
+
+    def test_a_records_only_close_then_a_claim_still_held_can_pause_mid_change(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Write the plan", "--done-when", "Written",
+                                                "--scope", ".sako/work/plan.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.write(self.root, {".sako/work/plan.md": "the plan\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Written", "--session", "s1"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual((code, err), (0, ""), "a claim still held explains the stale check; pausing is free")
+
+    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
+    def test_a_records_only_task_needs_no_check_while_a_live_peer_here_edits_under_its_claim(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        peer = self.start("peer")
+        for number in (1, 2):
+            fixture.succeeds(fixture.installed_copy(self.root, "add", f"Plan step {number}", "--done-when", "Written",
+                                                    "--scope", f".sako/work/plan-{number}.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "peer"))
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Written", "--session", "s1"))
+        self.assertIn("Written [sk-", (self.root / ".sako/work/DONE.md").read_text())
+        self.assertIn("no automated check (records only)]", (self.root / ".sako/work/DONE.md").read_text())
+        code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not counted: src/app.py: in T-1's scope, claimed by live peer", out)
+        os.kill(peer, 15)
+        for process in self.processes:
+            if process.pid == peer:
+                process.wait()
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
+        refusal = fixture.installed_copy(self.root, "close", "T-11", "--evidence", "Written", "--session", "s1")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("evidence is stale", refusal.stderr, "without the live peer the change counts as this session's")
+
     def test_committed_names_new_files_so_generated_ones_are_not_committed(self):
         self.start("s1")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))

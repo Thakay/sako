@@ -353,6 +353,14 @@ def covers(row: Row, path: str) -> bool:
         return False
 
 
+def records_only(row: Row) -> bool:
+    """True when every scope entry lies in the kit folder, which the project's check never covers. Close and the
+    Proven rule ask no check of such records work while only others moved checked content (others_moved)."""
+    with suppress(SakoError):  # a scope entry that escapes is a ledger finding, never records work
+        return bool(row.touches) and all(scope(t)[:1] == (KIT,) for t in row.touches)
+    return False
+
+
 def row_faults(row: Row, known: set[str]) -> list[str]:
     """What is wrong with one row's values, each with its fix; such a row waits."""
     out = []
@@ -786,6 +794,17 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
     return changed, ""
 
 
+def others_moved(roots: Roots, entry: dict | None, moved: list[str], changed: dict[str, str], rows: list[Row], live: list[dict]) -> bool:
+    """True when only others moved checked content since the start, by edits left uncommitted before it or by uncommitted
+    edits in the scope of a live peer's claim in this checkout, as the Recorded rule counts them. A commit, merge, pull or
+    checkout here since the start is this session's, whoever made it and however old its commits, as is an unknown start."""
+    rev, marker = str((entry or {}).get("work_start_rev") or ""), (entry or {}).get("marker")
+    here = {key_of(e["marker"]) for e in live if e.get("marker") != marker and e.get("work_root") == str(roots.work)}
+    committed = set(git(roots.work, "diff", "--no-renames", "--name-only", rev, "HEAD", check=False).splitlines()) if rev else set()
+    return not any(path in committed or path.startswith("(") or (path in changed and not any(
+        holder_key(r.claim) in here and covers(r, path) for r in rows)) for path in moved)
+
+
 def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | None,
              live: list[dict]) -> tuple[list[str], list[str], dict[str, str], str]:
     """The Recorded rule: (unrecorded, not-counted notes, changed, start note)."""
@@ -833,12 +852,14 @@ def footprint_lines(roots: Roots, config: dict, manifest: dict) -> list[str]:
     lines = [f"SAKO installed in {home} ({footprint}). " + (f"{KIT}/ is tracked with the code; SAKO commits nothing."
              if footprint == "shared" else "Nothing tracked changed; " + ("the folder is listed in .git/info/exclude."
              if listed else f"add the line /{KIT}/ to {ex.as_posix() if roots.work != roots.main else '.git/info/exclude'}, or git status shows the folder."))]
+    at, base = (f"-C {shlex.quote(kit)} ", "") if footprint == "repo" else ("", f"{kit}/")
+    stage = " ".join(shlex.quote(base + p) for p in (".gitignore", "config.json", config["tasks"], config["done"]) if (roots.kit / p).is_file())
+    commit = f'Commit them with: git {at}add -- {stage} && git {at}commit -m "SAKO records" -- {stage}'  # by name, so other files stay yours
     if footprint == "shared":
-        return lines + [records + (", committed with the code; each branch has its own copy."
+        return lines + [records + (f", committed with the code; each branch has its own copy. {commit}"
                                    if tracked(roots.home, MANIFEST) else f". Commit them with: {SHARE}")]
     if footprint == "repo":
-        return lines + [records + f", in their own repository ({kit}/.git). Commit them with: git -C {shlex.quote(kit)} "
-                        f"add -A && git -C {shlex.quote(kit)} commit -m \"SAKO records\""]
+        return lines + [records + f", in their own repository ({kit}/.git). {commit}"]
     return lines + [records + ". They are not in Git yet; git clean -x deletes them.",
                     "  Keep their history, or share them privately:  uvx sako init --repo [url]",
                     "  Commit them with the code:                    uvx sako init --shared"]
@@ -963,9 +984,10 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
         if closed and config["verify_command"] else []
     if moved:
         state, why = evidence_state(roots, config)
-        # A claim still held explains a stale check, so a close whose receipt shows a pass stays proven.
+        # A claim still held explains a stale check, so a close whose receipt shows a pass, or records work, stays proven.
         working = any(covers(r, path) for r in held for path in moved)
-        unproven = [r.id for r in closed if not working or "; check pass " not in r.evidence]
+        exempt = any(map(records_only, closed)) and others_moved(roots, entry, moved, changed, rows, live)
+        unproven = [r.id for r in closed if not (records_only(r) and (exempt or working)) and (not working or "; check pass " not in r.evidence)]
         if state != "fresh" and unproven:
             problems.append(f"Proven: {', '.join(unproven)} closed after checked content changed since you started, "
                             f"and the check is {state}: {why}\n    fix: {sako} verify, fix what it reports, then stop "
@@ -982,13 +1004,17 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
                             "awaiting approval." + generated(roots.work, pending))
     footprint = str(read_json(roots.home / MANIFEST).get("footprint") or "local") if closed else "local"
     at = f"-C {shlex.quote(runtime_path(roots, roots.kit))} " if footprint == "repo" and (roots.kit / ".git/HEAD").is_file() else ""
-    done = config["done"] if at else f"{KIT}/{config['done']}"
-    records = [p for p in dirty_paths(roots.kit if at else roots.work) if p == done] if at or footprint == "shared" else []
-    if records:
-        ids = ", ".join(r.id for r in closed)
-        problems.append(f"Committed: {ids} closed, but the receipts are not committed: {records[0]}\n    fix: "
-                        f"git {at}add -A{'' if at else ' -- ' + KIT}, then git {at}commit -m {shlex.quote(ids + ' closed')} "
-                        "when the owner has allowed commits in this session; otherwise ask, or say so in your reply.")
+    base, top = ("", roots.kit) if at else (f"{KIT}/", roots.work)
+    done, kept = base + config["done"], set()
+    if (at or footprint == "shared") and done in dirty_paths(top):  # name only the receipts HEAD lacks
+        with suppress(SakoError):  # a committed done file SAKO cannot read holds no receipt
+            kept = {r.id for r in parse_rows({"done": git(top, "show", f"HEAD:{done}", check=False)})}
+        ids = ", ".join(r.id for r in closed if r.id not in kept)
+        if ids:  # the ledger files by name, so other files, in the kit folder or already staged, stay the user's
+            stage = " ".join(map(shlex.quote, (base + config["tasks"], done)))
+            problems.append(f"Committed: {ids} closed, but the receipts are not committed: {done}\n    fix: "
+                            f"git {at}add -- {stage}, then git {at}commit -m {shlex.quote(ids + ' closed')} -- {stage} "
+                            "when the owner has allowed commits in this session; otherwise ask, or say so in your reply.")
     for row in mine:
         folder = handoff(roots, config, row)
         if row.status == "claimed" and not (folder / "handoff.md").is_file():
@@ -1046,7 +1072,7 @@ ASSETS = {RUNTIME: "sako.py", METHOD: "SAKO.md", SHARED_SKILL: "skills/sako/SKIL
           CLAUDE_SKILL: "skills/sako/SKILL.md"}
 CLIENTS = {"claude": "Claude Code", "codex": "Codex"}
 CODEX_ROOT = "# sako: start\n[sandbox_workspace_write]\nwritable_roots = [{}]\n# sako: end\n"
-SHARE = f'git add -A -- {KIT} && git commit -m "Share SAKO records"'
+SHARE = f'git add -A -- {KIT} && git commit -m "Share SAKO records" -- {KIT}'  # the folder only, so anything else staged stays staged
 HOOK_OWNED = r"(?<![\w.])\.sako/sako\.py(?![\w.]).*\bhook {}(?![\w-])"  # SAKO's hook for a client, any Python or redirect
 DOOR = ("This project uses SAKO for task execution: before carrying out a project task, read {}/SAKO.md and follow its "
         "daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.")
@@ -1539,10 +1565,10 @@ def insert_row(text: str, cells: dict[str, str], titles: list[str]) -> tuple[str
     return "\n".join(lines).rstrip() + "\n", titles
 
 
-def receipt_part(roots: Roots, config: dict, marker: str) -> str:
-    """Who closed, when, and what the configured check said at that moment."""
-    check = "no automated check"
-    if config["verify_command"]:
+def receipt_part(roots: Roots, config: dict, marker: str, records: bool = False) -> str:
+    """Who closed, when, and what the configured check said at that moment; records-only work names no check."""
+    check = "no automated check" + (" (records only)" if records and config["verify_command"] else "")
+    if config["verify_command"] and not records:
         stamp, (state, _) = read_json(roots.local / "stamp.json"), evidence_state(roots, config)
         if state == "fresh":
             check = f"check pass {stamp['time']} on {stamp['content_id']}"
@@ -1660,11 +1686,13 @@ def cmd_task(args: argparse.Namespace) -> int:
         return 0
     if row.status != "claimed" or owner != mine:
         raise SakoError(f"{row.id} must be claimed by this session before closing")
-    if config["verify_command"] and changed_since(roots.work, entry["work_start_rev"], list(config["verify_paths"])):
+    moved = changed_since(roots.work, entry["work_start_rev"], list(config["verify_paths"])) if config["verify_command"] else []
+    records = records_only(row) and (not moved or others_moved(roots, entry, moved, session_changes(roots, entry)[0], rows, present))
+    if moved and not records:
         state, why = evidence_state(roots, config)
         if state != "fresh":
             raise SakoError(f"evidence is {state}: {why}; verify before closing")
-    receipt = f"{cell(args.evidence, '--evidence')} {receipt_part(roots, config, entry['marker'])}"
+    receipt = f"{cell(args.evidence, '--evidence')} {receipt_part(roots, config, entry['marker'], records)}"
     closed = roots.kit / str(config["done"])
     previous = [r for r in rows if r.id == row.id and r.doc == DONE]
     if previous and holder_key(previous[0].claim) != mine:

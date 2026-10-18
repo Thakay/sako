@@ -423,11 +423,17 @@ def sh(root, command):
 class RepoFootprint(KitCase):
     def test_the_records_commit_line_works_as_printed_from_a_linked_worktree(self):
         self.install("--client", "none", "--repo")
+        fixture.write(self.root, {".sako/notes/draft.md": "the owner's own notes\n"})
+        fixture.git(self.root / ".sako", "add", "notes/draft.md")
         linked = self.worktree("linked")
         line = next(x for x in self.status(cwd=linked).splitlines() if x.startswith("Records: "))
-        self.assertIn(f"git -C {(self.root.resolve() / '.sako').as_posix()} add -A", line)
+        kit, names = (self.root.resolve() / ".sako").as_posix(), ".gitignore config.json work/TASKS.md"
+        self.assertIn(f'git -C {kit} add -- {names} && git -C {kit} commit -m "SAKO records" -- {names}', line)
         sh(linked, line.split("Commit them with: ")[1])
         self.assertIn("SAKO records", fixture.git(self.root / ".sako", "log", "--oneline"))
+        self.assertEqual(set(fixture.git(self.root / ".sako", "ls-tree", "-r", "--name-only", "HEAD").splitlines()),
+                         set(names.split()), "the line commits the records by name; other files in the kit folder stay the owner's")
+        self.assertEqual(fixture.git(self.root / ".sako", "status", "--porcelain"), "A  notes/draft.md")
 
     def test_repo_without_url_nests_a_repository_that_git_clean_keeps(self):
         printout = self.install("--client", "none", "--repo")
@@ -436,7 +442,8 @@ class RepoFootprint(KitCase):
         self.assertIn("/.sako/", (self.root / ".git/info/exclude").read_text())
         self.assertEqual((self.root / ".sako/.gitignore").read_text(), "/sako.py\n/SAKO.md\n/install.json\n/state/\n")
         self.assertIn("(repo)", printout.splitlines()[0])
-        self.assertIn('git -C .sako add -A && git -C .sako commit -m "SAKO records"', printout)
+        self.assertIn('git -C .sako add -- .gitignore config.json work/TASKS.md && '
+                      'git -C .sako commit -m "SAKO records" -- .gitignore config.json work/TASKS.md', printout)
         sh(self.root, 'git -C .sako add -A && git -C .sako commit -qm "SAKO records"')
         self.assertEqual(set(fixture.git(self.root / ".sako", "ls-files").splitlines()),
                          {".gitignore", "config.json", "work/TASKS.md"})
@@ -482,10 +489,43 @@ class RepoFootprint(KitCase):
         fixture.commit_all(self.root, "T-1")
         gate = fixture.installed(self.root, "check", "--gate", session="repo-s", pid=pid)
         self.assertEqual(gate.returncode, 2, gate.stdout + gate.stderr)
-        fix = "git -C .sako add -A, then git -C .sako commit -m 'T-1 closed'"
+        fix = "git -C .sako add -- work/TASKS.md work/DONE.md, then git -C .sako commit -m 'T-1 closed' -- work/TASKS.md work/DONE.md"
         self.assertIn(fix, gate.stderr)
         sh(self.root, fix.replace(", then ", " && "))  # the two commands, in order
         fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="repo-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "add", "Note the change", "--scope", "docs/"))
+        fixture.succeeds(fixture.installed(self.root, "claim", "T-2", session="repo-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "close", "T-2", "--evidence", "Noted", session="repo-s", pid=pid))
+        gate = fixture.installed(self.root, "check", "--gate", session="repo-s", pid=pid)
+        self.assertIn("Committed: T-2 closed, but the receipts are not committed", gate.stderr)
+        self.assertNotIn("T-1", gate.stderr, "a receipt already committed is not named again")
+
+    def test_a_committed_receipt_passes_while_a_peers_receipt_is_pending(self):
+        self.install("--client", "none", "--repo")
+        fixture.write(self.root, {".sako/notes/draft.md": "the owner's own notes\n"})
+        first, second = self.host(), self.host()
+        fixture.succeeds(fixture.installed(self.root, "add", "Change app", "--scope", "src/"))
+        fixture.succeeds(fixture.installed(self.root, "add", "Write the plan", "--scope", ".sako/work/plan.md"))
+        for session, pid, task in (("first-s", first, "T-1"), ("second-s", second, "T-2")):
+            fixture.succeeds(fixture.installed(self.root, "start", session=session, pid=pid))
+            fixture.succeeds(fixture.installed(self.root, "claim", task, session=session, pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "close", "T-1", "--evidence", "Checked", session="first-s", pid=first))
+        line = next(x for x in self.status().splitlines() if x.startswith("Records: "))
+        names = ".gitignore config.json work/TASKS.md work/DONE.md"
+        self.assertIn(f'Commit them with: git -C .sako add -- {names} && git -C .sako commit -m "SAKO records" -- {names}', line)
+        sh(self.root, line.split("Commit them with: ")[1])
+        fixture.write(self.root, {".sako/work/plan.md": "the plan\n"})
+        fixture.succeeds(fixture.installed(self.root, "close", "T-2", "--evidence", "Planned", session="second-s", pid=second))
+        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="first-s", pid=first))
+        gate = fixture.installed(self.root, "check", "--gate", session="second-s", pid=second)
+        self.assertEqual(gate.returncode, 2, gate.stdout + gate.stderr)
+        self.assertIn("Committed: T-2 closed, but the receipts are not committed: work/DONE.md", gate.stderr)
+        self.assertNotIn("T-1", gate.stderr, "a peer's committed receipt is not this session's")
+        fix = "git -C .sako add -- work/TASKS.md work/DONE.md, then git -C .sako commit -m 'T-2 closed' -- work/TASKS.md work/DONE.md"
+        self.assertIn(fix, gate.stderr)
+        sh(self.root, fix.replace(", then ", " && "))
+        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="second-s", pid=second))
+        self.assertEqual(set(fixture.git(self.root / ".sako", "ls-files").splitlines()), set(names.split()))
 
     def test_remove_warns_about_commits_that_exist_only_here_and_keeps_the_history(self):
         self.install("--client", "none", "--repo")
@@ -544,7 +584,13 @@ class SharedFootprint(KitCase):
         self.assertFalse((self.root / "AGENTS.md").exists(), "SAKO writes nothing into the project's instructions")
         self.assertEqual(fixture.git(self.root, "status", "--porcelain"), "?? .sako/")
         self.assertIn("records shared, but Git shows local", fixture.cli(self.root, "check")[1])
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        fixture.git(self.root, "add", "src/app.py")
         sh(self.root, sako.SHARE)
+        self.assertEqual(fixture.git(self.root, "status", "--porcelain"), "M  src/app.py",
+                         "the line commits the folder only; an edit staged before it stays staged")
+        self.assertEqual(fixture.git(self.root, "show", "HEAD:src/app.py"), "print(1)")
+        fixture.git(self.root, "commit", "-qm", "the owner's edit")
         self.assertEqual(fixture.git(self.root, "status", "--porcelain"), "")
         self.assertEqual(set(fixture.git(self.root, "ls-files", ".sako").splitlines()),
                          {".sako/.gitignore", ".sako/config.json", ".sako/install.json", ".sako/sako.py",
@@ -601,10 +647,24 @@ class SharedFootprint(KitCase):
         gate = fixture.installed(self.root, "check", "--gate", session="sh-s", pid=pid)
         self.assertEqual(gate.returncode, 2, gate.stdout + gate.stderr)
         self.assertNotIn("Recorded:", gate.stderr)
-        fix = "git add -A -- .sako, then git commit -m 'T-1 closed'"
+        fix = "git add -- .sako/work/TASKS.md .sako/work/DONE.md, then git commit -m 'T-1 closed' -- .sako/work/TASKS.md .sako/work/DONE.md"
         self.assertIn(fix, gate.stderr)
         sh(self.root, fix.replace(", then ", " && "))  # the two commands, in order
         fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="sh-s", pid=pid))
+
+    def test_the_shared_records_commit_line_commits_only_the_records_by_name(self):
+        self.share()
+        fixture.succeeds(fixture.installed(self.root, "add", "Shared task", "--scope", "src/"))
+        fixture.write(self.root, {".sako/notes/draft.md": "the owner's own notes\n", "src/app.py": "print(2)\n"})
+        fixture.git(self.root, "add", "src/app.py")
+        line = next(x for x in self.status().splitlines() if x.startswith("Records: "))
+        names = ".sako/.gitignore .sako/config.json .sako/work/TASKS.md"
+        self.assertIn(f'Commit them with: git add -- {names} && git commit -m "SAKO records" -- {names}', line)
+        sh(self.root, line.split("Commit them with: ")[1])
+        self.assertEqual(set(fixture.git(self.root, "status", "--porcelain").splitlines()),
+                         {"M  src/app.py", "?? .sako/notes/"}, "only the records were committed; the staged edit stays staged")
+        self.assertEqual(fixture.git(self.root, "show", "HEAD:src/app.py"), "print(1)")
+        self.assertIn("Shared task", fixture.git(self.root, "show", "HEAD:.sako/work/TASKS.md"))
 
     def test_leaving_shared_keeps_the_folder_and_the_records_on_the_way_to_local_and_repo(self):
         self.share()

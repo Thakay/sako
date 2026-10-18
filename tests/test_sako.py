@@ -113,6 +113,13 @@ class Findings(unittest.TestCase):
         with self.assertRaisesRegex(sako.SakoError, "escapes"):
             sako.scope("../x")
 
+    def test_records_only_means_every_scope_entry_lies_in_the_kit_folder(self) -> None:
+        for touches, expected in (("`.sako/work/notes/`", True), ("`.sako`, `./.sako/work/plan.md`", True),
+                                  ("`.sako/work/`, `src/`", False), ("`.sakonotes/`", False), ("`.`", False),
+                                  ("`.sako/../src/`", False), ("-", False)):
+            with self.subTest(touches=touches):
+                self.assertEqual(sako.records_only(tasks(row("T-1", touches=touches))[0]), expected)
+
     def test_inputs_are_not_modified(self) -> None:
         documents = {"tasks": HEADER + row("T-1")}
         before = json.dumps(documents)
