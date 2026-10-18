@@ -455,6 +455,21 @@ class Compatibility(unittest.TestCase):
         self.assertIn("T-1: claimed", self.cli("claim", "T-1", session="resumed"))
         self.assertIn("ledger: consistent", self.cli("check"), "its claim counts as live for the lease")
 
+    def test_a_takeover_blocked_by_a_hidden_sessions_overlapping_claim_offers_to_wait(self):
+        ended, hidden = sako.marker_for("ended-session"), sako.marker_for("sandboxed")
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim=ended),
+            fixture.row("T-2", status="claimed", claim=hidden, touches="`src/app.py`"))})
+        self.hidden("sandboxed", int(time.time()))
+        host = self.host()
+        self.cli("start", session="host-session", pid=host.pid)
+        reason = ("--takeover", "its session ended; inspected its work")
+        self.assertIn(f"T-1's scope overlaps T-2 (src/app.py), claimed by {hidden}; neither claim can be taken over while they "
+                      "overlap, so wait for it to close, or narrow a Scope in .sako/work/TASKS.md",
+                      self.cli("claim", "T-1", *reason, session="host-session", expected=3))
+        self.assertIn(f"T-2's scope overlaps T-1 (src/), claimed by {ended}; neither claim can be taken over while they overlap, "
+                      "so narrow a Scope in .sako/work/TASKS.md", self.cli("claim", "T-2", *reason, session="host-session", expected=3))
+
     @unittest.skipUnless(shutil.which("bwrap") and subprocess.run(
         ["bwrap", "--dev-bind", "/", "/", "--unshare-pid", "--proc", "/proc", "true"], capture_output=True).returncode == 0,
         "needs bubblewrap with unprivileged PID namespaces, as Codex's sandbox uses")

@@ -264,10 +264,16 @@ class Workflow(unittest.TestCase):
         first = self.start("session-a")
         self.start("session-b")
         self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
-        self.assert_ok(self.run_cli("add", "Overlapping work", "--scope", "src/nested/"))
+        holder = fixture.marker("session-a")
+        out = self.assert_ok(self.run_cli("add", "Overlapping work", "--scope", "src/nested/"))
+        self.assertEqual(out.strip(), f"T-10: open; recorded locally, not committed; its scope overlaps claimed T-1 ({holder}), "
+                                      "so a claim of it by another session is refused until that closes or a scope narrows")
+        self.assertEqual(self.assert_ok(self.run_cli("add", "Separate work", "--scope", "docs/")).strip(),
+                         "T-11: open; recorded locally, not committed")
         code, _, err = self.run_cli("claim", "T-10", session="session-b")
         self.assertEqual(code, 3)
-        self.assertIn("overlap", err)
+        self.assertIn(f"T-10's scope overlaps T-1 (src/), claimed by {holder}; wait for it to close, "
+                      "or narrow a Scope in .sako/work/TASKS.md", err)
         first.terminate()
         first.wait()
         code, _, err = self.run_cli("claim", "T-1", session="session-b")
@@ -281,6 +287,62 @@ class Workflow(unittest.TestCase):
     def test_a_takeover_reason_on_an_open_task_is_no_crash(self):
         self.start("session-a")
         self.assert_ok(self.run_cli("claim", "T-1", "--takeover", "nobody held it", session="session-a"))
+
+    def test_a_takeover_moves_an_ended_sessions_overlapping_claims_one_after_another(self):
+        ended, gone, lost = (fixture.marker(name) for name in ("ended-session", "gone-session", "lost-session"))
+        active = self.root / ".sako/work/TASKS.md"
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim=ended),
+            fixture.row("T-2", status="claimed", claim=ended, touches="`src/app.py`"),
+            fixture.row("T-3", status="claimed", claim=ended, touches="`src/`, `tests/`"),
+            fixture.row("T-4", status="claimed", claim=gone, touches="`notes/`"),
+            fixture.row("T-5", status="claimed", claim=lost, touches="`notes/plan.md`"),
+            fixture.row("T-6", touches="`notes/plan.md`")),
+            ".sako/work/DONE.md": fixture.done_file(fixture.row("T-7", status="done", claim=ended, touches="`src/`"))})
+        self.start("session-b")
+        self.start("session-c")
+        taker, reason = fixture.marker("session-b"), ("--takeover", "its session ended; inspected its work")
+        out = self.assert_ok(self.run_cli("claim", "T-1", *reason, session="session-b"))
+        self.assertIn("Its previous holder also holds overlapping T-2, T-3; take them over too before you stop.", out)
+        code, _, err = self.run_cli("claim", "T-2", *reason, session="session-c")
+        self.assertEqual(code, 3, "a third session is refused against a claim the taker now holds")
+        self.assertIn(f"T-2's scope overlaps T-1 (src/), claimed by {taker}; wait for it to close, "
+                      "or narrow a Scope in .sako/work/TASKS.md", err)
+        out = self.assert_ok(self.run_cli("claim", "T-2", *reason, session="session-b"))
+        self.assertIn("Its previous holder also holds overlapping T-3; take it over too before you stop.", out)
+        self.assertNotIn("also holds", self.assert_ok(self.run_cli("claim", "T-3", *reason, session="session-b")),
+                         "a row the ended session already closed is not named")
+        rows = {r.id: r for r in sako.parse_rows({"tasks": active.read_text()})}
+        for task_id in ("T-1", "T-2", "T-3"):
+            self.assertTrue(rows[task_id].claim.startswith(f"{taker} (took over from {ended}"), rows[task_id].claim)
+        before = active.read_bytes()
+        code, _, err = self.run_cli("claim", "T-6", session="session-b")
+        self.assertEqual(code, 3)
+        self.assertIn(f"T-6's scope overlaps T-4 (notes/), claimed by {gone}; if it stopped, inspect its handoff and take it "
+                      "over first (claim T-4 --takeover REASON), or narrow a Scope in .sako/work/TASKS.md", err)
+        code, _, err = self.run_cli("claim", "T-4", *reason, session="session-b")
+        self.assertEqual(code, 3, "overlapping claims of two different ended sessions still refuse each other")
+        self.assertIn(f"T-4's scope overlaps T-5 (notes/plan.md), claimed by {lost}; neither claim can be taken "
+                      "over while they overlap, so narrow a Scope in .sako/work/TASKS.md", err)
+        self.assertEqual(active.read_bytes(), before)
+        out = self.assert_ok(self.run_cli("add", "Shared follow-up", "--scope", "src/lib/", "--scope", "notes/"))
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertIn(f"its scope overlaps claimed T-1 ({taker}), T-3 ({taker}), T-4 ({gone}), T-5 ({lost}), so a claim "
+                      "of it by another session is refused until those close or a scope narrows", out)
+
+    def test_a_parked_task_names_how_to_reopen_it_from_any_checkout(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1", status="parked: the owner decides"))})
+        self.start("session-a")
+        code, _, err = self.run_cli("claim", "T-1", session="session-a")
+        self.assertEqual(code, 3)
+        self.assertIn("T-1 is parked; once its reason is resolved, set its Status to open in .sako/work/TASKS.md", err)
+        linked = Path(self.workspace.name) / "linked"
+        fixture.git(self.root, "worktree", "add", "-q", str(linked))
+        code, _, err = fixture.cli(linked, "claim", "T-1", session="session-a")
+        self.assertEqual(code, 3, "a linked worktree has no records folder of its own, so the path is absolute")
+        ledger = (self.root.resolve() / ".sako/work/TASKS.md").as_posix()
+        self.assertIn(f"set its Status to open in {ledger}", err)
+        self.assertIn(f"T-99 needs exactly one row in {ledger}", fixture.cli(linked, "claim", "T-99", session="session-a")[2])
 
     def test_handoff_folders_are_found_by_id_listed_and_never_checked(self):
         fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": []})})

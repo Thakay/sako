@@ -1592,7 +1592,10 @@ def add_task(rows: list[Row], active: Path, text: str, records: str, args: argpa
     cells = {"id": f"T-{number}", "pri": pri, "task": task, "done when": done_when, "status": "open",
              "scope": ", ".join(f"`{t}`" for t in touches), "after": ", ".join(after), "source": source}
     atomic_write(active, insert_row(text, cells, list(COLUMNS["tasks"]))[0])
-    print(f"T-{number}: open; recorded locally, not committed")
+    new = Row(f"T-{number}", "tasks", 0, [], {}, touches=touches)
+    held = [f"{o.id} ({o.claim.split()[0]})" for o in rows if o.status == "claimed" and scopes_overlap(new, o)]
+    print(f"T-{number}: open; recorded locally, not committed" + (f"; its scope overlaps claimed {', '.join(held)}, so a claim of it "
+          f"by another session is refused until {'that closes' if len(held) == 1 else 'those close'} or a scope narrows" if held else ""))
     return 0
 
 
@@ -1614,7 +1617,7 @@ def cmd_task(args: argparse.Namespace) -> int:
     mine, done = key_of(entry["marker"]), {r.id for r in rows if r.doc == DONE}
     matches = [r for r in rows if r.id == args.task_id and r.doc == "tasks"]
     if len(matches) != 1:
-        raise SakoError(f"{args.task_id} needs exactly one row in {KIT}/{config['tasks']}")
+        raise SakoError(f"{args.task_id} needs exactly one row in {runtime_path(roots, active)}")
     row = matches[0]
     faults = row_faults(row, {r.id for r in rows})
     if faults:
@@ -1627,7 +1630,7 @@ def cmd_task(args: argparse.Namespace) -> int:
         if not row.touches:
             raise SakoError(f"{row.id} needs a Scope before claiming")
         if row.status == "parked":
-            raise SakoError(f"{row.id} is parked; set its status to open once the reason is resolved")
+            raise SakoError(f"{row.id} is parked; once its reason is resolved, set its Status to open in {runtime_path(roots, active)}")
         if row.status == "claimed" and owner != mine:
             if owner in seen:
                 raise SakoError(f"{row.id} is held by a live session; choose another task")
@@ -1635,10 +1638,16 @@ def cmd_task(args: argparse.Namespace) -> int:
                 raise SakoError(f"{row.id} is held by {row.claim.split()[0]}, " + ("which SAKO cannot verify from here (a sandbox, "
                                 "or Windows, hides its process); if it stopped," if owner in live else "a stale claim;")
                                 + " inspect its handoff and use --takeover <reason>")
-        for other in rows:
-            if other.id != row.id and other.status == "claimed" and holder_key(other.claim) != mine \
-                    and scopes_overlap(row, other):
-                raise SakoError(f"{row.id}'s scope overlaps claimed {other.id}; wait or narrow the scopes")
+        replaced = owner if owner != mine else None  # past the checks above, any other owner is not seen running and is taken over
+        for other in rows:  # a takeover also passes the replaced holder's other claims, so it can move them one by one
+            peer = holder_key(other.claim)
+            if other.id != row.id and other.status == "claimed" and peer not in (mine, replaced) and scopes_overlap(row, other):
+                fix = ("wait for it to close, or" if peer in seen
+                       else f"neither claim can be taken over while they overlap, so{' wait for it to close, or' if peer in live else ''}" if replaced
+                       else f"if it stopped, inspect its handoff and take it over first (claim {other.id} --takeover REASON), or")
+                raise SakoError(f"{row.id}'s scope overlaps {other.id} ({', '.join(other.touches)}), claimed by "
+                                f"{other.claim.split()[0]}; {fix} narrow a Scope in {runtime_path(roots, active)}")
+        moving = [o.id for o in rows if o.status == "claimed" and o.id != row.id and holder_key(o.claim) == replaced and scopes_overlap(row, o)]
         unverified = ", unverified" if owner != mine and owner in live - seen else ""  # its process was hidden from here
         if owner != mine:
             note = f" (took over from {row.claim.split()[0]}{unverified}: {cell(args.takeover, '--takeover')})" if args.takeover and row.claim else ""
@@ -1646,7 +1655,8 @@ def cmd_task(args: argparse.Namespace) -> int:
             atomic_write(active, "\n".join(lines).rstrip() + "\n")
         print(f"{row.id}: claimed" + ("; its previous holder could not be verified from here" if unverified else "") + "; recorded "
               f"locally, not committed. If it pauses or needs working notes, keep them in {shlex.quote(runtime_path(roots, handoff(roots, config, row)))}/ "
-              "(handoff.md for where it stands).")
+              "(handoff.md for where it stands)." + (f" Its previous holder also holds overlapping {', '.join(moving)}; take "
+              f"{'it' if len(moving) == 1 else 'them'} over too before you stop." if moving else ""))
         return 0
     if row.status != "claimed" or owner != mine:
         raise SakoError(f"{row.id} must be claimed by this session before closing")
