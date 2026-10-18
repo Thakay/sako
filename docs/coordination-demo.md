@@ -97,7 +97,7 @@ Both claims now live in the shared task file. Each session edits its own file: t
 ```text
 $ python3 .sako/sako.py verify
 greeting and usage checks passed
-check: PASS in 0s; covered 3 file(s); stamp e23d67d0c54d813b -> /work/greeting/.sako/state/stamp.json
+check: PASS in 0s; covered 3 file(s); stamp e23d67d0c54d813b -> /work/greeting/.sako/state/stamp.json; output in /work/greeting/.sako/state/verify.log
 ```
 
 ```text

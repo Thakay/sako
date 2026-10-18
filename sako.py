@@ -129,7 +129,7 @@ class Roots:
 
     @property
     def local(self) -> Path:
-        """This checkout's own state: its check stamp, verify lock and hook sightings."""
+        """This checkout's own state: its check stamp, verify lock and output logs, and hook sightings."""
         return self.state / "worktrees" / self.worktree if self.home != self.work else self.state
 
 
@@ -675,32 +675,36 @@ def verify(roots: Roots, config: dict, out=print) -> int:
     command = config["verify_command"]
     if not command:
         raise SakoError(f"{CONFIG} has no verify_command; nothing to run")
-    path = roots.local / "stamp.json"
-    path.unlink(missing_ok=True)  # a failing run must never leave a passing stamp behind
+    path, log, failed = (roots.local / name for name in ("stamp.json", "verify.log", "verify-failed.log"))
     paths = list(config["verify_paths"])
     listed = covered_files(roots.work, paths)
     before = content_id(roots.work, paths)
     started = time.time()
-    try:
-        result = subprocess.run(list(command), cwd=roots.work)
-    except OSError as error:
-        raise SakoError(f"verify_command {command[0]!r} cannot run: {error.strerror or error}") from None
-    after = content_id(roots.work, paths)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("wb") as kept:  # written as the check runs; a process the check leaves behind never holds verify
+        try:
+            result = subprocess.run(list(command), cwd=roots.work, stdout=kept, stderr=subprocess.STDOUT)
+        except OSError as error:
+            raise SakoError(f"verify_command {command[0]!r} cannot run: {error.strerror or error}") from None
+    shown = log.read_text(encoding="utf-8", errors="replace")  # shown with the result, once the stamp is settled
     if result.returncode:
-        out(f"check: FAILED (exit {result.returncode}) after {time.time() - started:.0f}s; no stamp written")
+        path.unlink(missing_ok=True)  # the last pass stood while the check ran; a failing run never leaves it behind
+        retried(lambda: shutil.copyfile(log, failed))  # kept until the next failure; verify.log holds the last run
+        out(f"{shown}check: FAILED (exit {result.returncode}) after {time.time() - started:.0f}s; no stamp written; output in {failed.as_posix()}")
         return 1
+    after = content_id(roots.work, paths)  # taken past the failing branch, so a refusal here cannot keep the last pass after a failing run
     if before != after or command_id(config) != command_id(load_config(roots.kit)):
+        path.unlink(missing_ok=True)  # nor does a run whose content or command moved
         made = sorted(set(covered_files(roots.work, paths)) - set(listed))  # often the check's own cache
-        out("check: passed, but the checked content changed during the run " f"({before} -> {after}); run it again for a stamp"
+        out(f"{shown}check: passed, but the checked content changed during the run ({before} -> {after}); run it again for a stamp"
             + (f". The run created {', '.join(made[:4])}: ignore generated files in .gitignore, or keep the check from "
                f"writing them ({PYTHON} -B for Python), so they are not checked content" if made else ""))
         return 1
-    path.parent.mkdir(parents=True, exist_ok=True)
     stamp = {"content_id": after, "command_id": command_id(config),
              "product_rev": git(roots.work, "rev-parse", "HEAD", check=False),
              "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "sako": VERSION}
     atomic_write(path, json.dumps(stamp, indent=1) + "\n")
-    out(f"check: PASS in {time.time() - started:.0f}s; covered {len(listed)} file(s); stamp {after} -> {path.as_posix()}")
+    out(f"{shown}check: PASS in {time.time() - started:.0f}s; covered {len(listed)} file(s); stamp {after} -> {path.as_posix()}; output in {log.as_posix()}")
     return 0
 
 

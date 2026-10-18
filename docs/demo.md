@@ -74,8 +74,8 @@ T-1: claimed; recorded locally, not committed. If it pauses or needs working not
 
 ```text
 $ python3 .sako/sako.py verify
-check: FAILED (exit 1) after 0s; no stamp written
 expected Hello, Ada! but got Hello Ada
+check: FAILED (exit 1) after 0s; no stamp written; output in /work/greeting/.sako/state/verify-failed.log
 (exit 1)
 ```
 
@@ -84,7 +84,7 @@ It fixes `greeting.py`, checks again, and closes the task with its evidence.
 ```text
 $ python3 .sako/sako.py verify
 greeting check passed
-check: PASS in 0s; covered 3 file(s); stamp bcb4b12f530eb1ce -> /work/greeting/.sako/state/stamp.json
+check: PASS in 0s; covered 3 file(s); stamp bcb4b12f530eb1ce -> /work/greeting/.sako/state/stamp.json; output in /work/greeting/.sako/state/verify.log
 ```
 
 ```text

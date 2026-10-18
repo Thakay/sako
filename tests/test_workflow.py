@@ -3,12 +3,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 import argparse
+import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 
@@ -407,6 +410,114 @@ class Workflow(unittest.TestCase):
         self.assert_ok(self.run_cli("verify"))
         os.chmod(self.root / "src/app.py", 0o755)
         self.assertIn("evidence: stale", self.run_cli("check")[1])
+
+    def test_a_running_verify_keeps_the_last_pass_until_the_run_fails_or_moves(self):
+        seen, stamp = Path(self.workspace.name) / "seen.txt", self.root / ".sako/state/stamp.json"
+        fixture.write(self.root, {"control": "probe\n", "gen/out.txt": "generated\n", "check.py": (  # outside the checked paths
+            "import pathlib, shutil, subprocess, sys\nmode = pathlib.Path('control').read_text().strip()\n"
+            "if mode == 'probe':  # a peer reads the evidence while the check runs\n"
+            f"    pathlib.Path({str(seen)!r}).write_text(subprocess.run([sys.executable, {str(fixture.SAKO)!r}, 'status'], "
+            "capture_output=True, text=True).stdout)\n"
+            "if mode == 'move':\n    pathlib.Path('src/made.txt').write_text('written during the run')\n"
+            "if mode == 'vanish':  # a failing check that also takes a checked folder away\n"
+            "    shutil.rmtree('gen')\n    print('the generator broke', flush=True)\n"
+            "sys.exit(mode in ('fail', 'vanish'))\n"),
+            ".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": ["src", "gen"]})})
+        self.assert_ok(self.run_cli("verify"))
+        self.assertIn("evidence: none", seen.read_text())
+        self.assert_ok(self.run_cli("verify"))
+        self.assertIn("evidence: fresh", seen.read_text(), "a second run on unchanged content keeps the last pass")
+        for mode, why in (("fail", "a failing run deletes the last pass"), ("move", "so does a run whose content moved"),
+                          ("vanish", "and a failing run whose checked folder is gone afterwards")):
+            with self.subTest(mode=mode):
+                fixture.write(self.root, {"control": "probe\n", "gen/out.txt": "generated\n"})
+                self.assert_ok(self.run_cli("verify"))
+                self.assertTrue(stamp.exists())
+                fixture.write(self.root, {"control": f"{mode}\n"})
+                code, out, err = self.run_cli("verify")
+                self.assertEqual(code, 1, out + err)
+                self.assertFalse(stamp.exists(), why)
+                (self.root / "src/made.txt").unlink(missing_ok=True)
+        self.assertIn("the generator broke\ncheck: FAILED (exit 1)", out, "the folder it took away hides neither output nor failure")
+        self.assertEqual((self.root / ".sako/state/verify-failed.log").read_text(), "the generator broke\n")
+
+    def test_verify_keeps_its_output_and_a_pass_leaves_the_failed_output_in_place(self):
+        fixture.write(self.root, {"control": "fail\n", "check.py": (
+            "import pathlib, sys\nmode = pathlib.Path('control').read_text().strip()\nprint(f'checked in mode {mode}', flush=True)\n"
+            "sys.exit('the parser rejects an empty name' if mode == 'fail' else 0)\n"),
+            ".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": ["src"]})})
+        log, failed = (self.root.resolve() / ".sako/state" / name for name in ("verify.log", "verify-failed.log"))
+        code, out, _ = self.run_cli("verify")
+        self.assertEqual(code, 1)
+        self.assertIn("checked in mode fail\nthe parser rejects an empty name\ncheck: FAILED (exit 1)", out,
+                      "you still see the check's output, then the result")
+        self.assertIn(f"no stamp written; output in {failed.as_posix()}", out)
+        self.assertEqual(failed.read_text(), "checked in mode fail\nthe parser rejects an empty name\n", "standard output and error")
+        fixture.write(self.root, {"control": "pass\n"})
+        out = self.assert_ok(self.run_cli("verify"))
+        self.assertTrue(out.startswith("checked in mode pass\ncheck: PASS"), out)
+        self.assertIn(f"; output in {log.as_posix()}", out)
+        self.assertEqual(log.read_text(), "checked in mode pass\n")
+        self.assertIn("the parser rejects an empty name", failed.read_text(), "a later pass leaves the failed run's output")
+
+    def test_a_process_the_check_leaves_running_neither_holds_verify_nor_keeps_it_from_failing(self):
+        release, done = (Path(self.workspace.name) / name for name in ("release", "done"))
+        failed = self.root.resolve() / ".sako/state/verify-failed.log"
+        fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": ["src"]})})
+        for chatty in (False, True):  # either way the server holds the check's output open until released
+            server = (f"import os, pathlib, time\nend = time.time() + 20\n"
+                      f"while not pathlib.Path({str(release)!r}).exists() and time.time() < end:\n"
+                      + ("    print('a server line', flush=True)\n" if chatty else "") + "    time.sleep(0.02)\n"
+                      f"os.close(1)\nos.close(2)\npathlib.Path({str(done)!r}).write_text('done')\n")
+            fixture.write(self.root, {"check.py": (
+                "import subprocess, sys, tempfile\nprint('the parser rejects an empty name', flush=True)\n"
+                f"subprocess.Popen([sys.executable, '-c', {server!r}], stdout=sys.stdout, stderr=sys.stderr, cwd=tempfile.gettempdir())\n"
+                "sys.exit(1)\n")})
+            with self.subTest(chatty=chatty):
+                code, out, err = self.run_cli("verify")
+                running = not done.exists()
+                release.write_text("released")
+                for _ in range(1000):  # the server ends before the next run and before the workspace goes
+                    if done.exists() and done.read_text() == "done":
+                        break
+                    time.sleep(0.02)
+                release.unlink()
+                done.unlink(missing_ok=True)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("check: FAILED (exit 1)", out)
+                self.assertIn(f"no stamp written; output in {failed.as_posix()}", out)
+                self.assertTrue(failed.read_text().startswith("the parser rejects an empty name\n"),
+                                "the failed run's output is kept while the server still holds verify.log")
+                self.assertTrue(running, "verify returns when the check ends, while the server it started still runs")
+
+    @unittest.skipIf(fixture.WINDOWS, "an interrupt reaches a single process only on POSIX")
+    def test_an_interrupted_verify_stops_its_check(self):
+        started, release, finished = (Path(self.workspace.name) / name for name in ("started", "release", "finished"))
+        fixture.write(self.root, {"check.py": (
+            f"import pathlib, time\npathlib.Path({str(started)!r}).write_text('started')\nend = time.time() + 20\n"
+            f"while not pathlib.Path({str(release)!r}).exists() and time.time() < end:\n    time.sleep(0.02)\n"
+            f"pathlib.Path({str(finished)!r}).write_text('finished')\n"),
+            ".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": ["src"]})})
+        run = subprocess.Popen([sys.executable, str(fixture.SAKO), "verify"], cwd=self.root, env=fixture.ENV,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(1000):
+            if started.exists() or run.poll() is not None:
+                break
+            time.sleep(0.02)
+        run.send_signal(signal.SIGINT)
+        out, err = run.communicate(timeout=30)
+        release.write_text("released")
+        time.sleep(0.5)  # a check still running would finish within a few hundredths of a second
+        self.assertEqual(run.returncode, 130, out + err)
+        self.assertFalse(finished.exists(), "an interrupted verify stops its check; none runs on without it")
+
+    def test_verify_shows_the_check_output_on_any_text_stream(self):
+        config = dict(sako.DEFAULTS, verify_command=[sys.executable, "check.py"], verify_paths=["src"])
+        fixture.write(self.root, {"check.py": "import sys\nsys.stdout.buffer.write('naïve café ✓\\n'.encode())\n",
+                                  ".sako/config.json": json.dumps(config)})
+        with patch.object(sys, "stdout", io.StringIO()) as shown:  # as under unittest -b: no byte buffer behind it
+            self.assertEqual(sako.verify(sako.resolve_roots(self.root), config), 0)
+        self.assertTrue(shown.getvalue().startswith("naïve café ✓\ncheck: PASS"), shown.getvalue())
 
     def test_every_verification_path_must_cover_something(self):
         (self.root / "empty").mkdir()
