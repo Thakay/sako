@@ -117,7 +117,7 @@ def main() -> None:
             demo.say("Stopping now is refused again: the work is closed but not committed.")
             demo.hook("Stop", "demo-agent", expect=2)
             demo.git("add", "--", "greeting.py")
-            demo.git("commit", "-qm", "T-1: A named visitor gets a personal greeting")
+            demo.git("commit", "-qm", "A named visitor gets a personal greeting")
             demo.say("Before leaving, the agent records the owner's next request. Now the gate is clear.")
             demo.sako("add", "An empty name gets a clear error", "--done-when",
                       "python3 greeting.py with no name prints Usage: greeting.py NAME", "--scope", "greeting.py")
@@ -228,7 +228,7 @@ def coordination() -> tuple[str, dict[str, str]]:
                      "with SAKO and gets the current check evidence and the next task from the files.")
             context = demo.sako("start", "--session", "demo-next")
             captured["next_task"] = next(line.split("): ", 1)[1] for line in context.splitlines()
-                                         if line.startswith("next: T-3 ("))
+                                         if line.startswith("next, if no task was named for you: T-3 ("))
             demo.say("The new session checks out with `end`, removing its SAKO presence "
                      "without stopping the agent process.")
             demo.sako("end", "--session", "demo-next")

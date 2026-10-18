@@ -444,7 +444,8 @@ def next_lines(rows: list[Row], live_markers: set[str] | None = None, brief: boo
         pick, others = ready[0], ready[1:]
         reason = pick.pri + (", first in row order" if others and others[0].pri == pick.pri else
                              f", the only ready {pick.pri} task" if others else ", the only ready task")
-        out = [f"next: {pick.id} ({reason}): {pick.task}", f"  done when: {pick.done_when}",
+        label = "next, if no task was named for you" if brief else "next"  # brief: the start context
+        out = [f"{label}: {pick.id} ({reason}): {pick.task}", f"  done when: {pick.done_when}",
                f"  scope: {', '.join(pick.touches)}"] + ([f"  source: {pick.source}"] if pick.source else [])
         if others:
             out.append("also ready: " + ", ".join(f"{r.id} ({r.pri})" for r in others))
@@ -608,9 +609,11 @@ def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) 
     }
 
 
-def remove_presence(roots: Roots, session_id: str) -> None:
+def remove_presence(roots: Roots, session_id: str) -> bool:
     with suppress(OSError):
         (presence_dir(roots) / f"{session_key(session_id)}.json").unlink()
+        return True
+    return False
 
 
 def my_entry(roots: Roots, session_id: str | None) -> dict | None:
@@ -742,13 +745,15 @@ def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
     for entry in read_presence(roots):
         if entry.get("marker") == me:
             continue
-        held = my_rows(rows, entry.get("marker"))
-        where = "; ".join(f"{r.id} ({r.status}) touches {', '.join(r.touches) or '?'}" for r in held) + \
-            "  [from the claim column]" if held else "no claimed row yet; ask before touching shared paths"
+        held = [r for r in my_rows(rows, entry.get("marker")) if r.status == "claimed"]  # a closed row holds nothing
+        where = "; ".join(f"{r.id} (claimed) touches {', '.join(r.touches) or '?'}" for r in held) + \
+            "  [from the claim column]" if held else "no claim"
         until = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry["seen"] + LEASE)) if entry.get("unverified") else ""
-        lines.append(f"  peer {entry.get('marker')} on {entry.get('branch')} since {entry.get('started')}"
+        lines.append(f"  peer {entry.get('marker')} (session {str(entry.get('session_id', '?'))[:8]}) on "
+                     f"{entry.get('branch')} since {entry.get('started')}"
                      + (f", unverified from here (counts as live until {until})" if until else "") + f" -> {where}")
-    return lines
+    return ["live peers (disjoint: share the tree; overlap: wait or negotiate; "
+            "no claim: ask before touching shared paths):"] + lines if lines else []
 
 
 def fingerprint(root: Path, relative: str) -> str:
@@ -835,8 +840,8 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
             label = (label + "; " if label else "") + f"claimed by {holder.claim.split()[0]} in another worktree, " \
                                                       "which cannot have changed this checkout"
         unrecorded.append(f"{path} ({label})" if label else path)
-    notes = [f"not counted: {', '.join(paths)}: {why}; a shared checkout shows what changed, not who changed it."
-             for why, paths in exempt.items()]
+    notes = [f"not counted: {', '.join(paths[:3])}{f' and {len(paths) - 3} more' if len(paths) > 3 else ''}: {why}; "
+             "a shared checkout shows what changed, not who changed it." for why, paths in exempt.items()]
     return unrecorded, notes, changed, note
 
 
@@ -914,10 +919,7 @@ def render_start(roots: Roots, config: dict, entry: dict) -> str:
              f"--session {shlex.quote(entry['session_id'])}",
              f"your marker: {entry['marker']}  (use claim to record task ownership)",
              f"session: {json.dumps(entry['session_id'])} (use this ID with --session)"]
-    peers = peer_lines(roots, rows, entry["marker"])
-    lines.append("peers: none recorded" if not peers else "live peers (disjoint: share the tree; "
-                 "overlap: wait or negotiate):")
-    lines += peers
+    lines += peer_lines(roots, rows, entry["marker"]) or ["peers: none recorded"]
     lines.append(f"evidence: {state}; {why}")
     if findings:
         lines.append(f"ledger: {len(findings)} finding(s)")
@@ -936,8 +938,8 @@ def handoff(roots: Roots, config: dict, row: Row) -> Path:
 
 
 def handoffs_line(roots: Roots, config: dict, rows: list[Row]) -> list[str]:
-    """Open tasks' handoff folders, for the session that picks the work up."""
-    folders = [(r.id, handoff(roots, config, r)) for r in rows if r.doc == "tasks"]
+    """Handoff folders: an open task's for the session that picks it up, a closed task's marked to delete."""
+    folders = [(r.id + (" (closed: delete)" if r.doc == DONE else ""), handoff(roots, config, r)) for r in rows]
     listed = [f"{i} {shlex.quote(runtime_path(roots, p))}/" for i, p in folders if p.is_dir()]
     return ["handoffs: " + ", ".join(listed)] if listed else []
 
@@ -1001,7 +1003,7 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
         pending = [path for path in sorted(changed) if path in dirty and covers(row, path)
                    and not any(covers(r, path) for r in held)]
         if pending:
-            quoted, message = " ".join(map(shlex.quote, pending)), shlex.quote(f"{row.id}: {row.task}")
+            quoted, message = " ".join(map(shlex.quote, pending)), shlex.quote(row.task)  # no task ID in product history
             problems.append(f"Committed: {row.id} is closed but its changes are not committed: {', '.join(pending[:8])}"
                             f"\n    fix: git add -- {quoted}, then git commit -m {message} when the owner has allowed "
                             f"commits in this session; otherwise ask, or say in your reply: {row.id} closed, commit "
@@ -1057,8 +1059,7 @@ def render_status(roots: Roots, config: dict, session_id: str | None) -> str:
     held = my_rows(rows, marker)
     lines.append("your rows: " + ("; ".join(f"{r.id} ({r.status})" for r in held) if held else "none"))
     lines.append(changes_line(roots, rows, entry, marker))
-    peers = peer_lines(roots, rows, marker)
-    lines += ["peers:" if peers else "peers: none"] + peers
+    lines += peer_lines(roots, rows, marker) or ["peers: none"]
     lines += [f"ledger: {len(findings)} finding(s)" if findings else "ledger: consistent"] + [f"  {f}" for f in findings]
     return "\n".join(lines + handoffs_line(roots, config, rows))
 
@@ -1784,7 +1785,8 @@ def main(argv: list[str] | None = None) -> int:
 
     add("start", lambda a: print(render_start(*resolve(a), write_presence(resolve(a)[0], need_session(a)))),
         help="record presence and print the session context")
-    add("end", lambda a: remove_presence(resolve(a)[0], need_session(a)), help="remove your presence entry")
+    add("end", lambda a: print("sako: presence ended" if remove_presence(resolve(a)[0], need_session(a)) else
+                               "sako: no presence entry for this session ID; nothing ended"), help="remove your presence entry")
     p = add("check", cmd_check, help="ledger, claims, scopes and evidence")
     p.add_argument("--gate", action="store_true", help="exit 2 when the session should not stop yet")
     add("verify", lambda a: verify(*resolve(a)), help="run the project's check command and stamp the content")
@@ -1794,7 +1796,7 @@ def main(argv: list[str] | None = None) -> int:
     p = add("add", cmd_task, help="allocate and append one task under the ledger lock")
     p.add_argument("task")
     p.add_argument("--done-when", required=True, help="the observable completion condition")
-    p.add_argument("--scope", action="append", required=True, help="a path prefix the task may change; repeat")
+    p.add_argument("--scope", action="extend", nargs="+", required=True, help="path prefixes the task may change; list or repeat")
     p.add_argument("--pri", help="P1, P2 (default) or P3; on repeat intake it updates the priority")
     p.add_argument("--source", help="stable source item reference; matching intake reuses its task, done ones included")
     p.add_argument("--after", action="append", help="existing prerequisite task ID; repeat for multiple dependencies")

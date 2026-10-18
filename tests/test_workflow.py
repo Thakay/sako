@@ -414,6 +414,76 @@ class Workflow(unittest.TestCase):
         self.agents.append(agent)
         self.assertIn(listed, self.assert_ok(fixture.cli(self.root, "start", session="session-b", pid=agent.pid)))
 
+    def test_a_closed_tasks_handoff_folder_is_listed_for_everyone_and_the_advisory_stays_with_the_closer(self):
+        self.start("closer")
+        self.assert_ok(self.run_cli("claim", "T-1", session="closer"))
+        fixture.write(self.root, {".sako/work/T-1-invented-task/handoff.md": "Kept for a later task\n"})
+        self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Recorded", session="closer"))
+        self.assert_ok(self.run_cli("add", "Other work", "--scope", "docs/"))
+        fixture.write(self.root, {".sako/work/T-10-other-work/handoff.md": "Where it stands: started\n"})
+        listed = "handoffs: T-10 .sako/work/T-10-other-work/, T-1 (closed: delete) .sako/work/T-1-invented-task/"
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        self.assertIn(listed, self.assert_ok(fixture.cli(self.root, "start", session="newcomer", pid=agent.pid)))
+        self.assertIn(listed, self.assert_ok(self.run_cli("status", session="newcomer")))
+        self.assertNotIn("advisory", self.assert_ok(self.run_cli("check", "--gate", session="newcomer")))
+        self.assertIn("advisory: T-1 is closed and its handoff folder remains; move lasting facts to their home, then "
+                      "delete .sako/work/T-1-invented-task/.", self.assert_ok(self.run_cli("check", "--gate", session="closer")))
+
+    def test_the_start_context_offers_its_pick_for_a_session_with_no_task_named(self):
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        context = self.assert_ok(fixture.cli(self.root, "start", session="session-a", pid=agent.pid))
+        self.assertIn("\nnext, if no task was named for you: T-1 (P2, the only ready task): Invented task\n", context)
+        self.assertNotIn("\nnext: ", context)
+        self.assertTrue(self.assert_ok(self.run_cli("next")).startswith("next: T-1 (P2, the only ready task): Invented task\n"))
+
+    def test_a_peer_line_lists_its_claims_and_session_and_the_header_gives_the_advice_once(self):
+        self.start("holder-session")
+        self.assert_ok(self.run_cli("add", "Docs work", "--scope", "docs/"))
+        self.assert_ok(self.run_cli("claim", "T-1", session="holder-session"))
+        self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Recorded", session="holder-session"))
+        self.assert_ok(self.run_cli("claim", "T-10", session="holder-session"))
+        self.start("idle-session")
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        context = self.assert_ok(fixture.cli(self.root, "start", session="reader", pid=agent.pid))
+        for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
+            with self.subTest(view=view):
+                self.assertIn("live peers (disjoint: share the tree; overlap: wait or negotiate; no claim: ask before "
+                              "touching shared paths):", out)
+                self.assertEqual(out.count("ask before touching shared paths"), 1, out)
+                holder = next(line for line in out.splitlines() if sako.marker_for("holder-session") in line)
+                self.assertTrue(holder.startswith(f"  peer {sako.marker_for('holder-session')} (session holder-s) on main"), holder)
+                self.assertTrue(holder.endswith(" -> T-10 (claimed) touches docs/  [from the claim column]"), holder)
+                idle = next(line for line in out.splitlines() if sako.marker_for("idle-session") in line)
+                self.assertTrue(idle.startswith(f"  peer {sako.marker_for('idle-session')} (session idle-ses) on main"), idle)
+                self.assertTrue(idle.endswith(" -> no claim"), idle)
+
+    def test_one_scope_flag_takes_several_paths_and_a_task_text_after_them_fails(self):
+        active = self.root / ".sako/work/TASKS.md"
+        self.assert_ok(self.run_cli("add", "Several paths", "--scope", "src/", "docs/", "README.md"))
+        self.assert_ok(self.run_cli("add", "Repeated flag", "--scope", "src/", "--scope", "docs/"))
+        self.assert_ok(self.run_cli("add", "Both forms", "--scope", "src/", "docs/", "--scope", "tests/"))
+        scopes = {r.task: r.touches for r in sako.parse_rows({"tasks": active.read_text()})}
+        self.assertEqual([scopes["Several paths"], scopes["Repeated flag"], scopes["Both forms"]],
+                         [["src/", "docs/", "README.md"], ["src/", "docs/"], ["src/", "docs/", "tests/"]])
+        before = active.read_bytes()
+        code, out, err = self.run_cli("add", "--scope", "src/", "A task text after the path")
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("the following arguments are required: task", err)
+        self.assertEqual(active.read_bytes(), before, "nothing is added")
+
+    def test_end_says_whether_it_ended_this_sessions_presence(self):
+        self.start("session-a")
+        self.assertEqual(self.assert_ok(self.run_cli("end", session="session-a")), "sako: presence ended\n")
+        nothing = "sako: no presence entry for this session ID; nothing ended\n"
+        self.assertEqual(self.assert_ok(self.run_cli("end", session="session-a")), nothing, "a repeated end")
+        self.assertEqual(self.assert_ok(self.run_cli("end", session="mistyped-id")), nothing)
+        self.start("session-b")
+        self.assertEqual(fixture.hook(self.root, "SessionEnd", "session-b"), (0, "", ""), "the hook stays quiet")
+        self.assertEqual(list((self.root / ".sako/state/live").glob("*.json")), [])
+
     def test_close_needs_fresh_check_and_commit(self):
         fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "from pathlib import Path; assert Path('src/app.py').read_text() == 'print(2)\\n'"], "verify_paths": ["src"]})})
         fixture.commit_all(self.root, "configure real assertion")

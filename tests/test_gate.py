@@ -226,6 +226,22 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 2, err)
         self.assertIn("in another worktree, which cannot have changed this checkout", err)
 
+    def test_a_not_counted_note_names_three_paths_then_how_many_more_under_the_verdict(self):
+        self.start("s1")
+        self.start("peer")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "peer"))
+        fixture.write(self.root, {f"docs/{name}.md": "notes\n" for name in "abcde"})
+        code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        note = "not counted: docs/a.md, docs/b.md, docs/c.md and 2 more: in T-2's scope"
+        self.assertTrue(out.startswith(f"SAKO gate: clear\n{note}"), out)
+        self.assertNotIn("docs/d.md", out)
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertTrue(err.startswith("SAKO gate: 1 problem(s) before you stop:\n  Recorded:"), "the verdict comes first")
+        self.assertIn(f"\n{note}", err)
+
     def test_a_worktree_nested_in_the_checkout_is_another_checkout_not_a_change(self):
         self.start("s1")
         nested = self.root / ".claude" / "worktrees" / "agent-1"  # where Claude Code puts a subagent's worktree
@@ -365,11 +381,12 @@ class Gate(unittest.TestCase):
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
         self.assertIn("Committed: T-1 is closed but its changes are not committed: src/app.py", err)
-        self.assertIn("git add -- src/app.py, then git commit -m 'T-1: Invented task' when the owner has allowed commits", err)
+        self.assertIn("git add -- src/app.py, then git commit -m 'Invented task' when the owner has allowed commits", err)
+        self.assertNotIn("commit -m 'T-1", err, "a task ID stays out of the product's history")
         self.assertFalse(set("<>&") & set(err), err)
         self.assertNotIn("src/wip.py", err.split("Committed:")[1].split("\n")[0])
         fixture.git(self.root, "add", "src/app.py")
-        fixture.git(self.root, "commit", "-qm", "T-1: Invented task")
+        fixture.git(self.root, "commit", "-qm", "Invented task")
         self.assertEqual(self.stop("s1")[0], 0)
         fixture.write(self.root, {"src/wip.py": "someone else's draft, now edited\n"})
         code, _, err = self.stop("s1")

@@ -54,7 +54,7 @@ session: "demo-code" (use this ID with --session)
 peers: none recorded
 evidence: none; no passing check recorded; run: sako.py verify
 ledger: consistent
-next: T-1 (P2, first in row order): Greet a visitor by name
+next, if no task was named for you: T-1 (P2, first in row order): Greet a visitor by name
   done when: The greeting prints Hello, Ada!
   scope: greeting.py
 also ready: T-2 (P2)
@@ -75,11 +75,11 @@ kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-docs
 your marker: sk-0115-0d70912d790f  (use claim to record task ownership)
 session: "demo-docs" (use this ID with --session)
-live peers (disjoint: share the tree; overlap: wait or negotiate):
-  peer sk-0115-3c0f5f721a4a on main since 2026-01-15T09:30:00+0000 -> T-1 (claimed) touches greeting.py  [from the claim column]
+live peers (disjoint: share the tree; overlap: wait or negotiate; no claim: ask before touching shared paths):
+  peer sk-0115-3c0f5f721a4a (session demo-cod) on main since 2026-01-15T09:30:00+0000 -> T-1 (claimed) touches greeting.py  [from the claim column]
 evidence: none; no passing check recorded; run: sako.py verify
 ledger: consistent
-next: T-2 (P2, the only ready task): Show how to use the greeting
+next, if no task was named for you: T-2 (P2, the only ready task): Show how to use the greeting
   done when: The guide shows a command and its output
   scope: USAGE.md
 waiting: 1; run next for the reasons
@@ -149,10 +149,12 @@ T-3: open; recorded locally, not committed
 
 ```text
 $ python3 .sako/sako.py end --session demo-docs
+sako: presence ended
 ```
 
 ```text
 $ python3 .sako/sako.py end --session demo-code
+sako: presence ended
 ```
 
 A fresh agent session is opened in the coding tool. It runs `start` to check in with SAKO and gets the current check evidence and the next task from the files.
@@ -168,7 +170,7 @@ session: "demo-next" (use this ID with --session)
 peers: none recorded
 evidence: fresh; last pass 2026-01-15T09:30:00+0000 on content e23d67d0c54d813b
 ledger: consistent
-next: T-3 (P2, the only ready task): Handle a missing name
+next, if no task was named for you: T-3 (P2, the only ready task): Handle a missing name
   done when: A missing name prints a usage hint
   scope: greeting.py
 ```
@@ -177,4 +179,5 @@ The new session checks out with `end`, removing its SAKO presence without stoppi
 
 ```text
 $ python3 .sako/sako.py end --session demo-next
+sako: presence ended
 ```

@@ -983,7 +983,7 @@ class Discovery(unittest.TestCase):
     succeeds(installed(repo, *second))
     expect(all((repo / path).read_bytes() == data for path, data in current.items()), "repeat after completion changes no records")
     pickup = succeeds(installed(repo, "start", session="intake-pickup", pid=fake_agent()))
-    expect("PLAN.md" in pickup and "next: T-2 (P2, the only ready task): Print names" in pickup,
+    expect("PLAN.md" in pickup and "next, if no task was named for you: T-2 (P2, the only ready task): Print names" in pickup,
            f"pickup exposes the source and next action: {pickup}")
     succeeds(installed(repo, "claim", "T-2", session="intake-pickup"))
     guidance = succeeds(installed(repo, "next"))

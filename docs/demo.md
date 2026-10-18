@@ -98,7 +98,7 @@ Stopping now is refused again: the work is closed but not committed.
 $ # Claude Code's Stop hook (demo-agent)
 SAKO gate: 1 problem(s) before you stop:
   Committed: T-1 is closed but its changes are not committed: greeting.py
-    fix: git add -- greeting.py, then git commit -m 'T-1: A named visitor gets a personal greeting' when the owner has allowed commits in this session; otherwise ask, or say in your reply: T-1 closed, commit awaiting approval.
+    fix: git add -- greeting.py, then git commit -m 'A named visitor gets a personal greeting' when the owner has allowed commits in this session; otherwise ask, or say in your reply: T-1 closed, commit awaiting approval.
 (exit 2)
 ```
 
@@ -107,7 +107,7 @@ $ git add -- greeting.py
 ```
 
 ```text
-$ git commit -qm "T-1: A named visitor gets a personal greeting"
+$ git commit -qm "A named visitor gets a personal greeting"
 ```
 
 Before leaving, the agent records the owner's next request. Now the gate is clear.
@@ -142,7 +142,7 @@ The owner opens a new conversation in the coding tool. Its hook checks it in wit
 
 ```text
 $ # Claude Code's SessionStart hook (demo-next)
-sako 0.5.1 · work /work/greeting (main @ 8b1102e9b)
+sako 0.5.1 · work /work/greeting (main @ 7500e251e)
 This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next
@@ -151,7 +151,7 @@ session: "demo-next" (use this ID with --session)
 peers: none recorded
 evidence: fresh; last pass 2026-01-15T09:30:00+0000 on content bcb4b12f530eb1ce
 ledger: consistent
-next: T-2 (P2, the only ready task): An empty name gets a clear error
+next, if no task was named for you: T-2 (P2, the only ready task): An empty name gets a clear error
   done when: python3 greeting.py with no name prints Usage: greeting.py NAME
   scope: greeting.py
 (exit 0)
