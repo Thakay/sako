@@ -74,8 +74,9 @@ class LedgerParsing(unittest.TestCase):
                      row("T-2", status="claimed", claim=f"{since} (took over from sk-0101-bbbbbbbbbbbb: gone)", touches="`d/`"),
                      row("T-3", touches="`c/deep/`"))
         self.assertEqual([(r.status, sako.holder_key(r.claim)) for r in rows[:2]], [("claimed", "aaaaaaaaaaaa")] * 2)
-        self.assertIn("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over: "
-                      "claim T-1 --takeover REASON", sako.ledger_findings(rows, {"sk-0102-cccccccccccc"})[1])
+        self.assertIn("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, take it over (claim T-1 "
+                      "--takeover REASON), or park it (set its Status to parked with the reason)",
+                      sako.ledger_findings(rows, {"sk-0102-cccccccccccc"})[1])
         waiting = sako.next_lines(rows)
         self.assertIn(f"  T-1  claimed by {since}", waiting)
         self.assertIn("  T-3  scope overlaps T-1, claimed by sk-0101-aaaaaaaaaaaa", waiting)
@@ -111,8 +112,9 @@ class Findings(unittest.TestCase):
         found = self.findings(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"),
                               row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", after="T-1"),
                               live={"sk-0102-bbbbbbbbbbbb"})
-        self.assertTrue(any("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it "
-                            "over: claim T-1 --takeover REASON" in f for f in found))
+        self.assertTrue(any("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, take it over "
+                            "(claim T-1 --takeover REASON), or park it (set its Status to parked with the reason)" in f
+                            for f in found))
         self.assertFalse(any("T-2 is claimed" in f for f in found),
                          "claim refuses unfinished prerequisites, so a held row waiting on one is no finding")
         self.assertFalse(any("live session" in f for f in self.findings(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"))),

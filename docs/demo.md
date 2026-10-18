@@ -34,13 +34,13 @@ The owner opens the agent in their coding tool. Its hook registers the existing 
 ```text
 $ # Claude Code's SessionStart hook (demo-agent)
 sako 0.5.1 · work /work/greeting (main @ 689762746)
-This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-agent
-your marker: sk-0115-7a281dacac30  (use claim to record task ownership)
+your marker: sk-0115-7a281dacac30
 session: "demo-agent" (use this ID with --session)
 peers: none recorded
-evidence: none; no passing check recorded; run: sako.py verify
+evidence: none; no passing check recorded; run sako.py verify, which runs python3 check.py
 ledger: consistent
 next: nothing is ready
 no recorded work: establish direction and one useful action with the selected planner or work source.
@@ -69,7 +69,7 @@ It claims the task and runs the check, which fails: the output lacks the comma a
 
 ```text
 $ python3 .sako/sako.py claim T-1 --session demo-agent
-T-1: claimed; recorded locally, not committed. If it pauses or needs working notes, keep them in .sako/work/T-1-a-named-visitor-gets/ (handoff.md for where it stands).
+T-1: claimed; recorded locally, not committed. Working notes go in .sako/work/T-1-a-named-visitor-gets/. If this session ends before closing it, the claim reads as stale and another session may take it over with a reason, so write handoff.md there first, with where it stands.
 ```
 
 ```text
@@ -143,10 +143,10 @@ The owner opens a new conversation in the coding tool. Its hook checks it in wit
 ```text
 $ # Claude Code's SessionStart hook (demo-next)
 sako 0.5.1 · work /work/greeting (main @ 7500e251e)
-This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next
-your marker: sk-0115-a5133dc77184  (use claim to record task ownership)
+your marker: sk-0115-a5133dc77184
 session: "demo-next" (use this ID with --session)
 peers: none recorded
 evidence: fresh; last pass 2026-01-15T09:30:00+0000 on content bcb4b12f530eb1ce

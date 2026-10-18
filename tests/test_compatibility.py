@@ -304,22 +304,35 @@ class Compatibility(unittest.TestCase):
         self.cli("end", session="conversation-one")
         self.assertEqual(sako.read_presence(roots), [])
 
-    def test_a_claude_code_session_needs_no_session_flag(self):
+    def test_a_claude_code_session_and_its_subagents_need_no_session_flag(self):
+        """In Claude Code, as in Codex, a subagent's shell carries its parent's session ID, so a command there without
+        --session acts as the parent. A helper given an ID of its own passes it on every command."""
         host = self.host()
 
         def run(*args, **env):
             return subprocess.run([sys.executable, str(fixture.SAKO), *args], cwd=self.root, text=True,
                                   capture_output=True, env=dict(fixture.ENV, SAKO_AGENT_PID=str(host.pid), **env))
 
-        fixture.succeeds(run("start", CLAUDE_CODE_SESSION_ID="conversation-main"))
-        fixture.succeeds(run("claim", "T-1", CLAUDE_CODE_SESSION_ID="conversation-main"))
-        self.assertIn(sako.marker_for("conversation-main"), (self.root / ".sako/work/TASKS.md").read_text())
-        refusal = run("close", "T-1", "--evidence", "Checked", CLAUDE_CODE_SESSION_ID="subagent-own-id")
+        parent, main = sako.marker_for("conversation-main"), {"CLAUDE_CODE_SESSION_ID": "conversation-main"}
+        subagent = dict(main, CLAUDE_CODE_CHILD_SESSION="1")  # main sessions' shells set it too, so it tells nothing apart
+        fixture.succeeds(run("start", **main))
+        fixture.succeeds(run("claim", "T-1", **main))
+        self.assertIn(parent, (self.root / ".sako/work/TASKS.md").read_text())
+        self.assertIn(f"you: {parent} since ", fixture.succeeds(run("status", **subagent)), "the subagent is its parent here")
+        self.cli("add", "Record the sample", "--scope", "src/sample/")
+        refusal = run("claim", "T-10", "--session", "helper-own-id", **subagent)
         self.assertEqual(refusal.returncode, 3, refusal.stderr)
-        self.assertIn("session 'subagent-own-id' has not started here; pass --session", refusal.stderr)
-        explicit = run("close", "T-1", "--evidence", "Checked", "--session", "conversation-main",
-                       CLAUDE_CODE_SESSION_ID="subagent-own-id")
-        fixture.succeeds(explicit)
+        self.assertIn("session 'helper-own-id' has not started here; pass --session", refusal.stderr)
+        fixture.succeeds(run("start", "--session", "helper-own-id", **subagent))
+        refusal = run("claim", "T-10", "--session", "helper-own-id", **subagent)
+        self.assertEqual(refusal.returncode, 3, refusal.stderr)
+        self.assertIn(f"T-10's scope overlaps T-1 (src/), claimed by {parent}; wait for it to close, or ", refusal.stderr,
+                      "a helper on its own ID is another holder, refused inside its parent's claim")
+        fixture.succeeds(run("close", "T-1", "--evidence", "Checked", **subagent))
+        receipt = sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})[0].evidence
+        self.assertTrue(receipt.startswith(f"Checked [{parent} since "), "the subagent closes as its parent")
+        self.assertEqual(fixture.succeeds(run("end", **subagent)), "sako: presence ended\n")
+        self.assertIsNone(sako.my_entry(sako.resolve_roots(self.root), "conversation-main"), "and ends its parent's presence")
         fixture.succeeds(run("status", SAKO_SESSION="conversation-main", CLAUDE_CODE_SESSION_ID="other"))
         self.assertIn("needs --session <id>, SAKO_SESSION, or the session ID of Claude Code or Codex", run("end").stderr)
 

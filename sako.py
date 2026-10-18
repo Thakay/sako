@@ -403,8 +403,8 @@ def ledger_findings(rows: list[Row], live_markers: set[str] | None = None, bysta
                        "keep one row per source")
         out += row_faults(row, set(seen))
         if row.status == "claimed" and live is not None and holder_key(row.claim) not in live:
-            others.append(f"{row.id} is claimed by {row.claim.split()[0]}, which is not a live session; "
-                          f"resume it, or take it over: claim {row.id} --takeover REASON")
+            others.append(f"{row.id} is claimed by {row.claim.split()[0]}, which is not a live session; resume it, take it over "
+                          f"(claim {row.id} --takeover REASON), or park it (set its Status to parked with the reason)")
     for index, row in enumerate(claimed):
         for other in claimed[index + 1:]:
             if holder_key(row.claim) != holder_key(other.claim) and scopes_overlap(row, other):
@@ -477,7 +477,7 @@ def read_ledger(roots: Roots, config: dict) -> list[Row]:
 
 
 def session_key(session_id: str) -> str:
-    """Twelve hex characters derived from the session id; stable across resumes."""
+    """Twelve hex characters derived from the session id; stable across resumes, while /clear and a fork start a new session ID."""
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
 
 
@@ -559,7 +559,7 @@ def alive(pid: int) -> bool:
 def read_presence(roots: Roots) -> list[dict]:
     """Every live entry. A process visible here judges its entry; a gone or unreadable one is removed. An entry from
     another PID namespace (a client's sandbox), or with no host, counts as live for LEASE after its last start, marked
-    unverified, and one from an earlier boot has ended. Both stay on disk, so a resume keeps its starting facts."""
+    unverified, and one from an earlier boot has ended. Both stay on disk, so a resume before end keeps its starting facts."""
     entries, now = [], time.time()
     for path in sorted(presence_dir(roots).glob("*.json")):
         entry = read_json(path)
@@ -575,7 +575,7 @@ def read_presence(roots: Roots) -> list[dict]:
 
 
 def write_presence(roots: Roots, session_id: str) -> dict:
-    """Write or refresh this session's entry; a resume keeps its starting facts. Raises SakoError
+    """Write or refresh this session's entry; a resume before end keeps the entry and its starting facts. Raises SakoError
     when it cannot be written; presence_entry still builds it for rendering."""
     directory = presence_dir(roots)
     mine = directory / f"{session_key(session_id)}.json"
@@ -590,7 +590,7 @@ def write_presence(roots: Roots, session_id: str) -> dict:
 
 
 def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) -> dict:
-    """This session's entry as it would be written; a resume keeps its starting facts."""
+    """This session's entry as it would be written; a resume before end keeps its starting facts, and one after end starts over."""
     previous = previous or {}
     pid = agent_pid()
     pid = pid if alive(pid) else 0  # a host hidden from here, such as SAKO_AGENT_PID inside a sandbox, is none
@@ -665,7 +665,7 @@ def evidence_state(roots: Roots, config: dict) -> tuple[str, str]:
         return "none", "no verify_command configured; SAKO keeps no check evidence"
     stamp = read_json(roots.local / "stamp.json")
     if not stamp:
-        return "none", "no passing check recorded; run: sako.py verify"
+        return "none", f"no passing check recorded; run sako.py verify, which runs {shlex.join(config['verify_command'])}"
     now = content_id(roots.work, list(config["verify_paths"]))
     if stamp.get("command_id") != command_id(config):
         return "stale", "the check command or paths changed since the last pass"
@@ -917,7 +917,7 @@ def render_start(roots: Roots, config: dict, entry: dict) -> str:
              f"kit: {roots.kit.as_posix()}; method {kit}/SAKO.md; records {kit}/{config['tasks']} and {kit}/{config['done']}",
              f"commands: {PYTHON} {shlex.quote((roots.kit / 'sako.py').as_posix())} <verb> "
              f"--session {shlex.quote(entry['session_id'])}",
-             f"your marker: {entry['marker']}  (use claim to record task ownership)",
+             f"your marker: {entry['marker']}",
              f"session: {json.dumps(entry['session_id'])} (use this ID with --session)"]
     lines += peer_lines(roots, rows, entry["marker"]) or ["peers: none recorded"]
     lines.append(f"evidence: {state}; {why}")
@@ -955,8 +955,8 @@ def overview(roots: Roots, config: dict, session_id: str | None) -> tuple[list[R
 
 def changes_line(roots: Roots, rows: list[Row], entry: dict | None, marker: str | None) -> str:
     unrecorded, notes, changed, note = recorded(roots, rows, entry, marker, read_presence(roots))
-    return (f"changed this session: {len(changed)}" + (f"; unrecorded: {', '.join(unrecorded[:8])}" if unrecorded else "")
-            + (f" ({note})" if note else ""))
+    return (f"changed this session in {roots.work.as_posix()}: {len(changed)}"
+            + (f"; unrecorded: {', '.join(unrecorded[:8])}" if unrecorded else "") + (f" ({note})" if note else ""))
 
 
 def generated(root: Path, paths: list[str]) -> str:
@@ -1023,9 +1023,9 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
     for row in mine:
         folder = handoff(roots, config, row)
         if row.status == "claimed" and not (folder / "handoff.md").is_file():
-            notes.append(f"advisory: {row.id} is claimed and unfinished; if you stop before closing it, write "
-                         f"{shlex.quote(runtime_path(roots, folder / 'handoff.md'))}: where it stands, what landed, "
-                         "what is left, the next step, and traps.")
+            notes.append(f"advisory: {row.id} is claimed and unfinished; if this session ends before closing it, the claim reads as stale "
+                         f"and another session may take it over with a reason, so write {shlex.quote(runtime_path(roots, folder / 'handoff.md'))} "
+                         "with where it stands, what landed, what is left, the next step, and traps.")
         elif row.status == DONE and folder.is_dir():
             notes.append(f"advisory: {row.id} is closed and its handoff folder remains; move lasting facts to their "
                          f"home, then delete {shlex.quote(runtime_path(roots, folder))}/.")
@@ -1041,8 +1041,8 @@ def render_status(roots: Roots, config: dict, session_id: str | None) -> str:
     manifest = installation(roots.home)
     lines = footprint_lines(roots, config, manifest) + [hooks_line(roots, manifest)]
     lines += [f"sako {VERSION} · work {roots.work.as_posix()}",
-              f"config: {CONFIG} {'present' if (roots.kit / 'config.json').exists() else 'absent (defaults)'}"
-              f" · verify_command {'set' if config['verify_command'] else 'not set'}",
+              f"config: {CONFIG} {'present' if (roots.kit / 'config.json').exists() else 'absent (defaults)'} · "
+              + (f"verify runs {shlex.join(config['verify_command'])}" if config["verify_command"] else "verify_command not set"),
               f"evidence: {state}; {why}"]
     if entry:
         lines.append(f"you: {marker} since {entry['started']} on {entry['branch']}; "
@@ -1078,8 +1078,9 @@ CLIENTS = {"claude": "Claude Code", "codex": "Codex"}
 CODEX_ROOT = "# sako: start\n[sandbox_workspace_write]\nwritable_roots = [{}]\n# sako: end\n"
 SHARE = f'git add -A -- {KIT} && git commit -m "Share SAKO records" -- {KIT}'  # the folder only, so anything else staged stays staged
 HOOK_OWNED = r"(?<![\w.])\.sako/sako\.py(?![\w.]).*\bhook {}(?![\w-])"  # SAKO's hook for a client, any Python or redirect
-DOOR = ("This project uses SAKO for task execution: before carrying out a project task, read {}/SAKO.md and follow its "
-        "daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.")
+DOOR = ("This project uses SAKO for task execution. Before a project task, read {}/SAKO.md down to its Read when needed "
+        "table, later sections only when they apply, and follow its daily loop. Questions need no task record until they "
+        "change a file. Project instructions and the owner's choices come first.")
 POINTER = f"{DOOR.format(KIT)} Records: {KIT}/work/TASKS.md and DONE.md. Commands: python3 {KIT}/sako.py <verb> (python on Windows)."
 
 
@@ -1528,10 +1529,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     roots, config = resolve(args)
     if args.gate:
         code, message = gate(roots, config, need_session(args))
-        if code:
-            print(message, file=sys.stderr)
-        else:
-            print("SAKO gate: clear" + (f"\n{message}" if message else ""))
+        clear = f"SAKO gate: clear in {roots.work.as_posix()}" + (f"\n{message}" if message else "")  # the checkout judged
+        print(message if code else clear, file=sys.stderr if code else sys.stdout)
         return code
     rows, _, findings, _, entry, marker = overview(roots, config, args.session)
     state, why = evidence_state(roots, config)
@@ -1686,9 +1685,10 @@ def cmd_task(args: argparse.Namespace) -> int:
             lines[row.line - 1] = row_line(row.titles, dict(row.cells, status=entry["marker"] + time.strftime(" since %Y-%m-%dT%H:%M%z") + note))
             atomic_write(active, "\n".join(lines).rstrip() + "\n")
         print(f"{row.id}: claimed" + ("; its previous holder could not be verified from here" if unverified else "") + "; recorded "
-              f"locally, not committed. If it pauses or needs working notes, keep them in {shlex.quote(runtime_path(roots, handoff(roots, config, row)))}/ "
-              "(handoff.md for where it stands)." + (f" Its previous holder also holds overlapping {', '.join(moving)}; take "
-              f"{'it' if len(moving) == 1 else 'them'} over too before you stop." if moving else ""))
+              f"locally, not committed. Working notes go in {shlex.quote(runtime_path(roots, handoff(roots, config, row)))}/. If this "
+              "session ends before closing it, the claim reads as stale and another session may take it over with a reason, so "
+              "write handoff.md there first, with where it stands." + (f" Its previous holder also holds overlapping {', '.join(moving)}; "
+              f"take {'it' if len(moving) == 1 else 'them'} over too before you stop." if moving else ""))
         return 0
     if row.status != "claimed" or owner != mine:
         raise SakoError(f"{row.id} must be claimed by this session before closing")
@@ -1777,7 +1777,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add(name: str, handler, **kwargs) -> argparse.ArgumentParser:
-        p = sub.add_parser(name, **kwargs)  # every verb takes --session, so the printed command line works for all
+        p = sub.add_parser(name, description=kwargs["help"], **kwargs)  # every verb takes --session, so the printed command line works for all
         p.add_argument("--session", help="your session identifier (the marker is derived from it)")
         p.set_defaults(handler=handler)
         return p
@@ -1807,7 +1807,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("client", nargs="?", choices=sorted(CLIENTS), help="the client whose hook this is")
     p.add_argument("--event", help="event name when the input carries none")
     add("remove", cmd_remove, help="remove unmodified kit assets and its integration entries; preserve project records")
-    p = sub.add_parser("init", help="install the kit in this repository, or wire this worktree; no flags needed")
+    p = sub.add_parser("init", help=(about := "install the kit in this repository, or wire this worktree; no flags needed"), description=about)
     p.add_argument("--client", action="append", choices=["claude", "codex", "none"], help="wire this client "
                    "instead of the detected ones; repeat for both; none means no hooks. The choice is kept")
     p.add_argument("--update", action="store_true", help="replace unmodified kit files with this release's; records stay")

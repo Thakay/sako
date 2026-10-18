@@ -110,7 +110,8 @@ class Gate(unittest.TestCase):
         self.assertIn(f"your marker: {today}", out, "the resume starts a new start record under a new marker day")
         out = self.run_in(self.root, "status", session="s1")[1]
         self.assertIn("your rows: T-1 (claimed)", out, "the claim outlives the session")
-        self.assertIn("changed this session: 0", out, "the start window begins again at the resume")
+        self.assertIn(f"changed this session in {self.root.resolve().as_posix()}: 0", out,
+                      "the start window begins again at the resume")
         fixture.write(self.root, {"src/app.py": "print(3)\n"})
         self.assertEqual(self.run_in(self.root, "verify")[0], 0)
         self.assertEqual(self.run_in(self.root, "close", "T-1", "--evidence", "Prints 3", session="s1")[0], 0)
@@ -123,19 +124,51 @@ class Gate(unittest.TestCase):
         fixture.commit_all(self.root, "T-1: prints 3")
         self.assertEqual(self.stop("s1")[0], 0)
 
+    def test_a_resume_after_session_end_gets_its_marker_and_claims_back(self):
+        self.start("s1")
+        marker = sako.marker_for("s1")
+        self.assertEqual(self.run_in(self.root, "claim", "T-1", session="s1")[0], 0)
+        self.assertEqual(fixture.hook(self.root, "SessionEnd", "s1")[0], 0)
+        self.assertIn(f"T-1 is claimed by {marker}, which is not a live session", self.run_in(self.root, "check")[1],
+                      "while the session is gone, its claim reads as stale to everyone")
+        self.assertIn(f"your marker: {marker}\n", fixture.hook(self.root, "SessionStart", "s1", pid=self.host())[1])
+        self.assertIn("your rows: T-1 (claimed)", self.run_in(self.root, "status", session="s1")[1])
+        self.assertIn("ledger: consistent", self.run_in(self.root, "check")[1], "the same ID brings its claim back to life")
+
     def test_a_session_that_changed_nothing_passes(self):
         fixture.write(self.root, {"src/wip.py": "draft\n", ".sako/work/TASKS.md": fixture.ledger(
             fixture.row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"), fixture.row("T-2", touches="`docs/`"))})
-        stale = ("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over: "
-                 "claim T-1 --takeover REASON")
+        stale = ("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, take it over (claim T-1 "
+                 "--takeover REASON), or park it (set its Status to parked with the reason)")
         code, out, err = self.run_in(self.root, "start", session="s1", pid=self.host())
         self.assertEqual(code, 0, out + err)
         self.assertIn(f"  {stale}", out, "start lists another session's stale claim")
         self.assertEqual(self.stop("s1"), (0, "", ""), "another session's stale claim is not this session's to fix")
-        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"), (0, f"SAKO gate: clear\nnote: {stale}\n", ""))
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"),
+                         (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}\nnote: {stale}\n", ""))
         for view in ("check", "status"):
             self.assertIn(f"  {stale}", self.run_in(self.root, view, session="s1")[1], f"{view} still lists it")
         self.assertIn("T-1  claimed by sk-0101-aaaaaaaaaaaa (not live)", self.run_in(self.root, "next")[1])
+
+    def test_a_bystander_parks_a_stale_row_by_hand_and_no_finding_names_it_after(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"), fixture.row("T-2", touches="`docs/`"))})
+        self.start("s1")
+        self.assertIn("note: T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, take it over "
+                      "(claim T-1 --takeover REASON), or park it (set its Status to parked with the reason)",
+                      self.run_in(self.root, "check", "--gate", session="s1")[1])
+        tasks = self.root / ".sako/work/TASKS.md"  # its handoff says it waits on the owner
+        tasks.write_text(tasks.read_text().replace("| sk-0101-aaaaaaaaaaaa |", "| parked: owner: approves the copy, 2026-01-02 |"))
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"),
+                         (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}\n", ""), "an edit of the records is no change")
+        self.assertEqual(self.stop("s1"), (0, "", ""))
+        views = {"start": self.run_in(self.root, "start", session="s2", pid=self.host())[1],
+                 **{view: self.run_in(self.root, view, session="s1")[1] for view in ("check", "status")}}
+        for view, out in views.items():
+            with self.subTest(view=view):
+                self.assertIn("ledger: consistent", out)
+                self.assertNotIn("T-1 is claimed", out)
+        self.assertIn("T-1  parked: owner: approves the copy, 2026-01-02", self.run_in(self.root, "next")[1])
 
     def test_findings_about_this_sessions_claims_or_the_records_block_and_the_rest_are_notes(self):
         row, mine, other = fixture.row, fixture.marker("s1"), "sk-0101-bbbbbbbbbbbb"
@@ -148,8 +181,8 @@ class Gate(unittest.TestCase):
         code, out, _ = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out)
         self.assertIn("note: T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow the scopes", out)
-        self.assertIn(f"note: T-2 is claimed by {other}, which is not a live session; resume it, or take it over: "
-                      "claim T-2 --takeover REASON", out)
+        self.assertIn(f"note: T-2 is claimed by {other}, which is not a live session; resume it, take it over (claim T-2 "
+                      "--takeover REASON), or park it (set its Status to parked with the reason)", out)
         fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
             *peers, row("T-3", status="claimed", claim=mine, touches="`src/app.py`"), row("T-4"), row("T-4", touches="`etc/`"))})
         code, _, err = self.stop("s1")
@@ -264,7 +297,7 @@ class Gate(unittest.TestCase):
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out + err)
         note = "not counted: docs/a.md, docs/b.md, docs/c.md and 2 more: in T-2's scope"
-        self.assertTrue(out.startswith(f"SAKO gate: clear\n{note}"), out)
+        self.assertTrue(out.startswith(f"SAKO gate: clear in {self.root.resolve().as_posix()}\n{note}"), out)
         self.assertNotIn("docs/d.md", out)
         fixture.write(self.root, {"src/app.py": "print(2)\n"})
         code, _, err = self.stop("s1")
@@ -318,6 +351,27 @@ class Gate(unittest.TestCase):
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s1"))
         fixture.succeeds(fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Read only", "--session", "s1"))
         self.assertEqual(self.stop("s1")[:2], (0, ""), "no checked content moved, so no fresh check was needed")
+
+    def test_closed_work_left_uncommitted_in_a_sibling_worktree_blocks_only_the_gate_run_there(self):
+        self.start("s1")
+        linked = self.base / "linked"
+        fixture.git(self.root, "worktree", "add", "-q", str(linked))
+        self.assertEqual(self.run_in(linked, "claim", "T-1", session="s1")[0], 0)
+        fixture.write(linked, {"src/app.py": "print(2)\n"})  # work done by path in the sibling; the session's hooks run here
+        for args in (("verify",), ("close", "T-1", "--evidence", "Prints 2")):
+            code, out, err = self.run_in(linked, *args, session="s1")
+            self.assertEqual(code, 0, out + err)
+        here, there = self.root.resolve().as_posix(), linked.resolve().as_posix()
+        self.assertIn(f"changed this session in {here}: 0", self.run_in(self.root, "check", session="s1")[1])
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"), (0, f"SAKO gate: clear in {here}\n", ""))
+        self.assertEqual(self.stop("s1"), (0, "", ""), "the gate judges the checkout it runs in, and a clear stop is silent")
+        self.assertIn(f"changed this session in {there}: 1", self.run_in(linked, "check", session="s1")[1])
+        code, _, err = self.run_in(linked, "check", "--gate", session="s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("SAKO gate: 1 problem(s) before you stop:\n  Committed: T-1 is closed but its changes are not committed: "
+                      "src/app.py", err, "run there, only Committed blocks, since the change is recorded and that stamp is fresh")
+        fixture.commit_all(linked, "Invented task")
+        self.assertEqual(self.run_in(linked, "check", "--gate", session="s1"), (0, f"SAKO gate: clear in {there}\n", ""))
 
     def test_a_commit_recorded_under_another_sessions_closed_task_is_not_this_sessions(self):
         self.start("s1")
@@ -391,6 +445,26 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         self.assertIn("not counted: docs/x.md: committed under T-10, closed by sk-", out, "of two closes that day, the later")
 
+    def test_a_close_scoped_dot_takes_in_an_ended_peers_uncommitted_edit(self):
+        """A documented limit (docs/limits.md). The gate sees what changed in a shared checkout, not who changed it, and a
+        task scoped . covers every file, so its close counts a peer's leftover edit as this session's closed work."""
+        self.start("s1")
+        self.start("peer")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "peer"))
+        fixture.write(self.root, {"docs/draft.md": "the peer's draft\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Drafted", "--session", "peer"))
+        fixture.succeeds(fixture.installed_copy(self.root, "end", "--session", "peer"))  # it ends with its edit uncommitted
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: docs/draft.md", err)
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Tidy the project", "--done-when", "Tidy", "--scope", "."))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Tidied", "--session", "s1"))
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("SAKO gate: 1 problem(s) before you stop:\n  Committed: T-10 is closed but its changes are not committed: "
+                      "docs/draft.md", err, "the close covers the peer's edit, so this session is asked to commit it")
+
     def test_without_a_start_record_every_dirty_path_counts_and_the_gate_says_so(self):
         fixture.write(self.root, {"src/new.py": "x = 1\n"})
         code, _, err = self.run_in(self.root, "check", "--gate", session="never-started")
@@ -443,8 +517,9 @@ class Gate(unittest.TestCase):
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s1"))
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out + err)
-        self.assertIn("advisory: T-2 is claimed and unfinished; if you stop before closing it, write "
-                      ".sako/work/T-2-invented-task/handoff.md: where it stands", out)
+        self.assertIn("advisory: T-2 is claimed and unfinished; if this session ends before closing it, the claim reads as "
+                      "stale and another session may take it over with a reason, so write .sako/work/T-2-invented-task/"
+                      "handoff.md with where it stands", out)
         self.assertEqual(self.stop("s1")[:2], (0, ""), "a clear stop stays silent; pausing is free")
         fixture.write(self.root, {".sako/work/T-2-invented-task/handoff.md": "Where it stands: drafted\n"})
         self.assertNotIn("advisory", self.run_in(self.root, "check", "--gate", session="s1")[1])
@@ -460,7 +535,8 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("advisory: T-2 is closed and its handoff folder remains", out)
         shutil.rmtree(self.root / ".sako/work/T-2-invented-task")
-        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1")[1], "SAKO gate: clear\n")
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1")[1],
+                         f"SAKO gate: clear in {self.root.resolve().as_posix()}\n")
 
     def test_a_merge_or_a_takeover_needs_a_fresh_check_before_close(self):
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
@@ -636,7 +712,7 @@ class Gate(unittest.TestCase):
         self.start("s1")
         fixture.write(self.root, {"src/app.py": "print(7)\n"})
         out = fixture.succeeds(fixture.installed_copy(self.root, "status", "--session", "s1"))
-        self.assertIn("changed this session: 1; unrecorded: src/app.py", out)
+        self.assertIn(f"changed this session in {self.root.resolve().as_posix()}: 1; unrecorded: src/app.py", out)
 
     def test_a_hook_that_fails_on_its_own_lets_the_session_go(self):
         self.start("s1")

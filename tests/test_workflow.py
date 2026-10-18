@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -296,6 +297,30 @@ class Workflow(unittest.TestCase):
                 self.assert_ok(self.run_cli(*args))
         self.assertIn("| T-10 | Printed line |", (self.root / ".sako/work/DONE.md").read_text())
 
+    def test_every_verbs_help_says_what_the_verb_does(self):
+        env = dict(fixture.ENV, COLUMNS="300", NO_COLOR="1")  # wide enough that argparse wraps no entry
+
+        def shown(*args):
+            return fixture.succeeds(subprocess.run([sys.executable, str(fixture.SAKO), *args], cwd=self.root, env=env,
+                                                   capture_output=True, text=True))
+
+        verbs = dict(re.findall(r"(?m)^    (\w+) {2,}(\S.*)$", shown("--help")))
+        self.assertEqual(set(verbs), {"start", "end", "check", "verify", "status", "next", "add", "claim", "close", "hook",
+                                      "remove", "init"})
+        for verb, description in verbs.items():
+            with self.subTest(verb=verb):
+                self.assertIn(f"\n\n{description}\n\n", shown(verb, "--help"), "the listing's line is the verb's description")
+        self.assertEqual(verbs["verify"], "run the project's check command and stamp the content")
+
+    def test_status_and_a_missing_stamp_name_the_command_verify_runs(self):
+        command = [sys.executable, "-B", "check.py"]
+        fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": command, "verify_paths": ["src"]})})
+        out = self.assert_ok(self.run_cli("status"))  # the config line's end, since Windows reads its middle dot back in its code page
+        self.assertIn(f" verify runs {shlex.join(command)}\nevidence: none; no passing check recorded; run sako.py verify, which "
+                      f"runs {shlex.join(command)}\n", out)
+        fixture.write(self.root, {".sako/config.json": "{}"})
+        self.assertIn(" verify_command not set\nevidence: none; no verify_command configured", self.assert_ok(self.run_cli("status")))
+
     @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
     def test_parallel_claims_have_one_winner(self):
         for session in ("session-a", "session-b"):
@@ -400,7 +425,9 @@ class Workflow(unittest.TestCase):
         fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": []})})
         self.start("session-a")
         out = self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
-        self.assertIn("keep them in .sako/work/T-1-invented-task/ (handoff.md for where it stands)", out)
+        self.assertIn("; recorded locally, not committed. Working notes go in .sako/work/T-1-invented-task/. If this session "
+                      "ends before closing it, the claim reads as stale and another session may take it over with a reason, "
+                      "so write handoff.md there first, with where it stands.", out)
         self.assert_ok(self.run_cli("verify"))
         self.assert_ok(self.run_cli("add", "Other work", "--scope", "docs/"))
         fixture.write(self.root, {".sako/work/T-1-invented-task/handoff.md": "Where it stands: started\n",
@@ -408,7 +435,7 @@ class Workflow(unittest.TestCase):
                                   ".sako/work/T-10-renamed-by-hand/notes.md": "found by its ID\n"})
         out = self.assert_ok(self.run_cli("check", "--session", "session-a"))
         self.assertIn("evidence: fresh", out)
-        self.assertIn("changed this session: 0", out)
+        self.assertIn(f"changed this session in {self.root.resolve().as_posix()}: 0", out)
         listed = "handoffs: T-1 .sako/work/T-1-invented-task/, T-10 .sako/work/T-10-renamed-by-hand/"
         self.assertIn(listed, self.assert_ok(self.run_cli("status", "--session", "session-a")))
         agent = subprocess.Popen(["sleep", "60"])

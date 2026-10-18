@@ -238,6 +238,9 @@ class Budgets(unittest.TestCase):
                 context = fixture.succeeds(fixture.installed(root, "start", session="budget-session", pid=agent))
             finally:
                 fixture.kill(agent)
+        for door in (context, sako.POINTER):  # the start context, and the line init gives for project instructions
+            self.assertIn("read .sako/SAKO.md down to its Read when needed table, later sections only when they apply", door)
+            self.assertIn("Questions need no task record until they change a file.", door)
         skill = (fixture.SAKO.parent / "skills/sako/SKILL.md").read_text()
         template = (fixture.SAKO.parent / "templates/TASKS.md").read_text().split("| ID |")[0]
         counts = {name: len(text.split()) for name, text in

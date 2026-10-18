@@ -46,13 +46,13 @@ In the already open code session, run `start` to register with SAKO and get cont
 ```text
 $ python3 .sako/sako.py start --session demo-code
 sako 0.5.1 · work /work/greeting (main @ 53a59d8b5)
-This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-code
-your marker: sk-0115-3c0f5f721a4a  (use claim to record task ownership)
+your marker: sk-0115-3c0f5f721a4a
 session: "demo-code" (use this ID with --session)
 peers: none recorded
-evidence: none; no passing check recorded; run: sako.py verify
+evidence: none; no passing check recorded; run sako.py verify, which runs python3 check.py
 ledger: consistent
 next, if no task was named for you: T-1 (P2, first in row order): Greet a visitor by name
   done when: The greeting prints Hello, Ada!
@@ -62,7 +62,7 @@ also ready: T-2 (P2)
 
 ```text
 $ python3 .sako/sako.py claim T-1 --session demo-code
-T-1: claimed; recorded locally, not committed. If it pauses or needs working notes, keep them in .sako/work/T-1-greet-a-visitor-by/ (handoff.md for where it stands).
+T-1: claimed; recorded locally, not committed. Working notes go in .sako/work/T-1-greet-a-visitor-by/. If this session ends before closing it, the claim reads as stale and another session may take it over with a reason, so write handoff.md there first, with where it stands.
 ```
 
 The already open docs session checks in while the code session is still active. Its context shows the peer and points to the remaining task.
@@ -70,14 +70,14 @@ The already open docs session checks in while the code session is still active. 
 ```text
 $ python3 .sako/sako.py start --session demo-docs
 sako 0.5.1 · work /work/greeting (main @ 53a59d8b5)
-This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-docs
-your marker: sk-0115-0d70912d790f  (use claim to record task ownership)
+your marker: sk-0115-0d70912d790f
 session: "demo-docs" (use this ID with --session)
 live peers (disjoint: share the tree; overlap: wait or negotiate; no claim: ask before touching shared paths):
   peer sk-0115-3c0f5f721a4a (session ID ends emo-code) on main since 2026-01-15T09:30:00+0000 -> T-1 (claimed) touches greeting.py  [from the claim column]
-evidence: none; no passing check recorded; run: sako.py verify
+evidence: none; no passing check recorded; run sako.py verify, which runs python3 check.py
 ledger: consistent
 next, if no task was named for you: T-2 (P2, the only ready task): Show how to use the greeting
   done when: The guide shows a command and its output
@@ -87,7 +87,7 @@ waiting: 1; run next for the reasons
 
 ```text
 $ python3 .sako/sako.py claim T-2 --session demo-docs
-T-2: claimed; recorded locally, not committed. If it pauses or needs working notes, keep them in .sako/work/T-2-show-how-to-use/ (handoff.md for where it stands).
+T-2: claimed; recorded locally, not committed. Working notes go in .sako/work/T-2-show-how-to-use/. If this session ends before closing it, the claim reads as stale and another session may take it over with a reason, so write handoff.md there first, with where it stands.
 ```
 
 Both claims now live in the shared task file. Each session edits its own file: the code prints `Hello, Ada!`, and the guide shows the command and output.
@@ -122,12 +122,12 @@ $ git commit -qm "Add the named greeting and usage guide"
 
 ```text
 $ python3 .sako/sako.py check --gate --session demo-code
-SAKO gate: clear
+SAKO gate: clear in /work/greeting
 ```
 
 ```text
 $ python3 .sako/sako.py check --gate --session demo-docs
-SAKO gate: clear
+SAKO gate: clear in /work/greeting
 ```
 
 Each completed task leaves a receipt with its evidence and check result.
@@ -162,10 +162,10 @@ A fresh agent session is opened in the coding tool. It runs `start` to check in 
 ```text
 $ python3 .sako/sako.py start --session demo-next
 sako 0.5.1 · work /work/greeting (main @ 3e00c7d5c)
-This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next
-your marker: sk-0115-a5133dc77184  (use claim to record task ownership)
+your marker: sk-0115-a5133dc77184
 session: "demo-next" (use this ID with --session)
 peers: none recorded
 evidence: fresh; last pass 2026-01-15T09:30:00+0000 on content e23d67d0c54d813b

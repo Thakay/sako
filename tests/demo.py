@@ -42,6 +42,7 @@ class Demo:
 
     def normalize(self, text: str) -> str:
         text = text.replace(str(self.root.parent), "/work").replace(str(fixture.SAKO), "../sako/sako.py")
+        text = text.replace(sys.executable, "python3")  # the configured check command, as the page shows it
         text = re.sub(r"\bsk-\d{4}-", "sk-0115-", text)
         text = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d{4}", "2026-01-15T09:30:00+0000", text)
         text = re.sub(r"\d{4}-\d\d-\d\d \d\d:\d\d", "2026-01-15 09:30", text)
