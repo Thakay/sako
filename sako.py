@@ -777,20 +777,20 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
               f"--since=@{since}", f"{rev}..HEAD" if known else "HEAD", check=False)
     for block in log.split("\0")[1:]:
         subject, *paths = block.strip("\n").split("\n")
-        short, day, title = subject.split(" ", 2)  # the author's day, local like a receipt's; a rebase keeps it
+        short, day, title = (subject.split(" ", 2) + [""])[:3]  # the author's day, local like a receipt's; a rebase keeps it
         for path in product(set(paths) - start.keys()):
             changed.setdefault(path, f'in commit {short} of {day} "{title}"')
     return changed, ""
 
 
 def others_moved(roots: Roots, entry: dict | None, moved: list[str], changed: dict[str, str], rows: list[Row], live: list[dict]) -> bool:
-    """True when only others moved checked content since the start, by edits left uncommitted before it or by uncommitted
-    edits in the scope of a live peer's claim in this checkout, as the Recorded rule counts them. A commit, merge, pull or
-    checkout here since the start is this session's, whoever made it and however old its commits, as is an unknown start."""
+    """True when only others moved checked content since the start: by edits left uncommitted before it, or by edits or
+    commits in the scope of a row a live peer in this checkout claimed or closed. Any other commit since the start, and a
+    merge, pull or checkout of older commits, is this session's, whoever made it, as is an unknown start."""
     rev, marker = str((entry or {}).get("work_start_rev") or ""), (entry or {}).get("marker")
     here = {key_of(e["marker"]) for e in live if e.get("marker") != marker and e.get("work_root") == str(roots.work)}
     committed = set(git(roots.work, "diff", "--no-renames", "--name-only", rev, "HEAD", check=False).splitlines()) if rev else set()
-    return not any(path in committed or path.startswith("(") or (path in changed and not any(
+    return not any(path.startswith("(") or (path in committed and path not in changed) or (path in changed and not any(
         holder_key(r.claim) in here and covers(r, path) for r in rows)) for path in moved)
 
 
@@ -805,7 +805,7 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
         if any(covers(row, path) for row in own):
             continue
         day = label.split()[4] if label.startswith("in commit") else ""  # only a close on or after it excuses a commit
-        holder = next((r for r in rows if holder_key(r.claim) in peers and covers(r, path) and not (day and r.doc == DONE)), None)
+        holder = next((r for r in rows if not (day and r.doc == DONE) and holder_key(r.claim) in peers and covers(r, path)), None)
         if holder and peers[holder_key(holder.claim)].get("work_root") == str(roots.work):
             kind = "unverified" if peers[holder_key(holder.claim)].get("unverified") else "live"
             exempt.setdefault(f"in {holder.id}'s scope, {'closed' if holder.doc == DONE else 'claimed'} by {kind} peer "
@@ -885,7 +885,7 @@ def stray(roots: Roots) -> list[str]:
 
 def render_start(roots: Roots, config: dict, entry: dict) -> str:
     rows, live = read_ledger(roots, config), {e["marker"] for e in read_presence(roots)}
-    findings = stray(roots) + sum(ledger_findings(rows, live), [])  # notes too, as the start context lists every finding
+    findings = stray(roots) + sum(ledger_findings(rows, live, key_of(entry["marker"])), [])  # notes too, last as in status
     state, why = evidence_state(roots, config)
     rev, kit = entry["work_start_rev"], KIT if roots.home == roots.work else roots.kit.as_posix()
     lines = [f"sako {VERSION} · work {roots.work.as_posix()} ({entry['branch']} @ {rev[:9] if rev and rev != 'HEAD' else 'no commits yet'})",
@@ -962,7 +962,7 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
         state, why = evidence_state(roots, config)
         # A claim still held explains a stale check, so a close whose receipt shows a pass, or records work, stays proven.
         working = any(covers(r, path) for r in held for path in moved)
-        exempt = any(map(records_only, closed)) and others_moved(roots, entry, moved, changed, rows, live)
+        exempt = state != "fresh" and any(map(records_only, closed)) and others_moved(roots, entry, moved, changed, rows, live)
         unproven = [r.id for r in closed if not (records_only(r) and (exempt or working)) and (not working or "; check pass " not in r.evidence)]
         if state != "fresh" and unproven:
             problems.append(f"Proven: {', '.join(unproven)} closed after checked content changed since you started, "
@@ -1188,14 +1188,14 @@ def client_path(root: Path, relative: str, notes: list[str]) -> Path | None:
 
 
 def wiring(roots: Roots, checkout: Path, clients: list[str], add: bool = True) -> tuple[dict[Path, str], list[str]]:
-    """The client files one checkout needs: hooks for the chosen clients, SAKO's entries gone
-    for the others, and in a linked worktree Codex's writable root for the kit folder. With
-    add off, only removals happen. A tracked file is never changed; a note says what to do."""
+    """The client files one checkout needs: hooks for the chosen clients, SAKO's entries gone for the others,
+    and in a linked worktree Codex's writable root for the kit folder. With add off, no hook is added, but SAKO's
+    entries are refreshed or removed. A tracked file is never changed; a note says what to do."""
     writes, notes = {}, []
     for agent in CLIENTS:
         relative, want = hook_file(agent), agent in clients and (agent != "codex" or sys.platform != "win32")
         current = read_text(checkout / relative, "hook settings") if (checkout / relative).exists() else ""
-        if want and not add or not want and not re.search(HOOK_OWNED.format(agent), current) \
+        if not (want and add) and not re.search(HOOK_OWNED.format(agent), current) \
                 or not (path := client_path(checkout, relative, notes)):
             continue
         proposed = edit_hooks(current, agent, remove=not want, where=str(path))
@@ -1680,8 +1680,8 @@ def cmd_hook(args: argparse.Namespace) -> int:
         print("sako: hook input carries no session_id; nothing recorded", file=sys.stderr)
         return 0
     try:
-        roots, config = resolve(args)
-        if event == "SessionEnd":  # before anything else, since a client may cut its end hook short
+        roots = args.resolved[0] if hasattr(args, "resolved") else resolve_roots(Path.cwd())
+        if event == "SessionEnd":  # first, even before the config is read, since a client may cut its end hook short
             remove_presence(roots, session_id)
         if args.client:
             note_hook(roots, args.client, event)
@@ -1692,11 +1692,11 @@ def cmd_hook(args: argparse.Namespace) -> int:
                 except SakoError as error:
                     print(f"sako: {error}; peers will not see this session")
                     entry = presence_entry(roots, session_id)
-                print(render_start(roots, config, entry))
+                print(render_start(roots, load_config(roots.kit), entry))
             elif event == "Stop":
                 if payload.get("stop_hook_active"):
                     return 0
-                code, message = gate(roots, config, session_id)
+                code, message = gate(roots, load_config(roots.kit), session_id)
                 if code:
                     print(message, file=sys.stderr)
                 return code

@@ -234,7 +234,7 @@ class Workflow(unittest.TestCase):
                 self.assert_ok(self.run_cli("close", task, "--evidence", "Observed", session=session))
                 receipt = next(r.evidence for r in sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})
                                if r.id == task)
-                self.assertRegex(receipt, rf"^Observed \[{sako.marker_for(session)} since {since}; closed {MINUTE}; {expected}")
+                self.assertRegex(receipt, rf"^Observed \[{sako.marker_for(session)} since {re.escape(since)}; closed {MINUTE}; {expected}")
                 if verified:
                     stamp = json.loads((self.root / ".sako/state/stamp.json").read_text())
                     at = fixture.git(self.root, "rev-parse", "HEAD")[:12]
@@ -528,6 +528,32 @@ class Workflow(unittest.TestCase):
         self.start("session-b")
         self.assertEqual(fixture.hook(self.root, "SessionEnd", "session-b"), (0, "", ""), "the hook stays quiet")
         self.assertEqual(list((self.root / ".sako/state/live").glob("*.json")), [])
+
+    def test_the_end_hook_removes_presence_even_when_the_config_does_not_parse(self):
+        self.start("session-a")
+        fixture.write(self.root, {".sako/config.json": "{ not json"})
+        code, out, err = fixture.hook(self.root, "SessionEnd", "session-a")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertIsNone(sako.my_entry(sako.resolve_roots(self.root), "session-a"), "a broken config never keeps a session live")
+        code, _, err = fixture.hook(self.root, "Stop", "session-a")
+        self.assertEqual(code, 2, err)
+        self.assertIn(".sako/config.json: invalid JSON", err, "the gate still names the broken config")
+
+    def test_start_and_status_list_the_ledger_findings_in_one_order(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim=fixture.marker("me")),
+            fixture.row("T-2", status="claimed", claim=fixture.marker("peer"), touches="`src/app.py`"),
+            fixture.row("T-3", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`lib/`"))})
+        self.start("peer")
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        context = self.assert_ok(fixture.cli(self.root, "start", session="me", pid=agent.pid))
+        status = self.assert_ok(self.run_cli("status", session="me"))
+        found = [[line for line in out.splitlines() if "both claimed" in line or "not a live session" in line]
+                 for out in (context, status)]
+        self.assertEqual(found[0], found[1])
+        self.assertEqual(len(found[0]), 2, found[0])
+        self.assertIn("T-1 and T-2 are both claimed", found[0][0], "this session's own overlap first, then the notes")
 
     @unittest.skipIf(fixture.WINDOWS or os.geteuid() == 0, "needs POSIX folder permissions that bind this user")
     def test_end_reports_a_presence_entry_it_cannot_remove_and_the_end_hook_stays_quiet(self):

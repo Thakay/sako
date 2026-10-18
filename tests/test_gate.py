@@ -476,6 +476,19 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("were not checked", out)
 
+    def test_commits_with_an_empty_message_are_read_like_any_other(self):
+        self.start("s1")
+        fixture.git(self.root, "commit", "-q", "--allow-empty", "--allow-empty-message", "-m", "")  # the oldest since the start
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/app.py\n", err)
+        fixture.git(self.root, "add", "-A")
+        fixture.git(self.root, "commit", "-q", "--allow-empty-message", "-m", "")
+        code, _, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 2, err)
+        self.assertRegex(err, r'covered by no task you claimed or closed: src/app\.py \(in commit [0-9a-f]+ of \d{4}-\d\d-\d\d ""\)')
+
     def test_committed_covers_only_this_sessions_own_changes(self):
         fixture.write(self.root, {"src/wip.py": "someone else's draft\n"})
         self.start("s1")
@@ -685,6 +698,37 @@ class Gate(unittest.TestCase):
         refusal = fixture.installed_copy(self.root, "close", "T-11", "--evidence", "Written", "--session", "s1")
         self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
         self.assertIn("evidence is stale", refusal.stderr, "without the live peer the change counts as this session's")
+
+    def test_a_records_only_task_needs_no_check_while_a_live_peer_here_commits_its_claimed_work(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        self.start("peer")
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Peer work", "--done-when", "Prints 3", "--scope", "src/app.py"))
+        for number in (1, 2):
+            fixture.succeeds(fixture.installed_copy(self.root, "add", f"Plan step {number}", "--done-when", "Written",
+                                                    "--scope", f".sako/work/plan-{number}.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "peer"))
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        fixture.commit_all(self.root, "Peer work")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-11", "--evidence", "Written", "--session", "s1"))
+        self.assertIn("Written [sk-", (self.root / ".sako/work/DONE.md").read_text(), "the peer committed before this close")
+        self.assertIn("no automated check (records only)]", (self.root / ".sako/work/DONE.md").read_text())
+        fixture.write(self.root, {"src/app.py": "print(4)\n"})
+        fixture.commit_all(self.root, "More peer work")
+        code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not counted: src/app.py: in T-10's scope, claimed by ", out, "and after it")
+        fixture.write(self.root, {"src/other.py": "x = 1\n"})
+        fixture.commit_all(self.root, "Work outside the peer's claim")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Proven: T-11 closed after checked content changed since you started", err,
+                      "a commit no live peer here claims is this session's")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-12", "--session", "s1"))
+        refusal = fixture.installed_copy(self.root, "close", "T-12", "--evidence", "Written", "--session", "s1")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("evidence is stale", refusal.stderr)
 
     def test_committed_names_new_files_so_generated_ones_are_not_committed(self):
         self.start("s1")

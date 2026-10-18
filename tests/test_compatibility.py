@@ -394,16 +394,24 @@ class Compatibility(unittest.TestCase):
                     '[ -f "$k" ] || { echo "sako: no kit at $k; run: uvx sako init" >&2; exit 1; }; '
                     'exec python3 "$k" hook claude')
         fixture.succeeds(fixture.seed(self.root, "--client", "claude"))
-        path = self.root / sako.hook_file("claude")
-        settings = json.loads(path.read_text())
-        for entries in settings["hooks"].values():
-            entries[0]["hooks"][0]["command"] = previous
-        path.write_text(json.dumps(settings))
+        linked, unwired = self.root.parent / "project-linked", self.root.parent / "project-unwired"
+        for checkout in (linked, unwired):
+            fixture.git(self.root, "worktree", "add", "-q", str(checkout))
+        fixture.succeeds(fixture.seed(linked))
+        for checkout in (self.root, linked):
+            path = checkout / sako.hook_file("claude")
+            settings = json.loads(path.read_text())
+            for entries in settings["hooks"].values():
+                entries[0]["hooks"][0]["command"] = previous
+            settings["hooks"]["Stop"].insert(0, {"hooks": [{"type": "command", "command": "echo mine"}]})
+            path.write_text(json.dumps(settings))
         fixture.succeeds(fixture.seed(self.root, "--update"))
-        for event, entries in json.loads(path.read_text())["hooks"].items():
-            commands = [h["command"] for entry in entries for h in entry["hooks"]]
-            self.assertEqual(commands, [sako.hook_command("claude")], event)
-            self.assertNotIn(previous, commands, event)
+        for checkout in (self.root, linked):
+            for event, entries in json.loads((checkout / sako.hook_file("claude")).read_text())["hooks"].items():
+                commands = [h["command"] for entry in entries for h in entry["hooks"]]
+                self.assertEqual(commands, ["echo mine"] * (event == "Stop") + [sako.hook_command("claude")],
+                                 f"{checkout.name} {event}: a linked worktree's entries are refreshed from the main checkout")
+        self.assertFalse((unwired / sako.hook_file("claude")).exists(), "a worktree that has no SAKO hooks gets none")
 
     def test_on_windows_codex_gets_no_hooks_and_a_note_says_why(self):
         self.root, printed = fixture.make_repo(Path(self.workspace.name) / "windows", {"AGENTS.md": "rules\n"}), []
