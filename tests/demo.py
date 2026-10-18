@@ -45,7 +45,7 @@ class Demo:
         text = re.sub(r"\bsk-\d{4}-", "sk-0115-", text)
         text = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d{4}", "2026-01-15T09:30:00+0000", text)
         text = re.sub(r"\d{4}-\d\d-\d\d \d\d:\d\d", "2026-01-15 09:30", text)
-        text = re.sub(r"closed \d{4}-\d\d-\d\d", "closed 2026-01-15", text)
+        text = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d[+-]\d{4}", "2026-01-15T09:30+0000", text)
         return re.sub(r"(PASS in|after) \d+s", r"\1 0s", text)
 
     def say(self, text: str) -> None:
@@ -124,7 +124,8 @@ def main() -> None:
             demo.hook("Stop", "demo-agent")
             demo.hook("SessionEnd", "demo-agent")
             demo.say("## 4. The receipt\n\nThe done record pairs the task's completion condition with the "
-                     "evidence, the closing session, the date and what the check said.")
+                     "evidence, the closing session and when it claimed the task, the close time, and what the "
+                     "check said at which commit.")
             demo.run("tail -1 .sako/work/DONE.md", ["tail", "-1", ".sako/work/DONE.md"])
             demo.say("## 5. A fresh session picks up\n\nThe owner opens a new conversation in the coding tool. "
                      "Its hook checks it in with SAKO and gets the records and next task from the files.")

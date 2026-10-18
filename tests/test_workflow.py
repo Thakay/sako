@@ -6,6 +6,7 @@ import argparse
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -17,6 +18,8 @@ import unittest
 
 import sako
 import selftest as fixture
+
+MINUTE = r"\d{4}-\d\d-\d\dT\d\d:\d\d[+-]\d{4}"  # a claim or close time, to the minute with its zone
 
 
 class Workflow(unittest.TestCase):
@@ -190,8 +193,8 @@ class Workflow(unittest.TestCase):
         self.assertIn("| T-2 | - | P2 | Export | Reads back | open | `src/export/` | - | - | - |", active.read_text())
         self.start("columns")
         self.assert_ok(self.run_cli("claim", "T-1", session="columns"))
-        self.assertIn(f"| T-1 | ui | P2 | Theme | Survives reload | {sako.marker_for('columns')} | `src/` | - | - | 2d |",
-                      active.read_text())
+        self.assertRegex(active.read_text(), rf"\| T-1 \| ui \| P2 \| Theme \| Survives reload \| {sako.marker_for('columns')} "
+                         rf"since {MINUTE} \| `src/` \| - \| - \| 2d \|")
         output = self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Kept after reload", session="columns"))
         self.assertIn("not carried, the done file has no such column: Estimate=2d", output)
         row = sako.parse_rows({"done": done.read_text()})[0]
@@ -206,10 +209,11 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.run_cli(*base, "--pri", "urgent")[0], 3)
 
     def test_receipts_say_what_the_check_said_at_close(self):
-        cases = ((None, None, "no automated check"), ([sys.executable, "-c", "pass"], False, "no passing check recorded"),
-                 ([sys.executable, "-c", "pass"], True, "check pass "))
+        cases = ((None, None, "no automated check"), ([sys.executable, "-c", "pass"], None, "no passing check recorded"),
+                 ([sys.executable, "-c", "pass"], "committed", "check pass "),
+                 ([sys.executable, "-c", "pass"], "uncommitted", "check pass "))
         for number, (command, verified, expected) in enumerate(cases, 1):
-            with self.subTest(expected=expected):
+            with self.subTest(expected=expected, verified=verified):
                 fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": command, "verify_paths": ["src"]})})
                 session = f"receipt-{number}"
                 self.start(session)
@@ -217,16 +221,25 @@ class Workflow(unittest.TestCase):
                 task = [r.id for r in sako.parse_rows({"tasks": (self.root / ".sako/work/TASKS.md").read_text()})
                         if r.task == f"Receipt {number}"][0]
                 self.assert_ok(self.run_cli("claim", task, session=session))
+                claimed = re.search(rf"\| {sako.marker_for(session)} since ({MINUTE}) \|",
+                                    (self.root / ".sako/work/TASKS.md").read_text())
+                self.assertTrue(claimed, "claim writes its time after the marker")
+                since = claimed[1]
+                fixture.write(self.root, {f"docs/{number}/notes.md": "outside the checked paths\n"})
+                if verified == "uncommitted":
+                    fixture.write(self.root, {"src/draft.py": "print(0)\n"})
                 if verified:
                     self.assert_ok(self.run_cli("verify"))
                 self.assert_ok(self.run_cli("close", task, "--evidence", "Observed", session=session))
                 receipt = next(r.evidence for r in sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})
                                if r.id == task)
-                self.assertRegex(receipt, rf"^Observed \[{sako.marker_for(session)}; closed \d{{4}}-\d\d-\d\d; {expected}")
+                self.assertRegex(receipt, rf"^Observed \[{sako.marker_for(session)} since {since}; closed {MINUTE}; {expected}")
                 if verified:
                     stamp = json.loads((self.root / ".sako/state/stamp.json").read_text())
-                    self.assertIn(f"check pass {stamp['time']} on {stamp['content_id']}]", receipt,
-                                  "the stamp's own time, never the close time")
+                    at = fixture.git(self.root, "rev-parse", "HEAD")[:12]
+                    at += " plus uncommitted changes" if verified == "uncommitted" else ""
+                    self.assertIn(f"check pass {stamp['time']} on {stamp['content_id']} at {at}]", receipt,
+                                  "the stamp's own time and commit, never the close's; only checked files count")
         fixture.write(self.root, {"src/app.py": "print(5)\n"})
         fixture.commit_all(self.root, "covered content moves on")
         self.start("receipt-stale")
@@ -236,6 +249,37 @@ class Workflow(unittest.TestCase):
         self.assert_ok(self.run_cli("claim", task, session="receipt-stale"))
         self.assert_ok(self.run_cli("close", task, "--evidence", "Docs only", session="receipt-stale"))
         self.assertIn("; check stale: last pass ", (self.root / ".sako/work/DONE.md").read_text())
+
+    def test_a_check_before_the_first_commit_names_no_commit(self):
+        root = Path(self.workspace.name) / "fresh"
+        root.mkdir()
+        fixture.git(root, "init", "-q", "-b", "main")
+        fixture.write(root, {".git/info/exclude": "/.sako/\n", ".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1")),
+                             ".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"],
+                                                              "verify_paths": ["src"]}), "src/app.py": "print(1)\n"})
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        self.assert_ok(fixture.cli(root, "start", session="fresh", pid=agent.pid))
+        for args in (("claim", "T-1"), ("verify",), ("close", "T-1", "--evidence", "Prints 1")):
+            self.assert_ok(fixture.cli(root, *args, session="fresh"))
+        self.assertIn(" at no commit plus uncommitted changes]", (root / ".sako/work/DONE.md").read_text())
+
+    def test_claims_without_a_claim_time_still_close(self):
+        marker = sako.marker_for("upgraded")
+        claims = {"T-1": marker, "T-2": f"{marker} (took over from sk-0101-bbbbbbbbbbbb: gone)",
+                  "T-3": f"{marker} since [owner-ok]"}
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(*(
+            fixture.row(task, status="claimed", claim=claim, touches=f"`src/{task}/`") for task, claim in claims.items()))})
+        self.start("upgraded")
+        for task in claims:
+            with self.subTest(claim=claims[task]):
+                self.assert_ok(self.run_cli("close", task, "--evidence", "Observed", session="upgraded"))
+                done = next(r for r in sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})
+                            if r.id == task)
+                self.assertRegex(done.evidence, rf"^Observed \[{marker}; closed {MINUTE}; no automated check\]$",
+                                 "a claim written before claim times, or a hand edit after the marker, leaves the marker alone")
+                self.assertEqual(done.claim, marker, "the done row keeps its closer")
+        self.assertIn("your rows: T-1 (done); T-2 (done); T-3 (done)", self.assert_ok(self.run_cli("status", session="upgraded")))
 
     def test_ready_and_the_id_preview_are_gone(self):
         self.assertEqual(self.run_cli("ready")[0], 2)
@@ -281,11 +325,15 @@ class Workflow(unittest.TestCase):
         first.wait()
         code, _, err = self.run_cli("claim", "T-1", session="session-b")
         self.assertEqual(code, 3)
-        self.assertIn("--takeover", err)
+        self.assertRegex(err, rf"T-1 is held by {sako.marker_for('session-a')}, (a stale claim;|which SAKO cannot verify from here "
+                         r"\(a sandbox, or Windows, hides its process\); if it stopped,) inspect its handoff and use --takeover")
         self.assert_ok(self.run_cli("claim", "T-1", "--takeover", "previous session ended; inspected its work", session="session-b"))
         text = (self.root / ".sako/work/TASKS.md").read_text()
         self.assertIn("took over from", text)
         self.assertIn("previous session ended", text)
+        self.assertRegex(text, rf"\| {sako.marker_for('session-b')} since {MINUTE} \(took over from "
+                         rf"{sako.marker_for('session-a')}(, unverified)?: previous session ended; inspected its work\) \|",
+                         "the taker's own claim time; the note names the previous marker alone")
 
     def test_a_takeover_reason_on_an_open_task_is_no_crash(self):
         self.start("session-a")
@@ -317,7 +365,7 @@ class Workflow(unittest.TestCase):
                          "a row the ended session already closed is not named")
         rows = {r.id: r for r in sako.parse_rows({"tasks": active.read_text()})}
         for task_id in ("T-1", "T-2", "T-3"):
-            self.assertTrue(rows[task_id].claim.startswith(f"{taker} (took over from {ended}"), rows[task_id].claim)
+            self.assertRegex(rows[task_id].claim, rf"^{taker} since {MINUTE} \(took over from {ended}: ")
         before = active.read_bytes()
         code, _, err = self.run_cli("claim", "T-6", session="session-b")
         self.assertEqual(code, 3)

@@ -134,8 +134,8 @@ Each completed task leaves a receipt with its evidence and check result.
 
 ```text
 $ tail -2 .sako/work/DONE.md
-| T-2 | Show how to use the greeting | The guide shows a command and its output | USAGE.md shows the command and expected greeting; check.py passes [sk-0115-0d70912d790f; closed 2026-01-15; check pass 2026-01-15T09:30:00+0000 on e23d67d0c54d813b] | `USAGE.md` | - |
-| T-1 | Greet a visitor by name | The greeting prints Hello, Ada! | greeting.py prints Hello, Ada!; check.py passes [sk-0115-3c0f5f721a4a; closed 2026-01-15; check pass 2026-01-15T09:30:00+0000 on e23d67d0c54d813b] | `greeting.py` | - |
+| T-2 | Show how to use the greeting | The guide shows a command and its output | USAGE.md shows the command and expected greeting; check.py passes [sk-0115-0d70912d790f since 2026-01-15T09:30+0000; closed 2026-01-15T09:30+0000; check pass 2026-01-15T09:30:00+0000 on e23d67d0c54d813b at 53a59d8b584f plus uncommitted changes] | `USAGE.md` | - |
+| T-1 | Greet a visitor by name | The greeting prints Hello, Ada! | greeting.py prints Hello, Ada!; check.py passes [sk-0115-3c0f5f721a4a since 2026-01-15T09:30+0000; closed 2026-01-15T09:30+0000; check pass 2026-01-15T09:30:00+0000 on e23d67d0c54d813b at 53a59d8b584f plus uncommitted changes] | `greeting.py` | - |
 ```
 
 ## 4. Pick up in a fresh session

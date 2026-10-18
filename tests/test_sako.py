@@ -60,6 +60,25 @@ class LedgerParsing(unittest.TestCase):
         item = sako.parse_rows({"done": text})[0]
         self.assertEqual((item.status, item.claim), ("done", "sk-0101-aaaaaaaaaaaa"))
         self.assertTrue(item.evidence.startswith("Matched [see notes] [sk-0101-aaaaaaaaaaaa; closed"))
+        receipt = ("Matched [sk-0101-aaaaaaaaaaaa since 2026-01-01T09:00+0000; closed 2026-01-02T17:30+0000; "
+                   "check pass 2026-01-02T17:20:05+0000 on 0123456789abcdef at 0123456789ab plus uncommitted changes]")
+        timed = sako.parse_rows({"done": DONE_HEADER + f"| T-3 | Invented task | Holds | {receipt} | `src/` | - |"})[0]
+        self.assertEqual((timed.claim, sako.holder_key(timed.claim)),
+                         ("sk-0101-aaaaaaaaaaaa since 2026-01-01T09:00+0000", "aaaaaaaaaaaa"))
+        self.assertEqual([r.id for r in sako.my_rows([item, timed], "sk-0102-aaaaaaaaaaaa")], ["T-2", "T-3"],
+                         "receipts with and without times belong to the session under any marker day")
+
+    def test_a_claim_time_after_the_marker_leaves_the_holder_alone(self) -> None:
+        since = "sk-0101-aaaaaaaaaaaa since 2026-01-01T09:00+0000"
+        rows = tasks(row("T-1", status="claimed", claim=since, touches="`c/`"),
+                     row("T-2", status="claimed", claim=f"{since} (took over from sk-0101-bbbbbbbbbbbb: gone)", touches="`d/`"),
+                     row("T-3", touches="`c/deep/`"))
+        self.assertEqual([(r.status, sako.holder_key(r.claim)) for r in rows[:2]], [("claimed", "aaaaaaaaaaaa")] * 2)
+        self.assertIn("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over: "
+                      "claim T-1 --takeover REASON", sako.ledger_findings(rows, {"sk-0102-cccccccccccc"}))
+        waiting = sako.next_lines(rows)
+        self.assertIn(f"  T-1  claimed by {since}", waiting)
+        self.assertIn("  T-3  scope overlaps T-1, claimed by sk-0101-aaaaaaaaaaaa", waiting)
 
     def test_structural_faults_stop_with_file_and_line(self) -> None:
         for text, fragment in ((HEADER + "| T-1 | four | cells | only |", "tasks:3: a task row needs"),

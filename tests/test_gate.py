@@ -97,6 +97,32 @@ class Gate(unittest.TestCase):
         self.assertIn("ledger: consistent", self.run_in(self.root, "status", session="s1")[1])
         self.assertIn("T-1 is claimed by", self.run_in(self.root, "check", session="s2")[1], "to others it is stale")
 
+    def test_a_resume_after_session_end_keeps_the_claim_and_closes_under_its_marker(self):
+        self.start("s1")
+        today = sako.marker_for("s1")
+        earlier = sako.marker_for("s1", "0101" if today.split("-")[1] != "0101" else "0102")
+        presence = sako.presence_dir(sako.resolve_roots(self.root)) / f"{sako.session_key('s1')}.json"
+        presence.write_text(json.dumps(dict(json.loads(presence.read_text()), marker=earlier)))  # first started that day
+        self.assertEqual(self.run_in(self.root, "claim", "T-1", session="s1")[0], 0)
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        self.assertEqual(fixture.hook(self.root, "SessionEnd", "s1")[0], 0)
+        out = fixture.hook(self.root, "SessionStart", "s1", pid=self.host())[1]
+        self.assertIn(f"your marker: {today}", out, "the resume starts a new start record under a new marker day")
+        out = self.run_in(self.root, "status", session="s1")[1]
+        self.assertIn("your rows: T-1 (claimed)", out, "the claim outlives the session")
+        self.assertIn("changed this session: 0", out, "the start window begins again at the resume")
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        self.assertEqual(self.run_in(self.root, "verify")[0], 0)
+        self.assertEqual(self.run_in(self.root, "close", "T-1", "--evidence", "Prints 3", session="s1")[0], 0)
+        receipt = sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})[0].evidence
+        self.assertRegex(receipt, rf"^Prints 3 \[{earlier} since [^;]+; closed ", "one holder name for the whole task")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Committed: T-1 is closed but its changes are not committed: src/app.py", err)
+        self.assertNotIn("Recorded:", err, "the gate counts the row closed under the earlier marker as this session's")
+        fixture.commit_all(self.root, "T-1: prints 3")
+        self.assertEqual(self.stop("s1")[0], 0)
+
     def test_a_session_that_changed_nothing_passes(self):
         fixture.write(self.root, {"src/wip.py": "draft\n", ".sako/work/TASKS.md": fixture.ledger(
             fixture.row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"), fixture.row("T-2", touches="`docs/`"))})
@@ -260,7 +286,8 @@ class Gate(unittest.TestCase):
         fixture.succeeds(fixture.installed_copy(self.root, "end", "--session", "s2"))
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out + err)
-        self.assertIn("not counted: docs/x.md: committed under T-2, closed by sk-", out)
+        self.assertRegex(out, rf"(?m)not counted: docs/x\.md: committed under T-2, closed by {sako.marker_for('s2')}(;|$)",
+                         "the closer's marker alone, without its claim time")
 
     def test_only_a_task_closed_on_or_after_the_day_of_a_commit_covers_it(self):
         fixture.write(self.root, {".sako/work/DONE.md": fixture.done_file(fixture.row(
@@ -433,7 +460,7 @@ class Gate(unittest.TestCase):
                 fixture.succeeds(fixture.installed_copy(self.root, "claim", task, "--session", "s1"))
                 fixture.succeeds(fixture.installed_copy(self.root, "close", task, "--evidence", "Written", "--session", "s1"))
                 receipt = next(r.evidence for r in sako.parse_rows({"done": done.read_text()}) if r.id == task)
-                self.assertRegex(receipt, rf"\[{sako.marker_for('s1')}; closed [\d-]+; no automated check \(records only\)\]$")
+                self.assertRegex(receipt, rf"\[{sako.marker_for('s1')} since [^;]+; closed [^;]+; no automated check \(records only\)\]$")
                 if stamp == "stale":
                     code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
                     self.assertEqual(code, 0, out + err)

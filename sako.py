@@ -245,7 +245,7 @@ class Row:
     task: str = ""
     done_when: str = ""
     status: str = "open"        # open, parked, claimed, done, or what a hand edit left
-    claim: str = ""             # the holder's marker, then any takeover note
+    claim: str = ""             # the holder's marker, since when, then any takeover note
     touches: list[str] = field(default_factory=list)
     source: str = ""
     after: list[str] = field(default_factory=list)
@@ -700,8 +700,8 @@ def verify(roots: Roots, config: dict, out=print) -> int:
             + (f". The run created {', '.join(made[:4])}: ignore generated files in .gitignore, or keep the check from "
                f"writing them ({PYTHON} -B for Python), so they are not checked content" if made else ""))
         return 1
-    stamp = {"content_id": after, "command_id": command_id(config),
-             "product_rev": git(roots.work, "rev-parse", "HEAD", check=False),
+    stamp = {"content_id": after, "command_id": command_id(config), "uncommitted": bool(changed_since(roots.work, "HEAD", paths)),
+             "product_rev": git(roots.work, "rev-parse", "-q", "--verify", "HEAD", check=False),  # empty before a first commit
              "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "sako": VERSION}
     atomic_write(path, json.dumps(stamp, indent=1) + "\n")
     out(f"{shown}check: PASS in {time.time() - started:.0f}s; covered {len(listed)} file(s); stamp {after} -> {path.as_posix()}; output in {log.as_posix()}")
@@ -827,9 +827,9 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
                               f"{holder.claim.split()[0]} in this checkout", []).append(path)
             continue
         closer = next((r for r in reversed(rows) if day and r.doc == DONE and r.claim and holder_key(r.claim) != key_of(marker)
-                       and covers(r, path) and max(re.findall(r"; closed (\d{4}-\d\d-\d\d);", r.evidence), default="") >= day), None)
+                       and covers(r, path) and max(re.findall(r"; closed (\d{4}-\d\d-\d\d)[T\d:+-]*;", r.evidence), default="") >= day), None)
         if closer:
-            exempt.setdefault(f"committed under {closer.id}, closed by {closer.claim}", []).append(path)
+            exempt.setdefault(f"committed under {closer.id}, closed by {closer.claim.split()[0]}", []).append(path)
             continue
         if holder:
             label = (label + "; " if label else "") + f"claimed by {holder.claim.split()[0]} in another worktree, " \
@@ -1569,19 +1569,21 @@ def insert_row(text: str, cells: dict[str, str], titles: list[str]) -> tuple[str
     return "\n".join(lines).rstrip() + "\n", titles
 
 
-def receipt_part(roots: Roots, config: dict, marker: str, records: bool = False) -> str:
-    """Who closed, when, and what the configured check said at that moment; records-only work names no check."""
+def receipt_part(roots: Roots, config: dict, claim: str, records: bool = False) -> str:
+    """The claim's marker and time, the close time, and what the check said and at which commit (none for records work)."""
+    holder = re.match(rf"{MARKER.pattern}(?: since [0-9T:+-]+)?", claim)[0]  # the claim's marker, kept after a resume on a later day
     check = "no automated check" + (" (records only)" if records and config["verify_command"] else "")
     if config["verify_command"] and not records:
         stamp, (state, _) = read_json(roots.local / "stamp.json"), evidence_state(roots, config)
         if state == "fresh":
-            check = f"check pass {stamp['time']} on {stamp['content_id']}"
+            at = (stamp["product_rev"][:12] or "no commit") + (" plus uncommitted changes" if stamp.get("uncommitted") else "")
+            check = f"check pass {stamp['time']} on {stamp['content_id']} at {at}"
         elif stamp:
             now = content_id(roots.work, list(config["verify_paths"]))
             check = f"check stale: last pass {stamp.get('time')} on {stamp.get('content_id')}, now {now}"
         else:
             check = "no passing check recorded"
-    return f"[{marker}; closed {time.strftime('%Y-%m-%d')}; {check}]"
+    return f"[{holder}; closed {time.strftime('%Y-%m-%dT%H:%M%z')}; {check}]"
 
 
 def add_task(rows: list[Row], active: Path, text: str, records: str, args: argparse.Namespace) -> int:
@@ -1681,7 +1683,7 @@ def cmd_task(args: argparse.Namespace) -> int:
         unverified = ", unverified" if owner != mine and owner in live - seen else ""  # its process was hidden from here
         if owner != mine:
             note = f" (took over from {row.claim.split()[0]}{unverified}: {cell(args.takeover, '--takeover')})" if args.takeover and row.claim else ""
-            lines[row.line - 1] = row_line(row.titles, dict(row.cells, status=entry["marker"] + note))
+            lines[row.line - 1] = row_line(row.titles, dict(row.cells, status=entry["marker"] + time.strftime(" since %Y-%m-%dT%H:%M%z") + note))
             atomic_write(active, "\n".join(lines).rstrip() + "\n")
         print(f"{row.id}: claimed" + ("; its previous holder could not be verified from here" if unverified else "") + "; recorded "
               f"locally, not committed. If it pauses or needs working notes, keep them in {shlex.quote(runtime_path(roots, handoff(roots, config, row)))}/ "
@@ -1696,7 +1698,7 @@ def cmd_task(args: argparse.Namespace) -> int:
         state, why = evidence_state(roots, config)
         if state != "fresh":
             raise SakoError(f"evidence is {state}: {why}; verify before closing")
-    receipt = f"{cell(args.evidence, '--evidence')} {receipt_part(roots, config, entry['marker'], records)}"
+    receipt = f"{cell(args.evidence, '--evidence')} {receipt_part(roots, config, row.claim, records)}"
     closed = roots.kit / str(config["done"])
     previous = [r for r in rows if r.id == row.id and r.doc == DONE]
     if previous and holder_key(previous[0].claim) != mine:

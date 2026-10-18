@@ -129,11 +129,11 @@ $ # Claude Code's SessionEnd hook (demo-agent)
 
 ## 4. The receipt
 
-The done record pairs the task's completion condition with the evidence, the closing session, the date and what the check said.
+The done record pairs the task's completion condition with the evidence, the closing session and when it claimed the task, the close time, and what the check said at which commit.
 
 ```text
 $ tail -1 .sako/work/DONE.md
-| T-1 | A named visitor gets a personal greeting | python3 greeting.py Ada prints Hello, Ada! | greeting.py prints Hello, Ada!; check.py passes [sk-0115-7a281dacac30; closed 2026-01-15; check pass 2026-01-15T09:30:00+0000 on bcb4b12f530eb1ce] | `greeting.py` | - |
+| T-1 | A named visitor gets a personal greeting | python3 greeting.py Ada prints Hello, Ada! | greeting.py prints Hello, Ada!; check.py passes [sk-0115-7a281dacac30 since 2026-01-15T09:30+0000; closed 2026-01-15T09:30+0000; check pass 2026-01-15T09:30:00+0000 on bcb4b12f530eb1ce at 68976274634f plus uncommitted changes] | `greeting.py` | - |
 ```
 
 ## 5. A fresh session picks up
