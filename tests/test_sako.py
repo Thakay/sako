@@ -94,16 +94,20 @@ class Findings(unittest.TestCase):
                               live={"sk-0102-bbbbbbbbbbbb"})
         self.assertTrue(any("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it "
                             "over: claim T-1 --takeover REASON" in f for f in found))
-        self.assertTrue(any("T-2 is claimed before T-1 is done" in f for f in found))
+        self.assertFalse(any("T-2 is claimed" in f for f in found),
+                         "claim refuses unfinished prerequisites, so a held row waiting on one is no finding")
         self.assertFalse(any("live session" in f for f in self.findings(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"))),
                          "liveness is not judged when no presence information is supplied")
 
     def test_overlap(self) -> None:
-        found = self.findings(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`src/`"),
-                              row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`src/app/`"),
-                              row("T-3", status="claimed", claim="sk-0101-cccccccccccc", touches="`docs/`"))
+        rows = tasks(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`src/`"),
+                     row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`src/app/`"),
+                     row("T-3", status="claimed", claim="sk-0101-cccccccccccc", touches="`docs/`"))
+        found = sako.ledger_findings(rows)
         self.assertEqual(len(found), 1)
         self.assertIn("T-1 and T-2 are both claimed and their scopes overlap", found[0])
+        self.assertEqual(sako.ledger_findings(rows, None, "cccccccccccc"), found, "for T-3's holder it is about others")
+        self.assertEqual(sako.ledger_findings(rows, None, "aaaaaaaaaaaa"), [], "for T-1's holder it is its own")
         self.assertTrue(sako.overlaps(sako.scope("src"), sako.scope("src/app/x.py")))
         self.assertFalse(sako.overlaps(sako.scope("docs/"), sako.scope("src/")))
         with self.assertRaisesRegex(sako.SakoError, "escapes"):

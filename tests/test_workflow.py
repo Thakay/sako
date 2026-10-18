@@ -123,7 +123,9 @@ class Workflow(unittest.TestCase):
         args = ("add", "Print sorted names", "--source", "PLAN.md#preview", "--scope", "preview.py", "--after", "T-1", "--after", "T-10")
         self.assert_ok(self.run_cli(*args))
         self.start("dependency-session")
-        self.assertEqual(self.run_cli("claim", "T-11", session="dependency-session")[0], 3)
+        code, _, err = self.run_cli("claim", "T-11", session="dependency-session")
+        self.assertEqual(code, 3, err)
+        self.assertIn("T-11 waits for T-1, T-10; finish those first", err)
         for task_id in ("T-10", "T-1"):
             self.assert_ok(self.run_cli("claim", task_id, session="dependency-session"))
             self.assert_ok(self.run_cli("close", task_id, "--evidence", "Recorded the requested findings",

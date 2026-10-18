@@ -376,16 +376,17 @@ def row_faults(row: Row, known: set[str]) -> list[str]:
     return out
 
 
-def ledger_findings(rows: list[Row], live_markers: set[str] | None = None) -> list[str]:
-    """Consistency findings over the records, each with its fix. Never edits rows."""
-    out, seen, sources = [], {}, {}
+def ledger_findings(rows: list[Row], live_markers: set[str] | None = None, bystander: str | None = None) -> list[str]:
+    """Consistency findings over the records, each with its fix. Never edits rows. Given a
+    bystander's session key, only other sessions' stale claims and the overlaps none of
+    its own claims is in."""
+    out, others, seen, sources = [], [], {}, {}
     for row in rows:
         seen.setdefault(row.id, []).append(f"{row.doc}:{row.line}")
     for task_id, where in seen.items():
         if len(where) > 1:
             out.append(f"{task_id} is defined by {len(where)} rows ({', '.join(where)}); "
                        "IDs are unique and never reused: renumber or merge them")
-    done = {r.id for r in rows if r.doc == DONE}
     live = {key_of(m) for m in live_markers} if live_markers is not None else None
     claimed = [r for r in rows if r.status == "claimed"]
     for row in rows:
@@ -393,19 +394,16 @@ def ledger_findings(rows: list[Row], live_markers: set[str] | None = None) -> li
             out.append(f"source {row.source!r} is mapped more than once: {sources[row.source]}, {row.id}; "
                        "keep one row per source")
         out += row_faults(row, set(seen))
-        if row.status == "claimed":
-            waiting = [d for d in row.after if d not in done]
-            if waiting:
-                out.append(f"{row.id} is claimed before {', '.join(waiting)} is done; finish those first")
-            if live is not None and holder_key(row.claim) not in live:
-                out.append(f"{row.id} is claimed by {row.claim.split()[0]}, which is not a live session; "
-                           f"resume it, or take it over: claim {row.id} --takeover REASON")
+        if row.status == "claimed" and live is not None and holder_key(row.claim) not in live:
+            others.append(f"{row.id} is claimed by {row.claim.split()[0]}, which is not a live session; "
+                          f"resume it, or take it over: claim {row.id} --takeover REASON")
     for index, row in enumerate(claimed):
         for other in claimed[index + 1:]:
             if holder_key(row.claim) != holder_key(other.claim) and scopes_overlap(row, other):
-                out.append(f"{row.id} and {other.id} are both claimed and their scopes overlap; "
-                           "finish one first or narrow the scopes")
-    return out
+                own = bystander in (holder_key(row.claim), holder_key(other.claim))
+                (out if own else others).append(f"{row.id} and {other.id} are both claimed and their scopes overlap; "
+                                                "finish one first or narrow the scopes")
+    return others if bystander else out + others
 
 
 def next_lines(rows: list[Row], live_markers: set[str] | None = None, brief: bool = False) -> list[str]:
@@ -942,7 +940,8 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
     """(exit code, message). 2 means: do not stop yet. Each problem names its rule and
     ends with its fix; notes that do not block follow."""
     rows, live, findings, entry, marker = overview(roots, config, session_id)
-    problems = [f"Ledger: {f}" for f in findings]
+    others = ledger_findings(rows, {e["marker"] for e in live} | {marker}, key_of(marker)) if marker else []
+    problems = [f"Ledger: {f}" for f in findings if f not in others]  # the rest is about its own claims or the records
     sako, session = f"{PYTHON} {shlex.quote(runtime_path(roots))}", shlex.quote(session_id or "ID")
     unrecorded, notes, changed, note = recorded(roots, rows, entry, marker, live)
     if unrecorded:
@@ -998,7 +997,7 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
         elif row.status == DONE and folder.is_dir():
             notes.append(f"advisory: {row.id} is closed and its handoff folder remains; move lasting facts to their "
                          f"home, then delete {shlex.quote(runtime_path(roots, folder))}/.")
-    tail = notes + ([f"note: {note}."] if note and not unrecorded else [])
+    tail = notes + [f"note: {f}" for f in others] + ([f"note: {note}."] if note and not unrecorded else [])
     if not problems:
         return 0, "\n".join(tail)
     return 2, "\n".join([f"SAKO gate: {len(problems)} problem(s) before you stop:"] + [f"  {p}" for p in problems] + tail)

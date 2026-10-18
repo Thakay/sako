@@ -98,9 +98,42 @@ class Gate(unittest.TestCase):
         self.assertIn("T-1 is claimed by", self.run_in(self.root, "check", session="s2")[1], "to others it is stale")
 
     def test_a_session_that_changed_nothing_passes(self):
-        fixture.write(self.root, {"src/wip.py": "draft\n"})
+        fixture.write(self.root, {"src/wip.py": "draft\n", ".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"), fixture.row("T-2", touches="`docs/`"))})
+        stale = ("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over: "
+                 "claim T-1 --takeover REASON")
+        code, out, err = self.run_in(self.root, "start", session="s1", pid=self.host())
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(f"  {stale}", out, "start lists another session's stale claim")
+        self.assertEqual(self.stop("s1"), (0, "", ""), "another session's stale claim is not this session's to fix")
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"), (0, f"SAKO gate: clear\nnote: {stale}\n", ""))
+        for view in ("check", "status"):
+            self.assertIn(f"  {stale}", self.run_in(self.root, view, session="s1")[1], f"{view} still lists it")
+        self.assertIn("T-1  claimed by sk-0101-aaaaaaaaaaaa (not live)", self.run_in(self.root, "next")[1])
+
+    def test_findings_about_this_sessions_claims_or_the_records_block_and_the_rest_are_notes(self):
+        row, mine, other = fixture.row, fixture.marker("s1"), "sk-0101-bbbbbbbbbbbb"
         self.start("s1")
-        self.assertEqual(self.stop("s1")[0], 0)
+        peers = (row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"),
+                 row("T-2", status="claimed", claim=other, touches="`src/app.py`"))
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            *peers, row("T-3", status="claimed", claim=mine, touches="`docs/`"))})
+        self.assertEqual(self.stop("s1"), (0, "", ""), "other sessions' stale claims and overlaps never block")
+        code, out, _ = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out)
+        self.assertIn("note: T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow the scopes", out)
+        self.assertIn(f"note: T-2 is claimed by {other}, which is not a live session; resume it, or take it over: "
+                      "claim T-2 --takeover REASON", out)
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            *peers, row("T-3", status="claimed", claim=mine, touches="`src/app.py`"), row("T-4"), row("T-4", touches="`etc/`"))})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        for blocking in ("Ledger: T-1 and T-3 are both claimed and their scopes overlap",
+                         "Ledger: T-2 and T-3 are both claimed and their scopes overlap", "Ledger: T-4 is defined by 2 rows"):
+            self.assertIn(blocking, err)
+        self.assertIn("SAKO gate: 3 problem(s) before you stop:", err)
+        self.assertGreater(err.index("note: T-1 and T-2 are both claimed"), err.index("Ledger: T-4"), "notes follow the problems")
+        self.assertNotIn("Ledger: T-1 is claimed by", err)
 
     def test_files_dirty_at_start_count_only_when_they_change_again(self):
         fixture.write(self.root, {"src/pre.py": "draft\n"})
