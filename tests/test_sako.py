@@ -75,7 +75,7 @@ class LedgerParsing(unittest.TestCase):
                      row("T-3", touches="`c/deep/`"))
         self.assertEqual([(r.status, sako.holder_key(r.claim)) for r in rows[:2]], [("claimed", "aaaaaaaaaaaa")] * 2)
         self.assertIn("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over: "
-                      "claim T-1 --takeover REASON", sako.ledger_findings(rows, {"sk-0102-cccccccccccc"}))
+                      "claim T-1 --takeover REASON", sako.ledger_findings(rows, {"sk-0102-cccccccccccc"})[1])
         waiting = sako.next_lines(rows)
         self.assertIn(f"  T-1  claimed by {since}", waiting)
         self.assertIn("  T-3  scope overlaps T-1, claimed by sk-0101-aaaaaaaaaaaa", waiting)
@@ -91,12 +91,12 @@ class LedgerParsing(unittest.TestCase):
 
 class Findings(unittest.TestCase):
     def findings(self, *rows: str, live: set | None = None) -> list[str]:
-        return sako.ledger_findings(tasks(*rows), live)
+        return sum(sako.ledger_findings(tasks(*rows), live), [])
 
     def test_consistent_ledger_is_silent(self) -> None:
         rows = sako.parse_rows({"tasks": HEADER + row("T-1", after="T-2"),
                                 "done": DONE_HEADER + row("T-2", status="done", claim="sk-0101-aaaaaaaaaaaa")})
-        self.assertEqual(sako.ledger_findings(rows), [])
+        self.assertEqual(sako.ledger_findings(rows), ([], []))
 
     def test_value_faults_name_their_fix(self) -> None:
         found = self.findings(row("T-1"), row("T-1", "again"), row("T-2", pri="high"), row("T-3", status="**done**"),
@@ -122,11 +122,16 @@ class Findings(unittest.TestCase):
         rows = tasks(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`src/`"),
                      row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`src/app/`"),
                      row("T-3", status="claimed", claim="sk-0101-cccccccccccc", touches="`docs/`"))
-        found = sako.ledger_findings(rows)
-        self.assertEqual(len(found), 1)
-        self.assertIn("T-1 and T-2 are both claimed and their scopes overlap", found[0])
-        self.assertEqual(sako.ledger_findings(rows, None, "cccccccccccc"), found, "for T-3's holder it is about others")
-        self.assertEqual(sako.ledger_findings(rows, None, "aaaaaaaaaaaa"), [], "for T-1's holder it is its own")
+        overlap = "T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow the scopes"
+        self.assertEqual(sako.ledger_findings(rows), ([], [overlap]), "with no asking session, every claim is another's")
+        self.assertEqual(sako.ledger_findings(rows, None, "cccccccccccc"), ([], [overlap]), "for T-3's holder it is a note")
+        self.assertEqual(sako.ledger_findings(rows, None, "aaaaaaaaaaaa"), ([overlap], []), "for T-1's holder it is its own")
+        twice = tasks(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`src/app.py`"),
+                      row("T-1", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`src/lib/`"),
+                      row("T-2", status="claimed", claim="sk-0101-cccccccccccc", touches="`src/`"))  # T-1 twice, as a bad merge leaves it
+        found, notes = sako.ledger_findings(twice, None, "aaaaaaaaaaaa")
+        self.assertIn(overlap, found, "its own overlap with T-2")
+        self.assertEqual(notes, [overlap], "the same words about two other sessions' claims stay a note")
         self.assertTrue(sako.overlaps(sako.scope("src"), sako.scope("src/app/x.py")))
         self.assertFalse(sako.overlaps(sako.scope("docs/"), sako.scope("src/")))
         with self.assertRaisesRegex(sako.SakoError, "escapes"):

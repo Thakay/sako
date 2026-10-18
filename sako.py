@@ -384,10 +384,10 @@ def row_faults(row: Row, known: set[str]) -> list[str]:
     return out
 
 
-def ledger_findings(rows: list[Row], live_markers: set[str] | None = None, bystander: str | None = None) -> list[str]:
-    """Consistency findings over the records, each with its fix. Never edits rows. Given a
-    bystander's session key, only other sessions' stale claims and the overlaps none of
-    its own claims is in."""
+def ledger_findings(rows: list[Row], live_markers: set[str] | None = None, bystander: str | None = None) -> tuple[list[str], list[str]]:
+    """Consistency findings over the records, each with its fix, as two lists; never edits rows. The second holds the
+    notes, findings only about sessions other than the bystander (the asking session, whose key may be given): their
+    stale claims and the overlaps none of its claims is in. The first holds the rest. The bystander counts as live."""
     out, others, seen, sources = [], [], {}, {}
     for row in rows:
         seen.setdefault(row.id, []).append(f"{row.doc}:{row.line}")
@@ -395,7 +395,7 @@ def ledger_findings(rows: list[Row], live_markers: set[str] | None = None, bysta
         if len(where) > 1:
             out.append(f"{task_id} is defined by {len(where)} rows ({', '.join(where)}); "
                        "IDs are unique and never reused: renumber or merge them")
-    live = {key_of(m) for m in live_markers} if live_markers is not None else None
+    live = {key_of(m) for m in live_markers} | {bystander} if live_markers is not None else None  # the asking session is alive, even after its own end
     claimed = [r for r in rows if r.status == "claimed"]
     for row in rows:
         if row.source and sources.setdefault(row.source, row.id) != row.id:
@@ -411,7 +411,7 @@ def ledger_findings(rows: list[Row], live_markers: set[str] | None = None, bysta
                 own = bystander in (holder_key(row.claim), holder_key(other.claim))
                 (out if own else others).append(f"{row.id} and {other.id} are both claimed and their scopes overlap; "
                                                 "finish one first or narrow the scopes")
-    return others if bystander else out + others
+    return out, others
 
 
 def next_lines(rows: list[Row], live_markers: set[str] | None = None, brief: bool = False) -> list[str]:
@@ -610,8 +610,8 @@ def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) 
 
 
 def remove_presence(roots: Roots, session_id: str) -> bool:
-    with suppress(OSError):
-        (presence_dir(roots) / f"{session_key(session_id)}.json").unlink()
+    with suppress(FileNotFoundError):  # any other failure, such as a read-only folder, reaches the caller
+        retried((presence_dir(roots) / f"{session_key(session_id)}.json").unlink)
         return True
     return False
 
@@ -689,17 +689,17 @@ def verify(roots: Roots, config: dict, out=print) -> int:
             result = subprocess.run(list(command), cwd=roots.work, stdout=kept, stderr=subprocess.STDOUT)
         except OSError as error:
             raise SakoError(f"verify_command {command[0]!r} cannot run: {error.strerror or error}") from None
-    shown = log.read_text(encoding="utf-8", errors="replace")  # shown with the result, once the stamp is settled
+    shown = lambda: log.read_text(encoding="utf-8", errors="replace")  # read after the stamp is settled, since reading can fail
     if result.returncode:
-        path.unlink(missing_ok=True)  # the last pass stood while the check ran; a failing run never leaves it behind
+        retried(lambda: path.unlink(missing_ok=True))  # first, so the last pass, kept while the check ran, never outlives a failure
         retried(lambda: shutil.copyfile(log, failed))  # kept until the next failure; verify.log holds the last run
-        out(f"{shown}check: FAILED (exit {result.returncode}) after {time.time() - started:.0f}s; no stamp written; output in {failed.as_posix()}")
+        out(f"{shown()}check: FAILED (exit {result.returncode}) after {time.time() - started:.0f}s; no stamp written; output in {failed.as_posix()}")
         return 1
     after = content_id(roots.work, paths)  # taken past the failing branch, so a refusal here cannot keep the last pass after a failing run
     if before != after or command_id(config) != command_id(load_config(roots.kit)):
-        path.unlink(missing_ok=True)  # nor does a run whose content or command moved
+        retried(lambda: path.unlink(missing_ok=True))  # nor does a run whose content or command moved
         made = sorted(set(covered_files(roots.work, paths)) - set(listed))  # often the check's own cache
-        out(f"{shown}check: passed, but the checked content changed during the run ({before} -> {after}); run it again for a stamp"
+        out(f"{shown()}check: passed, but the checked content changed during the run ({before} -> {after}); run it again for a stamp"
             + (f". The run created {', '.join(made[:4])}: ignore generated files in .gitignore, or keep the check from "
                f"writing them ({PYTHON} -B for Python), so they are not checked content" if made else ""))
         return 1
@@ -707,7 +707,7 @@ def verify(roots: Roots, config: dict, out=print) -> int:
              "product_rev": git(roots.work, "rev-parse", "-q", "--verify", "HEAD", check=False),  # empty before a first commit
              "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "sako": VERSION}
     atomic_write(path, json.dumps(stamp, indent=1) + "\n")
-    out(f"{shown}check: PASS in {time.time() - started:.0f}s; covered {len(listed)} file(s); stamp {after} -> {path.as_posix()}; output in {log.as_posix()}")
+    out(f"{shown()}check: PASS in {time.time() - started:.0f}s; covered {len(listed)} file(s); stamp {after} -> {path.as_posix()}; output in {log.as_posix()}")
     return 0
 
 
@@ -749,7 +749,7 @@ def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
         where = "; ".join(f"{r.id} (claimed) touches {', '.join(r.touches) or '?'}" for r in held) + \
             "  [from the claim column]" if held else "no claim"
         until = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry["seen"] + LEASE)) if entry.get("unverified") else ""
-        lines.append(f"  peer {entry.get('marker')} (session {str(entry.get('session_id', '?'))[:8]}) on "
+        lines.append(f"  peer {entry.get('marker')} (session ID ends {str(entry.get('session_id', '?'))[-8:]}) on "
                      f"{entry.get('branch')} since {entry.get('started')}"
                      + (f", unverified from here (counts as live until {until})" if until else "") + f" -> {where}")
     return ["live peers (disjoint: share the tree; overlap: wait or negotiate; "
@@ -832,7 +832,7 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
                               f"{holder.claim.split()[0]} in this checkout", []).append(path)
             continue
         closer = next((r for r in reversed(rows) if day and r.doc == DONE and r.claim and holder_key(r.claim) != key_of(marker)
-                       and covers(r, path) and max(re.findall(r"; closed (\d{4}-\d\d-\d\d)[T\d:+-]*;", r.evidence), default="") >= day), None)
+                       and max(re.findall(r"; closed (\d{4}-\d\d-\d\d)[T\d:+-]*;", r.evidence), default="") >= day and covers(r, path)), None)
         if closer:
             exempt.setdefault(f"committed under {closer.id}, closed by {closer.claim.split()[0]}", []).append(path)
             continue
@@ -909,7 +909,7 @@ def stray(roots: Roots) -> list[str]:
 def render_start(roots: Roots, config: dict, entry: dict) -> str:
     rows = read_ledger(roots, config)
     live = {e["marker"] for e in read_presence(roots)}
-    findings = stray(roots) + ledger_findings(rows, live)
+    findings = stray(roots) + sum(ledger_findings(rows, live), [])  # notes too, as the start context lists every finding
     state, why = evidence_state(roots, config)
     rev, kit = entry["work_start_rev"], KIT if roots.home == roots.work else roots.kit.as_posix()
     lines = [f"sako {VERSION} · work {roots.work.as_posix()} ({entry['branch']} @ {rev[:9] if rev and rev != 'HEAD' else 'no commits yet'})",
@@ -938,19 +938,19 @@ def handoff(roots: Roots, config: dict, row: Row) -> Path:
 
 
 def handoffs_line(roots: Roots, config: dict, rows: list[Row]) -> list[str]:
-    """Handoff folders: an open task's for the session that picks it up, a closed task's marked to delete."""
-    folders = [(r.id + (" (closed: delete)" if r.doc == DONE else ""), handoff(roots, config, r)) for r in rows]
-    listed = [f"{i} {shlex.quote(runtime_path(roots, p))}/" for i, p in folders if p.is_dir()]
+    """Handoff folders, each once: an open task's for its next session, a closed task's marked to delete unless a tasks row names it."""
+    folders = {handoff(roots, config, r): r.id + (" (closed: delete)" if r.doc == DONE else "") for r in reversed(rows)}  # so a tasks row wins
+    listed = [f"{i} {shlex.quote(runtime_path(roots, p))}/" for p, i in reversed(folders.items()) if p.is_dir()]
     return ["handoffs: " + ", ".join(listed)] if listed else []
 
 
-def overview(roots: Roots, config: dict, session_id: str | None) -> tuple[list[Row], list[dict], list[str], dict | None, str | None]:
-    """Rows, live presence, findings, and this session's entry and marker, for every view."""
+def overview(roots: Roots, config: dict, session_id: str | None) -> tuple[list[Row], list[dict], list[str], list[str], dict | None, str | None]:
+    """Rows, live presence, findings, the notes that end them (findings only about other sessions), this session's entry and marker."""
     rows, live = read_ledger(roots, config), read_presence(roots)
     entry = my_entry(roots, session_id)
     marker = entry["marker"] if entry else (marker_for(session_id) if session_id else None)
-    mine = {marker} if marker else set()  # the asking session is alive, even after its own end
-    return rows, live, stray(roots) + ledger_findings(rows, {e["marker"] for e in live} | mine), entry, marker
+    found, notes = ledger_findings(rows, {e["marker"] for e in live}, key_of(marker))
+    return rows, live, stray(roots) + found + notes, notes, entry, marker
 
 
 def changes_line(roots: Roots, rows: list[Row], entry: dict | None, marker: str | None) -> str:
@@ -967,9 +967,8 @@ def generated(root: Path, paths: list[str]) -> str:
 def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
     """(exit code, message). 2 means: do not stop yet. Each problem names its rule and
     ends with its fix; notes that do not block follow."""
-    rows, live, findings, entry, marker = overview(roots, config, session_id)
-    others = ledger_findings(rows, {e["marker"] for e in live} | {marker}, key_of(marker)) if marker else []
-    problems = [f"Ledger: {f}" for f in findings if f not in others]  # the rest is about its own claims or the records
+    rows, live, findings, others, entry, marker = overview(roots, config, session_id)
+    problems = [f"Ledger: {f}" for f in findings[:len(findings) - len(others)]]  # the notes about other sessions end the findings
     sako, session = f"{PYTHON} {shlex.quote(runtime_path(roots))}", shlex.quote(session_id or "ID")
     unrecorded, notes, changed, note = recorded(roots, rows, entry, marker, live)
     if unrecorded:
@@ -1037,7 +1036,7 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
 
 
 def render_status(roots: Roots, config: dict, session_id: str | None) -> str:
-    rows, _, findings, entry, marker = overview(roots, config, session_id)
+    rows, _, findings, _, entry, marker = overview(roots, config, session_id)
     state, why = evidence_state(roots, config)
     manifest = installation(roots.home)
     lines = footprint_lines(roots, config, manifest) + [hooks_line(roots, manifest)]
@@ -1534,7 +1533,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         else:
             print("SAKO gate: clear" + (f"\n{message}" if message else ""))
         return code
-    rows, _, findings, entry, marker = overview(roots, config, args.session)
+    rows, _, findings, _, entry, marker = overview(roots, config, args.session)
     state, why = evidence_state(roots, config)
     print(f"evidence: {state}; {why}")
     if args.session:
@@ -1675,11 +1674,11 @@ def cmd_task(args: argparse.Namespace) -> int:
         for other in rows:  # a takeover also passes the replaced holder's other claims, so it can move them one by one
             peer = holder_key(other.claim)
             if other.id != row.id and other.status == "claimed" and peer not in (mine, replaced) and scopes_overlap(row, other):
-                fix = ("wait for it to close, or" if peer in seen
-                       else f"neither claim can be taken over while they overlap, so{' wait for it to close, or' if peer in live else ''}" if replaced
-                       else f"if it stopped, inspect its handoff and take it over first (claim {other.id} --takeover REASON), or")
+                wait = "wait for it to close, or " if peer in live else ""  # a live holder, seen or unverified from here
+                fix = (wait if peer in seen else f"neither claim can be taken over while they overlap, so {wait}" if replaced
+                       else f"{wait}if it stopped, inspect its handoff and take it over first (claim {other.id} --takeover REASON), or ")
                 raise SakoError(f"{row.id}'s scope overlaps {other.id} ({', '.join(other.touches)}), claimed by "
-                                f"{other.claim.split()[0]}; {fix} narrow a Scope in {runtime_path(roots, active)}")
+                                f"{other.claim.split()[0]}; {fix}narrow a Scope in {runtime_path(roots, active)}")
         moving = [o.id for o in rows if o.status == "claimed" and o.id != row.id and holder_key(o.claim) == replaced and scopes_overlap(row, o)]
         unverified = ", unverified" if owner != mine and owner in live - seen else ""  # its process was hidden from here
         if owner != mine:

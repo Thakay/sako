@@ -161,6 +161,36 @@ class Gate(unittest.TestCase):
         self.assertGreater(err.index("note: T-1 and T-2 are both claimed"), err.index("Ledger: T-4"), "notes follow the problems")
         self.assertNotIn("Ledger: T-1 is claimed by", err)
 
+    def test_a_row_fault_or_a_source_mapped_twice_blocks_even_on_rows_the_session_does_not_hold(self):
+        row, other = fixture.row, "sk-0101-bbbbbbbbbbbb"
+        self.start("s1")
+        for name, rows, blocking in (
+                ("fault on an open row", (row("T-1", pri="P9"),), 'Ledger: T-1 has Pri "P9"; use P1, P2 or P3'),
+                ("fault on another's claim", (row("T-1", status="claimed", claim=other, after="T-7"),),
+                 "Ledger: T-1 names T-7 in After, which is no other recorded task; fix the After cell"),
+                ("source mapped twice", (row("T-1", source="PLAN.md#intro"), row("T-2", status="claimed", claim=other,
+                                                                                   touches="`docs/`", source="PLAN.md#intro")),
+                 "Ledger: source 'PLAN.md#intro' is mapped more than once: T-1, T-2; keep one row per source")):
+            with self.subTest(name):
+                fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(*rows)})
+                code, _, err = self.stop("s1")
+                self.assertEqual(code, 2, err)
+                self.assertIn(blocking, err)
+
+    def test_an_own_overlap_blocks_when_two_other_sessions_overlap_under_the_same_ids(self):
+        row, mine = fixture.row, fixture.marker("s1")
+        self.start("s1")
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(  # T-1 twice, as a hand edit or a bad merge can leave it
+            row("T-1", status="claimed", claim=mine, touches="`src/app.py`"),
+            row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`src/lib/`"),
+            row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`src/`"))})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        overlap = "T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow the scopes"
+        self.assertIn(f"  Ledger: {overlap}", err, "this session's own overlap blocks")
+        self.assertIn(f"note: {overlap}", err, "the same words about the two other sessions stay a note")
+        self.assertIn("SAKO gate: 2 problem(s) before you stop:", err, "the repeated ID and the own overlap")
+
     def test_files_dirty_at_start_count_only_when_they_change_again(self):
         fixture.write(self.root, {"src/pre.py": "draft\n"})
         self.start("s1")
@@ -297,7 +327,8 @@ class Gate(unittest.TestCase):
         fixture.succeeds(fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Wrote notes", "--session", "s2"))
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out + err)
-        self.assertIn("not counted: docs/x.md: in T-2's scope, closed by live peer", out, "closed before it was committed")
+        kind = "unverified" if fixture.WINDOWS else "live"  # Windows sees no process, so a live peer there is unverified
+        self.assertIn(f"not counted: docs/x.md: in T-2's scope, closed by {kind} peer", out, "closed before it was committed")
         fixture.commit_all(self.root, "T-2: notes")
         fixture.succeeds(fixture.installed_copy(self.root, "end", "--session", "s2"))
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")

@@ -76,7 +76,7 @@ commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-docs
 your marker: sk-0115-0d70912d790f  (use claim to record task ownership)
 session: "demo-docs" (use this ID with --session)
 live peers (disjoint: share the tree; overlap: wait or negotiate; no claim: ask before touching shared paths):
-  peer sk-0115-3c0f5f721a4a (session demo-cod) on main since 2026-01-15T09:30:00+0000 -> T-1 (claimed) touches greeting.py  [from the claim column]
+  peer sk-0115-3c0f5f721a4a (session ID ends emo-code) on main since 2026-01-15T09:30:00+0000 -> T-1 (claimed) touches greeting.py  [from the claim column]
 evidence: none; no passing check recorded; run: sako.py verify
 ledger: consistent
 next, if no task was named for you: T-2 (P2, the only ready task): Show how to use the greeting
