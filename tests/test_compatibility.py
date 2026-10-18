@@ -376,6 +376,22 @@ class Compatibility(unittest.TestCase):
         hooks = json.loads((self.root / ".claude/settings.local.json").read_text())["hooks"]
         self.assertEqual([h["command"] for e in events for entry in hooks[e] for h in entry["hooks"]], ["echo mine"] * 3)
 
+    def test_update_replaces_the_previous_release_hook_command(self):
+        previous = ('c="$(git rev-parse --path-format=absolute --git-common-dir)"; k="${c%/.git}/.sako/sako.py"; '
+                    '[ -f "$k" ] || { echo "sako: no kit at $k; run: uvx sako init" >&2; exit 1; }; '
+                    'exec python3 "$k" hook claude')
+        fixture.succeeds(fixture.seed(self.root, "--client", "claude"))
+        path = self.root / sako.hook_file("claude")
+        settings = json.loads(path.read_text())
+        for entries in settings["hooks"].values():
+            entries[0]["hooks"][0]["command"] = previous
+        path.write_text(json.dumps(settings))
+        fixture.succeeds(fixture.seed(self.root, "--update"))
+        for event, entries in json.loads(path.read_text())["hooks"].items():
+            commands = [h["command"] for entry in entries for h in entry["hooks"]]
+            self.assertEqual(commands, [sako.hook_command("claude")], event)
+            self.assertNotIn(previous, commands, event)
+
     def test_on_windows_codex_gets_no_hooks_and_a_note_says_why(self):
         self.root, printed = fixture.make_repo(Path(self.workspace.name) / "windows", {"AGENTS.md": "rules\n"}), []
         with patch.object(sako.sys, "platform", "win32"), patch.dict(os.environ, {"CLAUDECODE": "", "CODEX_THREAD_ID": ""}), \

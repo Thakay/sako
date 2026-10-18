@@ -51,13 +51,16 @@ class KitCase(unittest.TestCase):
         fixture.git(self.root, "worktree", "add", "-q", str(self.base / name))
         return self.base / name
 
-    def hook(self, checkout, agent, event, session, pid=None):
-        """Run the exact command init wrote, as the client would, from that checkout."""
+    def hook(self, checkout, agent, event, session, pid=None, cwd=None, project=None, active=False):
+        """Run the exact command init wrote, as the client would, from that checkout or from the shell's
+        folder cwd, with Claude Code's project folder when one is given."""
         entries = json.loads((checkout / sako.hook_file(agent)).read_text())["hooks"][event]
         command = entries[-1]["hooks"][0]["command"]
-        env = dict(fixture.ENV, **({"SAKO_AGENT_PID": str(pid)} if pid else {}))
-        return subprocess.run(["sh", "-c", command], cwd=checkout, env=env, capture_output=True, text=True,
-                              input=json.dumps({"session_id": session, "hook_event_name": event}))
+        env = dict(fixture.ENV, **({"SAKO_AGENT_PID": str(pid)} if pid else {}),
+                   **({"CLAUDE_PROJECT_DIR": str(project)} if project else {}))
+        return subprocess.run(["sh", "-c", command], cwd=cwd or checkout, env=env, capture_output=True, text=True,
+                              input=json.dumps({"session_id": session, "hook_event_name": event,
+                                                "stop_hook_active": active}))
 
     def status(self, cwd=None):
         return fixture.succeeds(subprocess.run([sys.executable, str(self.root / ".sako/sako.py"), "status"],
@@ -222,9 +225,55 @@ class Footprint(KitCase):
     def test_hooks_exit_1_never_2_when_the_kit_is_gone(self):
         self.install("--client", "claude")
         (self.root / ".sako/sako.py").unlink()
-        stop = self.hook(self.root, "claude", "Stop", "orphan")
-        self.assertEqual(stop.returncode, 1, stop.stderr)
-        self.assertIn("run: uvx sako init", stop.stderr)
+        for project in (None, self.root):
+            stop = self.hook(self.root, "claude", "Stop", "orphan", project=project)
+            self.assertEqual(stop.returncode, 1, stop.stderr)
+            self.assertRegex(stop.stderr, rf"sako: no kit found from .*/{self.root.name}; cd back to the project top "
+                                          r"folder, or run: uvx sako init")
+
+    def test_hooks_from_a_nested_repository_fall_back_to_the_project_folder(self):
+        self.install("--client", "claude", "--client", "codex", "--repo")
+        nested = self.root / "tools/helper"
+        nested.mkdir(parents=True)
+        fixture.git(nested, "init", "-q", "-b", "main")  # a repository of its own, untracked by the project
+        live = sako.presence_dir(sako.resolve_roots(self.root))
+        for folder in (self.root / ".sako", nested):  # the records repository, then the untracked one
+            with self.subTest(folder=folder.relative_to(self.root).as_posix()):
+                session = f"moved-{folder.name}"
+                context = fixture.succeeds(self.hook(self.root, "claude", "SessionStart", session, self.host(),
+                                                     cwd=folder, project=self.root))
+                self.assertIn(f"work {self.root.resolve().as_posix()} (main @", context)
+                self.assertIn("your marker", context)
+                self.assertTrue((live / f"{sako.session_key(session)}.json").exists())
+                fixture.write(self.root, {"src/app.py": f"print('{session}')\n"})
+                stop = self.hook(self.root, "claude", "Stop", session, cwd=folder, project=self.root)
+                self.assertEqual(stop.returncode, 2, stop.stderr)
+                self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/app.py",
+                              stop.stderr)
+                fixture.succeeds(self.hook(self.root, "claude", "Stop", session, cwd=folder, project=self.root,
+                                           active=True))
+                fixture.succeeds(self.hook(self.root, "claude", "SessionEnd", session, cwd=folder, project=self.root))
+                self.assertFalse((live / f"{sako.session_key(session)}.json").exists())
+                fixture.git(self.root, "checkout", "--", "src/app.py")
+        if not fixture.WINDOWS:  # Codex names no project folder, so it keeps the exit 1 and says where it looked
+            orphan = self.hook(self.root, "codex", "Stop", "codex-session", cwd=self.root / ".sako")
+            self.assertEqual(orphan.returncode, 1, orphan.stderr)
+            self.assertIn(f"sako: no kit found from {(self.root / '.sako').as_posix()}; cd back to the project top folder",
+                          orphan.stderr)
+
+    def test_a_linked_worktree_is_judged_where_the_shell_is_even_when_the_project_folder_is_elsewhere(self):
+        """The runtime judges the folder it runs in, so the hook moves to the project folder only
+        when it finds no kit where the shell is."""
+        self.install("--client", "claude")
+        linked = self.worktree("linked")
+        session = "moved-to-linked"
+        fixture.succeeds(self.hook(self.root, "claude", "SessionStart", session, self.host(), project=self.root))
+        fixture.write(linked, {"src/app.py": "print(2)\n"})
+        stop = self.hook(self.root, "claude", "Stop", session, cwd=linked, project=self.root)
+        self.assertEqual(stop.returncode, 2, stop.stderr)
+        self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/app.py",
+                      stop.stderr)
+        self.assertEqual(fixture.git(self.root, "status", "--porcelain"), "", "the main checkout itself is clean")
 
 
 class ReviewRegressions(KitCase):

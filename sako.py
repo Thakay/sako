@@ -1105,10 +1105,11 @@ def hook_file(agent: str) -> str:
 
 
 def hook_command(agent: str) -> str:
-    """Find the main checkout's copy through Git from any folder. A missing kit exits 1,
-    which clients show without blocking; exit 2 on Stop would trap the session."""
-    return ('c="$(git rev-parse --path-format=absolute --git-common-dir)"; k="${c%/.git}/.sako/sako.py"; '
-            '[ -f "$k" ] || { echo "sako: no kit at $k; run: uvx sako init" >&2; exit 1; }; '
+    """Find the main checkout's copy through Git from the hook's folder, else from Claude Code's project folder, and
+    run it from where it was found. A missing kit exits 1, which never blocks; exit 2 on Stop would trap the session."""
+    return ('kit() { c="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && k="${c%/.git}/.sako/sako.py" '
+            '&& [ -f "$k" ]; }; kit || { cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null && kit; } || '
+            '{ echo "sako: no kit found from $PWD; cd back to the project top folder, or run: uvx sako init" >&2; exit 1; }; '
             f'exec {PYTHON} "$k" hook {agent}')
 
 
