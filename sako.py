@@ -775,14 +775,14 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
             changed[path] = "edited after start; already dirty at start"
     rev = str(entry.get("work_start_rev") or "")
     known = rev and git(roots.work, "rev-parse", "-q", "--verify", f"{rev}^{{commit}}", check=False)
-    log = git(roots.work, "log", "--no-renames", "--name-only", "--format=%x00%h %s", f"--since=@{since}",
-              f"{rev}..HEAD" if known else "HEAD", check=False)
+    log = git(roots.work, "log", "--no-renames", "--name-only", "--format=%x00%h %ad %s", "--date=short-local",
+              f"--since=@{since}", f"{rev}..HEAD" if known else "HEAD", check=False)
     for block in log.split("\0")[1:]:
         subject, *paths = block.strip("\n").split("\n")
-        short, _, title = subject.partition(" ")
+        short, day, title = subject.split(" ", 2)  # the author's day, local like a receipt's; a rebase keeps it
         for path in product(paths):
             if path not in start:
-                changed.setdefault(path, f'in commit {short} "{title}"')
+                changed.setdefault(path, f'in commit {short} of {day} "{title}"')
     return changed, ""
 
 
@@ -796,16 +796,17 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
     for path, label in sorted(changed.items()):
         if any(covers(row, path) for row in own):
             continue
-        closer = next((r for r in rows if r.doc == DONE and r.claim and holder_key(r.claim) != key_of(marker)
-                       and label.startswith("in commit") and covers(r, path)), None)
-        if closer:
-            exempt.setdefault(f"committed under {closer.id}, closed by {closer.claim}", []).append(path)
-            continue
-        holder = next((r for r in rows if holder_key(r.claim) in peers and covers(r, path)), None)
+        day = label.split()[4] if label.startswith("in commit") else ""  # only a close on or after it excuses a commit
+        holder = next((r for r in rows if holder_key(r.claim) in peers and covers(r, path) and not (day and r.doc == DONE)), None)
         if holder and peers[holder_key(holder.claim)].get("work_root") == str(roots.work):
             kind = "unverified" if peers[holder_key(holder.claim)].get("unverified") else "live"
-            exempt.setdefault(f"in {holder.id}'s scope, claimed by {kind} peer {holder.claim.split()[0]} in this checkout",
-                              []).append(path)
+            exempt.setdefault(f"in {holder.id}'s scope, {'closed' if holder.doc == DONE else 'claimed'} by {kind} peer "
+                              f"{holder.claim.split()[0]} in this checkout", []).append(path)
+            continue
+        closer = next((r for r in reversed(rows) if day and r.doc == DONE and r.claim and holder_key(r.claim) != key_of(marker)
+                       and covers(r, path) and max(re.findall(r"; closed (\d{4}-\d\d-\d\d);", r.evidence), default="") >= day), None)
+        if closer:
+            exempt.setdefault(f"committed under {closer.id}, closed by {closer.claim}", []).append(path)
             continue
         if holder:
             label = (label + "; " if label else "") + f"claimed by {holder.claim.split()[0]} in another worktree, " \

@@ -154,7 +154,7 @@ class Gate(unittest.TestCase):
         fixture.commit_all(self.root, "an unrecorded change")
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
-        self.assertRegex(err, r'src/app\.py \(in commit [0-9a-f]+ "an unrecorded change"\)')
+        self.assertRegex(err, r'src/app\.py \(in commit [0-9a-f]+ of \d{4}-\d\d-\d\d "an unrecorded change"\)')
         fixture.git(self.root, "reset", "-q", "--hard", "HEAD~1")
         fixture.git(self.root, "checkout", "-qb", "side")
         fixture.write(self.root, {"src/side.py": "x = 1\n"})
@@ -212,7 +212,7 @@ class Gate(unittest.TestCase):
         fixture.git(self.root, "merge", "-q", "--ff-only", "agent-1")
         code, _, err = self.stop("s2")
         self.assertEqual(code, 2, err)
-        self.assertRegex(err, r'src/app\.py \(in commit [0-9a-f]+ "work in the worktree"\)', "merged work still counts")
+        self.assertRegex(err, r'src/app\.py \(in commit [0-9a-f]+ of \d{4}-\d\d-\d\d "work in the worktree"\)', "merged work still counts")
         fixture.git(self.root, "worktree", "remove", "--force", str(nested))
         code, _, err = self.stop("s2")
         self.assertEqual(code, 2, err)
@@ -253,11 +253,69 @@ class Gate(unittest.TestCase):
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s2"))
         fixture.write(self.root, {"docs/x.md": "notes\n"})
         fixture.succeeds(fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Wrote notes", "--session", "s2"))
+        code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not counted: docs/x.md: in T-2's scope, closed by live peer", out, "closed before it was committed")
         fixture.commit_all(self.root, "T-2: notes")
         fixture.succeeds(fixture.installed_copy(self.root, "end", "--session", "s2"))
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out + err)
         self.assertIn("not counted: docs/x.md: committed under T-2, closed by sk-", out)
+
+    def test_only_a_task_closed_on_or_after_the_day_of_a_commit_covers_it(self):
+        fixture.write(self.root, {".sako/work/DONE.md": fixture.done_file(fixture.row(
+            "T-5", "Broad import", status="done", claim=sako.marker_for("s2", "0101"), touches="`src/`, `docs/`"))})
+        self.start("s1")
+        self.start("s2")
+        fixture.write(self.root, {"src/app.py": "print(5)\n"})
+        fixture.commit_all(self.root, "work with no task")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, "an old close excuses no later commit, even while its closer is live\n" + err)
+        self.assertRegex(err, r'covered by no task you claimed or closed: src/app\.py \(in commit [0-9a-f]+ of '
+                              r'\d{4}-\d\d-\d\d "work with no task"\)')
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s2"))
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Prints 5", "--session", "s2"))
+        code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not counted: src/app.py: committed under T-1, closed by sk-", out, "a live closer, the same day")
+
+    @unittest.skipIf(sys.platform == "win32", "the zone is set with a POSIX TZ value")
+    def test_a_commits_day_is_read_in_the_local_zone_that_dates_a_receipt(self):
+        fixture.write(self.root, {".sako/work/DONE.md": fixture.done_file(
+            fixture.row("T-5", "Broad import", status="done", claim="sk-0101-aaaaaaaaaaaa", touches="`src/`"))})
+        self.start("s1")
+        fixture.write(self.root, {"src/app.py": "print(5)\n"})
+        env = dict(fixture.ENV, GIT_AUTHOR_DATE="2026-01-02T01:00:00+0000")  # 17:00 on January 1, eight hours west
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qam", "evening work"], env=env, check=True)
+        with patch.dict(fixture.ENV, TZ="UTC0"):
+            code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 2, "January 2 in this zone, a day after the close\n" + out + err)
+        with patch.dict(fixture.ENV, TZ="PST8"):
+            code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not counted: src/app.py: committed under T-5, closed by sk-0101-aaaaaaaaaaaa", out)
+
+    def test_a_live_peers_claim_is_named_before_a_closed_task_that_also_covers_the_commit(self):
+        self.start("s1")
+        self.start("s2")
+        self.start("s3")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s3"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Outlined docs", "--session", "s3"))
+        fixture.succeeds(fixture.installed_copy(self.root, "end", "--session", "s3"))
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Peer notes", "--done-when", "x.md says so", "--scope", "docs/x.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s2"))
+        fixture.write(self.root, {"docs/x.md": "peer notes\n"})
+        fixture.commit_all(self.root, "peer notes")
+        code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not counted: docs/x.md: in T-10's scope, claimed by ", out)
+        self.assertNotIn("committed under T-2", out)
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Notes read back", "--session", "s2"))
+        fixture.succeeds(fixture.installed_copy(self.root, "end", "--session", "s2"))
+        code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not counted: docs/x.md: committed under T-10, closed by sk-", out, "of two closes that day, the later")
 
     def test_without_a_start_record_every_dirty_path_counts_and_the_gate_says_so(self):
         fixture.write(self.root, {"src/new.py": "x = 1\n"})
