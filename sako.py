@@ -489,10 +489,13 @@ def holder_key(claim: str) -> str | None:
     return key_of(first) if first.startswith("sk-") else None
 
 
-PID_NS = ""  # the PID namespace a PID means something in; its number is reused, so its first process's start is added
+PID_NS = BOOT = ""  # the PID namespace a PID means something in; its number is reused, so its first process's start is added
 with suppress(OSError, IndexError):
     PID_NS = os.readlink("/proc/self/ns/pid")
     PID_NS += "@" + Path("/proc/1/stat").read_text().rsplit(")", 1)[1].split()[19]
+with suppress(OSError):  # Linux names each boot, and a restart ends every session, so the namespace names its boot too
+    BOOT = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    PID_NS += " boot " + BOOT
 LEASE = 24 * 3600  # seconds an entry no visible process vouches for counts as live after its last start
 
 
@@ -547,15 +550,16 @@ def alive(pid: int) -> bool:
 
 
 def read_presence(roots: Roots) -> list[dict]:
-    """Every live entry. A process visible here judges its entry, and a gone or unreadable one is removed. An
-    entry from another PID namespace (a client's sandbox), or with no host, counts as live for LEASE after its
-    last start, marked unverified; it stays on disk either way, so a resume keeps its starting facts."""
+    """Every live entry. A process visible here judges its entry; a gone or unreadable one is removed. An entry from
+    another PID namespace (a client's sandbox), or with no host, counts as live for LEASE after its last start, marked
+    unverified, and one from an earlier boot has ended. Both stay on disk, so a resume keeps its starting facts."""
     entries, now = [], time.time()
     for path in sorted(presence_dir(roots).glob("*.json")):
         entry = read_json(path)
         pid = entry["pid"] if entry.get("marker") and isinstance(entry.get("pid"), int) else -1
-        judged = pid < 0 or pid > 1 and entry.get("ns", PID_NS) == PID_NS
-        if judged and alive(pid) or not judged and isinstance(entry.get("seen"), int) and entry["seen"] + LEASE > now:
+        judged = pid < 0 or pid > 1 and entry.get("ns", PID_NS) in (PID_NS, PID_NS.partition(" boot ")[0])  # 0.5 recorded no boot
+        ended = BOOT and str(entry.get("ns")).partition(" boot ")[2] not in ("", BOOT)  # recorded before a restart
+        if judged and alive(pid) or not (judged or ended) and isinstance(entry.get("seen"), int) and entry["seen"] + LEASE > now:
             entries.append(entry if judged else dict(entry, unverified=True))
         elif judged:
             with suppress(OSError):
@@ -583,10 +587,11 @@ def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) 
     previous = previous or {}
     pid = agent_pid()
     pid = pid if alive(pid) else 0  # a host hidden from here, such as SAKO_AGENT_PID inside a sandbox, is none
-    return {  # with no host visible (a sandbox), keep the one the hook recorded: better evidence than none
+    hook = {} if BOOT and str(previous.get("ns")).partition(" boot ")[2] not in ("", BOOT) else previous  # a restart ended its host
+    return {  # with no host visible (a sandbox), keep the one the hook recorded in this boot: better evidence than none
         "marker": previous.get("marker") or marker_for(session_id),
         "session_id": session_id,
-        "pid": pid or previous.get("pid", 0), "ns": PID_NS if pid else previous.get("ns", ""), "seen": int(time.time()),
+        "pid": pid or hook.get("pid", 0), "ns": PID_NS if pid else hook.get("ns", PID_NS), "seen": int(time.time()),
         "started": previous.get("started") or time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "started_at": previous.get("started_at") or int(time.time()),
         "work_root": str(roots.work),
@@ -1686,6 +1691,8 @@ def cmd_hook(args: argparse.Namespace) -> int:
         return 0
     try:
         roots, config = resolve(args)
+        if event == "SessionEnd":  # before anything else, since a client may cut its end hook short
+            remove_presence(roots, session_id)
         if args.client:
             note_hook(roots, args.client, event)
         with ledger_lock(roots):
@@ -1696,8 +1703,6 @@ def cmd_hook(args: argparse.Namespace) -> int:
                     print(f"sako: {error}; peers will not see this session")
                     entry = presence_entry(roots, session_id)
                 print(render_start(roots, config, entry))
-            elif event == "SessionEnd":
-                remove_presence(roots, session_id)
             elif event == "Stop":
                 if payload.get("stop_hook_active"):
                     return 0

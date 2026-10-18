@@ -368,6 +368,17 @@ class Gate(unittest.TestCase):
         self.assertIn("SAKO gate: [Errno 13] The process cannot access the file: 'src\\\\app.py'\nFix what it names", shown[0])
         self.assertEqual(shown[1], "", "the repeated stop goes")
 
+    def test_a_session_end_whose_note_fails_leaves_no_presence(self):
+        roots = sako.resolve_roots(self.root)
+        args = argparse.Namespace(event=None, session=None, client="claude", resolved=(roots, sako.load_config(roots.kit)))
+        for session, failure in (("s1", RuntimeError("a bug")), ("s2", SystemExit(143))):  # 143: the client ended the hook
+            self.start(session)
+            payload = io.StringIO(json.dumps({"session_id": session, "hook_event_name": "SessionEnd"}))
+            with patch.object(sako, "note_hook", side_effect=failure), patch.object(sys, "stdin", payload), \
+                    contextlib.redirect_stderr(io.StringIO()), contextlib.suppress(SystemExit):
+                sako.cmd_hook(args)
+            self.assertIsNone(sako.my_entry(roots, session), f"presence goes before the hook is noted: {failure!r}")
+
     @unittest.skipUnless(fixture.symlinks() and Path("/bin/sh").exists(), "builds a PATH of symlinks for /bin/sh")
     def test_a_hook_command_that_cannot_start_python_exits_1_never_2(self):
         bin_dir = self.base / "bin"  # the kit and git, but no Python: the hook command itself fails

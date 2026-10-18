@@ -350,12 +350,12 @@ class Compatibility(unittest.TestCase):
                                 env=dict(env, CLAUDE_CODE_SESSION_ID="outer"))  # one client inside the other: no default
         self.assertIn("your rows: none", fixture.succeeds(nested))
 
-    def hidden(self, session, seen):
+    def hidden(self, session, seen, ns="pid:[elsewhere]"):
         """A presence entry whose host another PID namespace hides, as a client's sandbox shows the hook's entry."""
         path = sako.presence_dir(sako.resolve_roots(self.root)) / f"{sako.session_key(session)}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"marker": sako.marker_for(session), "session_id": session, "pid": 2 ** 22,
-                                    "ns": "pid:[elsewhere]", "seen": seen, "started": "2026-01-01T00:00:00+0000",
+                                    "ns": ns, "seen": seen, "started": "2026-01-01T00:00:00+0000",
                                     "started_at": seen, "work_root": str(self.root), "branch": "main",
                                     "work_start_rev": fixture.git(self.root, "rev-parse", "HEAD"), "dirty_at_start": {}}))
 
@@ -431,6 +431,29 @@ class Compatibility(unittest.TestCase):
         self.hidden("sandboxed", int(time.time()) - sako.LEASE - 1)
         self.assertIn("T-10 is claimed by", self.cli("check", expected=1), "past its lease the claim is stale")
         self.assertTrue(sako.my_entry(sako.resolve_roots(self.root), "sandboxed"), "and its starting facts stay on disk")
+
+    @unittest.skipUnless(Path("/proc/sys/kernel/random/boot_id").is_file(), "needs a kernel that names each boot (Linux)")
+    def test_a_session_from_before_a_restart_has_ended_and_a_resume_keeps_its_starting_facts(self):
+        started = int(time.time()) - 60
+        self.hidden("restarted", started)
+        self.cli("claim", "T-1", session="restarted")
+        self.hidden("restarted", started, ns="pid:[elsewhere] boot earlier")  # the machine restarted since
+        self.assertIn("T-1 is claimed by", self.cli("check", expected=1), "its claim is stale at once, not after the lease")
+        self.cli("start", session="restarted", pid=self.host().pid)
+        self.assertEqual(sako.my_entry(sako.resolve_roots(self.root), "restarted")["started_at"], started,
+                         "a resume keeps its starting facts")
+        self.assertIn("ledger: consistent", self.cli("check"))
+
+    @unittest.skipUnless(Path("/proc/sys/kernel/random/boot_id").is_file(), "needs a kernel that names each boot (Linux)")
+    def test_a_resume_in_a_sandbox_after_a_restart_counts_by_its_lease(self):
+        started = int(time.time()) - 60
+        self.hidden("resumed", started, ns="pid:[elsewhere] boot earlier")  # the hook's entry, from before a restart
+        self.cli("start", session="resumed", pid=2 ** 22)  # no host visible from here, and no hook ran
+        entry = sako.my_entry(sako.resolve_roots(self.root), "resumed")
+        self.assertEqual((entry["pid"], entry["started_at"]), (0, started), "the ended host goes and the starting facts stay")
+        self.assertEqual(entry["ns"], sako.PID_NS, "it names this boot, so the next restart ends it")
+        self.assertIn("T-1: claimed", self.cli("claim", "T-1", session="resumed"))
+        self.assertIn("ledger: consistent", self.cli("check"), "its claim counts as live for the lease")
 
     @unittest.skipUnless(shutil.which("bwrap") and subprocess.run(
         ["bwrap", "--dev-bind", "/", "/", "--unshare-pid", "--proc", "/proc", "true"], capture_output=True).returncode == 0,
