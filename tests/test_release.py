@@ -201,11 +201,16 @@ class Release(unittest.TestCase):
 
 
 class Budgets(unittest.TestCase):
-    """The product's budgets: one runtime file of at most 4,000 lines, and at most about
-    1,500 words of reading for a normal task."""
+    """The product's budgets: one runtime file of at most 4,000 lines, each at most 100 columns
+    wide, and at most about 1,500 words of reading for a normal task."""
 
     def test_runtime_line_budget(self):
         self.assertLessEqual(fixture.SAKO.read_text().count("\n"), 4000)
+
+    def test_runtime_lines_fit_in_100_columns(self):
+        lines = fixture.SAKO.read_text(encoding="utf-8").splitlines()
+        self.assertEqual([n for n, line in enumerate(lines, 1) if len(line) > 100], [],
+                         "these sako.py lines are longer than 100 characters")
 
     def test_the_active_record_requires_at_most_eight_columns(self):
         self.assertLessEqual(len(sako.COLUMNS["tasks"]), 8)
