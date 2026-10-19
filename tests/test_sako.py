@@ -74,8 +74,8 @@ class LedgerParsing(unittest.TestCase):
                      row("T-2", status="claimed", claim=f"{since} (took over from sk-0101-bbbbbbbbbbbb: gone)", touches="`d/`"),
                      row("T-3", touches="`c/deep/`"))
         self.assertEqual([(r.status, sako.holder_key(r.claim)) for r in rows[:2]], [("claimed", "aaaaaaaaaaaa")] * 2)
-        self.assertIn("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, take it over (claim T-1 "
-                      "--takeover REASON), or park it (set its Status to parked with the reason)",
+        self.assertIn("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over (claim "
+                      "T-1 --takeover REASON), then finish or park it (edit T-1 --park REASON)",
                       sako.ledger_findings(rows, {"sk-0102-cccccccccccc"})[1])
         waiting = sako.next_lines(rows)
         self.assertIn(f"  T-1  claimed by {since}", waiting)
@@ -112,8 +112,8 @@ class Findings(unittest.TestCase):
         found = self.findings(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"),
                               row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", after="T-1"),
                               live={"sk-0102-bbbbbbbbbbbb"})
-        self.assertTrue(any("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, take it over "
-                            "(claim T-1 --takeover REASON), or park it (set its Status to parked with the reason)" in f
+        self.assertTrue(any("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over "
+                            "(claim T-1 --takeover REASON), then finish or park it (edit T-1 --park REASON)" in f
                             for f in found))
         self.assertFalse(any("T-2 is claimed" in f for f in found),
                          "claim refuses unfinished prerequisites, so a held row waiting on one is no finding")
@@ -124,16 +124,21 @@ class Findings(unittest.TestCase):
         rows = tasks(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`src/`"),
                      row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`src/app/`"),
                      row("T-3", status="claimed", claim="sk-0101-cccccccccccc", touches="`docs/`"))
-        overlap = "T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow the scopes"
-        self.assertEqual(sako.ledger_findings(rows), ([], [overlap]), "with no asking session, every claim is another's")
-        self.assertEqual(sako.ledger_findings(rows, None, "cccccccccccc"), ([], [overlap]), "for T-3's holder it is a note")
-        self.assertEqual(sako.ledger_findings(rows, None, "aaaaaaaaaaaa"), ([overlap], []), "for T-1's holder it is its own")
+        overlap = "T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow "
+        self.assertEqual(sako.ledger_findings(rows), ([], [overlap + "the scopes"]),
+                         "with no asking session, every claim is another's")
+        self.assertEqual(sako.ledger_findings(rows, None, "cccccccccccc"), ([], [overlap + "the scopes"]),
+                         "for T-3's holder it is a note, and edit narrows only the holder's own row")
+        self.assertEqual(sako.ledger_findings(rows, None, "aaaaaaaaaaaa"), ([overlap + "yours (edit T-1 --scope PATH)"], []),
+                         "for T-1's holder it is its own")
+        self.assertEqual(sako.ledger_findings(rows, None, "bbbbbbbbbbbb")[0], [overlap + "yours (edit T-2 --scope PATH)"],
+                         "the command names the asking session's row, the later one too")
         twice = tasks(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`src/app.py`"),
                       row("T-1", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`src/lib/`"),
                       row("T-2", status="claimed", claim="sk-0101-cccccccccccc", touches="`src/`"))  # T-1 twice, as a bad merge leaves it
         found, notes = sako.ledger_findings(twice, None, "aaaaaaaaaaaa")
-        self.assertIn(overlap, found, "its own overlap with T-2")
-        self.assertEqual(notes, [overlap], "the same words about two other sessions' claims stay a note")
+        self.assertIn(overlap + "yours (edit T-1 --scope PATH)", found, "its own overlap with T-2")
+        self.assertEqual(notes, [overlap + "the scopes"], "the same overlap between two other sessions' claims stays a note")
         self.assertTrue(sako.overlaps(sako.scope("src"), sako.scope("src/app/x.py")))
         self.assertFalse(sako.overlaps(sako.scope("docs/"), sako.scope("src/")))
         with self.assertRaisesRegex(sako.SakoError, "escapes"):

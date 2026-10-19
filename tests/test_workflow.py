@@ -466,7 +466,8 @@ class Workflow(unittest.TestCase):
         self.assertEqual(code, 3)
         advice = "wait for it to close, or " + ("if it stopped, inspect its handoff and take it over first (claim T-1 --takeover "
                                                 "REASON), or " if fixture.WINDOWS else "")  # Windows sees no process, so the holder is unverified
-        self.assertIn(f"T-10's scope overlaps T-1 (src/), claimed by {holder}; {advice}narrow a Scope in .sako/work/TASKS.md", err)
+        self.assertIn(f"T-10's scope overlaps T-1 (src/), claimed by {holder}; {advice}narrow T-10's scope (edit T-10 --scope PATH)",
+                      err)
         first.terminate()
         first.wait()
         code, _, err = self.run_cli("claim", "T-1", session="session-b")
@@ -516,11 +517,12 @@ class Workflow(unittest.TestCase):
         code, _, err = self.run_cli("claim", "T-6", session="session-b")
         self.assertEqual(code, 3)
         self.assertIn(f"T-6's scope overlaps T-4 (notes/), claimed by {gone}; if it stopped, inspect its handoff and take it "
-                      "over first (claim T-4 --takeover REASON), or narrow a Scope in .sako/work/TASKS.md", err)
+                      "over first (claim T-4 --takeover REASON), or narrow T-6's scope (edit T-6 --scope PATH)", err)
         code, _, err = self.run_cli("claim", "T-4", *reason, session="session-b")
         self.assertEqual(code, 3, "overlapping claims of two different ended sessions still refuse each other")
         self.assertIn(f"T-4's scope overlaps T-5 (notes/plan.md), claimed by {lost}; neither claim can be taken "
-                      "over while they overlap, so narrow a Scope in .sako/work/TASKS.md", err)
+                      "over while they overlap, so narrow a Scope in .sako/work/TASKS.md", err,
+                      "edit refuses a row another session holds, and the takeover is what is refused, so this stays a hand edit")
         self.assertEqual(active.read_bytes(), before)
         out = self.assert_ok(self.run_cli("add", "Shared follow-up", "--scope", "src/lib/", "--scope", "notes/"))
         self.assertEqual(len(out.splitlines()), 1, out)
@@ -530,16 +532,49 @@ class Workflow(unittest.TestCase):
     def test_a_parked_task_names_how_to_reopen_it_from_any_checkout(self):
         fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1", status="parked: the owner decides"))})
         self.start("session-a")
-        code, _, err = self.run_cli("claim", "T-1", session="session-a")
-        self.assertEqual(code, 3)
-        self.assertIn("T-1 is parked; once its reason is resolved, set its Status to open in .sako/work/TASKS.md", err)
+        refusal = "sako: T-1 is parked; once its reason is resolved, open it (edit T-1 --open), then claim it\n"
+        self.assertEqual(self.run_cli("claim", "T-1", session="session-a"), (3, "", refusal))
         linked = Path(self.workspace.name) / "linked"
         fixture.git(self.root, "worktree", "add", "-q", str(linked))
         code, _, err = fixture.cli(linked, "claim", "T-1", session="session-a")
-        self.assertEqual(code, 3, "a linked worktree has no records folder of its own, so the path is absolute")
+        self.assertEqual((code, err), (3, refusal), "a linked worktree has no records folder of its own, and the command names none")
+        printed = shlex.split(re.search(r"\((edit [^)]*)\)", err)[1])
+        self.assertEqual(fixture.cli(linked, *printed, session="session-a"), (0, "T-1: open; recorded locally, not committed\n", ""),
+                         "the command runs as printed there")
+        self.assertIn("T-1: claimed", self.assert_ok(fixture.cli(linked, "claim", "T-1", session="session-a")))
         ledger = (self.root.resolve() / ".sako/work/TASKS.md").as_posix()
-        self.assertIn(f"set its Status to open in {ledger}", err)
-        self.assertIn(f"T-99 needs exactly one row in {ledger}", fixture.cli(linked, "claim", "T-99", session="session-a")[2])
+        self.assertIn(f"T-99 needs exactly one row in {ledger}", fixture.cli(linked, "claim", "T-99", session="session-a")[2],
+                      "from a linked worktree, a path to the records is absolute")
+
+    def test_claims_refusals_print_an_edit_command_that_runs_once_its_path_is_filled_in(self):
+        self.start("session-a")
+        self.start("session-b")
+        self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
+        self.assert_ok(self.run_cli("add", "Guide and code", "--scope", "src/", "docs/guide/"))
+
+        def refused(task_id, path=""):
+            """claim's refusal, and the output of the edit command it prints, run with PATH filled in"""
+            code, _, err = self.run_cli("claim", task_id, session="session-b")
+            self.assertEqual(code, 3, err)
+            printed = shlex.split(re.search(r"\((edit [^)]*)\)", err)[1])
+            return err, self.assert_ok(self.run_cli(*[path if word == "PATH" else word for word in printed], session="session-b"))
+
+        err, out = refused("T-10", "docs/guide/")
+        self.assertIn("narrow T-10's scope (edit T-10 --scope PATH)\n", err)
+        self.assertEqual(out, "T-10: open; scope docs/guide/; recorded locally, not committed\n", "now clear of T-1's src/")
+        self.assertIn("T-10: claimed", self.assert_ok(self.run_cli("claim", "T-10", session="session-b")))
+        err, out = refused("T-9", "notes/")  # the stock parked row, which has no scope
+        self.assertEqual(err, "sako: T-9 needs a Scope before claiming; give it one (edit T-9 --scope PATH)\n")
+        self.assertEqual(out, "T-9: parked; scope notes/; recorded locally, not committed\n")
+        err, out = refused("T-9")
+        self.assertEqual(err, "sako: T-9 is parked; once its reason is resolved, open it (edit T-9 --open), then claim it\n")
+        self.assertEqual(out, "T-9: open; recorded locally, not committed\n")
+        self.assertIn("T-9: claimed", self.assert_ok(self.run_cli("claim", "T-9", session="session-b")))
+        tasks = self.root / ".sako/work/TASKS.md"  # a claim without a scope, as only a hand edit leaves it
+        tasks.write_text(tasks.read_text() + fixture.row("T-20", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="-") + "\n")
+        self.assertEqual(self.run_cli("claim", "T-20", "--takeover", "its session ended", session="session-b"),
+                         (3, "", "sako: T-20 needs a Scope before claiming\n"),
+                         "edit leaves another session's claim to its holder, so no edit command is offered")
 
     def test_a_narrowed_claim_frees_a_second_sessions_claim_and_a_widening_onto_a_claim_is_refused(self):
         self.start("session-a")

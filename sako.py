@@ -449,17 +449,20 @@ def ledger_findings(rows: list[Row], live_markers: set[str] | None = None,
                        f"{sources[row.source]}, {row.id}; keep one row per source")
         out += row_faults(row, set(seen))
         if row.status == "claimed" and live is not None and holder_key(row.claim) not in live:
+            # only its holder edits a claimed row, so parking it comes after a takeover
             others.append(f"{row.id} is claimed by {row.claim.split()[0]}, "
-                          "which is not a live session; resume it, take it over "
-                          f"(claim {row.id} --takeover REASON), "
-                          "or park it (set its Status to parked with the reason)")
+                          "which is not a live session; resume it, or take it over "
+                          f"(claim {row.id} --takeover REASON), then finish or park it "
+                          f"(edit {row.id} --park REASON)")
     for index, row in enumerate(claimed):
         for other in claimed[index + 1:]:
             if holder_key(row.claim) != holder_key(other.claim) and scopes_overlap(row, other):
-                own = bystander in (holder_key(row.claim), holder_key(other.claim))
+                # the asking session's row of the two, the one it can narrow
+                own = next((r.id for r in (row, other) if holder_key(r.claim) == bystander), "")
                 (out if own else others).append(
                     f"{row.id} and {other.id} are both claimed and their scopes overlap; "
-                    "finish one first or narrow the scopes")
+                    "finish one first or narrow "
+                    + (f"yours (edit {own} --scope PATH)" if own else "the scopes"))
     return out, others
 
 
@@ -2180,11 +2183,13 @@ def cmd_task(args: argparse.Namespace) -> int:
         raise SakoError(f"{row.id} waits for {', '.join(waiting)}; finish those first")
     owner, lines = holder_key(row.claim), text.splitlines()
     if args.command == "claim":
-        if not row.touches:
-            raise SakoError(f"{row.id} needs a Scope before claiming")
+        if not row.touches:  # another session's claim is edited by its holder only
+            raise SakoError(f"{row.id} needs a Scope before claiming"
+                            + (f"; give it one (edit {row.id} --scope PATH)"
+                               if owner in (None, mine) else ""))
         if row.status == "parked":
             raise SakoError(f"{row.id} is parked; once its reason is resolved, "
-                            f"set its Status to open in {runtime_path(roots, active)}")
+                            f"open it (edit {row.id} --open), then claim it")
         if row.status == "claimed" and owner != mine:
             if owner in seen:
                 raise SakoError(f"{row.id} is held by a live session; choose another task")
@@ -2197,8 +2202,10 @@ def cmd_task(args: argparse.Namespace) -> int:
         # past the checks above, any other owner is not seen running and is taken over
         replaced = owner if owner != mine else None
         if clash := overlapping_claim(rows, row, mine, replaced, live, seen):
-            raise SakoError(f"{row.id}'s scope overlaps {clash}"
-                            f"narrow a Scope in {runtime_path(roots, active)}")
+            # in a takeover, neither row is this session's to edit yet
+            raise SakoError(f"{row.id}'s scope overlaps {clash}narrow "
+                            + (f"a Scope in {runtime_path(roots, active)}" if replaced
+                               else f"{row.id}'s scope (edit {row.id} --scope PATH)"))
         moving = [o.id for o in rows if o.status == "claimed" and o.id != row.id
                   and holder_key(o.claim) == replaced and scopes_overlap(row, o)]
         # its process was hidden from here

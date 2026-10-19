@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -150,8 +151,8 @@ class Gate(unittest.TestCase):
     def test_a_session_that_changed_nothing_passes(self):
         fixture.write(self.root, {"src/wip.py": "draft\n", ".sako/work/TASKS.md": fixture.ledger(
             fixture.row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"), fixture.row("T-2", touches="`docs/`"))})
-        stale = ("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, take it over (claim T-1 "
-                 "--takeover REASON), or park it (set its Status to parked with the reason)")
+        stale = ("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over (claim T-1 "
+                 "--takeover REASON), then finish or park it (edit T-1 --park REASON)")
         code, out, err = self.run_in(self.root, "start", session="s1", pid=self.host())
         self.assertEqual(code, 0, out + err)
         self.assertIn(f"  {stale}", out, "start lists another session's stale claim")
@@ -166,8 +167,8 @@ class Gate(unittest.TestCase):
         fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
             fixture.row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"), fixture.row("T-2", touches="`docs/`"))})
         self.start("s1")
-        self.assertIn("note: T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, take it over "
-                      "(claim T-1 --takeover REASON), or park it (set its Status to parked with the reason)",
+        self.assertIn("note: T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over "
+                      "(claim T-1 --takeover REASON), then finish or park it (edit T-1 --park REASON)",
                       self.run_in(self.root, "check", "--gate", session="s1")[1])
         tasks = self.root / ".sako/work/TASKS.md"  # its handoff says it waits on the owner
         tasks.write_text(tasks.read_text().replace("| sk-0101-aaaaaaaaaaaa |", "| parked: owner: approves the copy, 2026-01-02 |"))
@@ -182,6 +183,23 @@ class Gate(unittest.TestCase):
                 self.assertNotIn("T-1 is claimed", out)
         self.assertIn("T-1  parked: owner: approves the copy, 2026-01-02", self.run_in(self.root, "next")[1])
 
+    def test_a_bystander_parks_a_stale_row_with_the_commands_its_note_prints(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"), fixture.row("T-2", touches="`docs/`"))})
+        self.start("s1")
+        note = self.run_in(self.root, "check", "--gate", session="s1")[1]
+        printed = re.findall(r"\(((?:claim|edit) T-1 [^)]*)\)", note)
+        self.assertEqual(printed, ["claim T-1 --takeover REASON", "edit T-1 --park REASON"], note)
+        reasons = iter(("its session ended; its handoff says it waits on the owner", "owner: approves the copy"))
+        for command in printed:  # in order, each REASON filled in
+            code, out, err = self.run_in(self.root, *[next(reasons) if word == "REASON" else word for word in shlex.split(command)],
+                                         session="s1")
+            self.assertEqual(code, 0, out + err)
+        self.assertEqual(out, "T-1: parked, your claim released; recorded locally, not committed\n")
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"),
+                         (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}\n", ""), "no finding or note names it after")
+        self.assertIn("T-1  parked: owner: approves the copy", self.run_in(self.root, "next")[1])
+
     def test_findings_about_this_sessions_claims_or_the_records_block_and_the_rest_are_notes(self):
         row, mine, other = fixture.row, fixture.marker("s1"), "sk-0101-bbbbbbbbbbbb"
         self.start("s1")
@@ -193,13 +211,14 @@ class Gate(unittest.TestCase):
         code, out, _ = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out)
         self.assertIn("note: T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow the scopes", out)
-        self.assertIn(f"note: T-2 is claimed by {other}, which is not a live session; resume it, take it over (claim T-2 "
-                      "--takeover REASON), or park it (set its Status to parked with the reason)", out)
+        self.assertIn(f"note: T-2 is claimed by {other}, which is not a live session; resume it, or take it over (claim T-2 "
+                      "--takeover REASON), then finish or park it (edit T-2 --park REASON)", out)
         fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
             *peers, row("T-3", status="claimed", claim=mine, touches="`src/app.py`"), row("T-4"), row("T-4", touches="`etc/`"))})
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
-        for blocking in ("Ledger: T-1 and T-3 are both claimed and their scopes overlap",
+        for blocking in ("Ledger: T-1 and T-3 are both claimed and their scopes overlap; finish one first or narrow yours "
+                         "(edit T-3 --scope PATH)\n",
                          "Ledger: T-2 and T-3 are both claimed and their scopes overlap", "Ledger: T-4 is defined by 2 rows"):
             self.assertIn(blocking, err)
         self.assertIn("SAKO gate: 3 problem(s) before you stop:", err)
@@ -231,10 +250,24 @@ class Gate(unittest.TestCase):
             row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`src/`"))})
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
-        overlap = "T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow the scopes"
-        self.assertIn(f"  Ledger: {overlap}", err, "this session's own overlap blocks")
-        self.assertIn(f"note: {overlap}", err, "the same words about the two other sessions stay a note")
+        overlap = "T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow "
+        self.assertIn(f"  Ledger: {overlap}yours (edit T-1 --scope PATH)\n", err, "this session's own overlap blocks")
+        self.assertIn(f"note: {overlap}the scopes", err, "the same overlap between the two other sessions stays a note")
         self.assertIn("SAKO gate: 2 problem(s) before you stop:", err, "the repeated ID and the own overlap")
+
+    def test_an_own_overlap_prints_the_edit_that_narrows_this_sessions_row(self):
+        self.start("s1")
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(  # an overlap a hand edit left between two claims
+            fixture.row("T-1", status="claimed", claim=fixture.marker("s1")),
+            fixture.row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`src/lib/`"))})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("  Ledger: T-1 and T-2 are both claimed and their scopes overlap; finish one first or narrow yours "
+                      "(edit T-1 --scope PATH)\n", err)
+        printed = shlex.split(re.search(r"\((edit [^)]*)\)", err)[1])
+        self.assertEqual(self.run_in(self.root, *["src/app.py" if word == "PATH" else word for word in printed], session="s1"),
+                         (0, "T-1: claimed; scope src/app.py; recorded locally, not committed\n", ""))
+        self.assertEqual(self.stop("s1"), (0, "", ""), "narrowed clear of T-2's src/lib/, the overlap is gone")
 
     def test_files_dirty_at_start_count_only_when_they_change_again(self):
         fixture.write(self.root, {"src/pre.py": "draft\n"})
