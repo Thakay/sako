@@ -9,9 +9,9 @@ behavior in full.
 
 | # | Guarantee | Evidence | Missing |
 |---|---|---|---|
-| 1 | **Three rules and a fix in every finding.** Recorded, Proven and Committed apply to the session's own changes, read from Git and the check stamp; an absent or failing check never passes; every finding ends with its exact fix | [test_gate.py](../tests/test_gate.py): each rule and exemption, the fix in every finding, a close refused without fresh evidence; scenarios `stop_gate`, `verify_evidence`, `invalid_configuration_never_passes`; the [demo](demo.md) | None |
-| 2 | **Refuses once, never traps.** A stop is blocked once; a repeated stop, a hook's own error or a missing kit lets the session go; pausing with a held claim passes | A repeated stop fails open; claimed, unfinished work passes; handoff advisories never block; hooks exit 1, never 2, without the kit; a bug in the hook handler and a hook that cannot start Python let the session go | None |
-| 3 | **A receipt on every finished task.** The completion condition, the evidence, the closing session, the date, and what the check said on its own fingerprint, or "no automated check"; never a pass the check did not give | Receipts in each form; an interrupted close finishes on repeat; the demo's receipt; scenario `greenfield_discovery_without_automated_check` | None |
+| 1 | **Three rules and a fix in every finding.** Recorded, Proven and Committed judge what changed in the checkout the gate runs in since the session started, read from Git, the start record and the check stamp; faults in the records and overlaps with the session's claims also block; an absent or failing check never passes; every finding ends with its exact fix | [test_gate.py](../tests/test_gate.py): each rule and exemption, which ledger findings block, the fix in every finding, a close refused without fresh evidence; scenarios `stop_gate`, `verify_evidence`, `invalid_configuration_never_passes`; the [demo](demo.md) | Who made a change, which Git does not show |
+| 2 | **Refuses once, never traps.** A stop is blocked once; a repeated stop, a bug in the hook or a missing kit lets the session go; pausing with a held claim passes; findings about other sessions never block | A repeated stop fails open; claimed, unfinished work passes; handoff advisories and findings about other sessions never block; hooks exit 1, never 2, without the kit; a bug in the hook handler and a hook that cannot start Python let the session go | None |
+| 3 | **A receipt on every finished task.** The completion condition, the evidence, the claim's marker and time, the close time, and what the check said on its own fingerprint and at which commit, or "no automated check", marked "(records only)" for records work closed without the check; never a pass the check did not give | Receipts in each form, records work included; an interrupted close finishes on repeat; the demo's receipt; scenario `greenfield_discovery_without_automated_check` | None |
 | 4 | **Plain, forgiving records.** Markdown tables with at most eight required columns, read by name; your columns and hand edits survive every write; IDs are never reused; a fault names its file and line | Columns by name in any order, your columns kept through close, hand edits, faults with file and line, a bad value held out of `next`; scenario `ledger_findings`; a test holds the required columns at 8 | None |
 | 5 | **One explainable next.** Priority, then row order, among ready tasks; it names its pick and why, what else is ready and what waits | Ranking tests; scenario `next_frontier`; the demo's pickup | None |
 | 6 | **Writes under one lock, across worktrees.** Parallel adds get distinct IDs, one claim wins, overlaps and live owners are refused, a stale takeover needs a reason, and repeated intake reuses its task | Concurrent adds from two worktrees, claim races, unverified holders, repeat intake; scenarios `presence_peers_and_stale_claims`, `scopes_and_overlap`, `interruption_recovery`, `worktrees_share_presence`, `external_plan_intake_and_completion` | Across machines: one writer at a time, stated, not tested |
@@ -59,19 +59,19 @@ passed.
 
 | File | What it proves |
 |---|---|
-| [test_gate.py](../tests/test_gate.py) | The three rules, their exemptions, the rule and fix in every finding, the one-time block, a hook failing on its own, the handoff advisories |
+| [test_gate.py](../tests/test_gate.py) | The three rules and their exemptions, which ledger findings block, records-only closes, the rule and fix in every finding, the one-time block, a hook failing on its own, the handoff advisories |
 | [test_sako.py](../tests/test_sako.py) | The ledger parser and configuration, hand edits, faults with their file and line, `next` ranking; it also runs the scenarios |
 | [test_workflow.py](../tests/test_workflow.py) | Commands end to end: parallel adds and claims, repeat intake, prerequisites, interrupted closes, receipts, handoff folders, `--session` on every command |
 | [test_footprint.py](../tests/test_footprint.py) | The three footprints and the switches between them, worktrees, and one regression per defect the reviews found |
 | [test_compatibility.py](../tests/test_compatibility.py) | Client detection and `--client`, both clients' hook commands and session defaults, presence across process namespaces, refused older installations, unrelated settings kept |
-| [test_release.py](../tests/test_release.py) | Process identity, the package's contents, documentation covered by the check, the budgets, both demo transcripts and the README storyboard against fresh runs, and the links |
+| [test_release.py](../tests/test_release.py) | Process identity, the package's contents, documentation covered by the check, the budgets, pinned sentences, both demo transcripts and the README storyboard against fresh runs, and the links |
 | [selftest.py](../tests/selftest.py) | 22 scenarios, from adoption to recovery; they supply the planning choices, so they prove the mechanics, not an agent's judgment |
 | [demo.py](../tests/demo.py), [measure.py](../tests/measure.py) | Generate the demo pages, the README storyboard and the measurements |
 | [planning-cases.md](../tests/planning-cases.md) | Manual planning trials for outside adopters |
 
-Tests whose premise Windows lacks skip there with a named reason; the Windows-only
-paths (the byte lock, reads without it, retried reads and replaces, the lease, no
-Codex hooks) have their own tests, run on Linux with the platform patched.
+The Windows-only paths (the byte lock, reads without it, retried reads and replaces,
+the lease, no Codex hooks) have their own tests, run on Linux with the platform
+patched.
 
 ## Measured fixture overhead
 

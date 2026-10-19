@@ -5,10 +5,9 @@ a phase plan. The rules are in [Task intake](../SAKO.md#task-intake); these reci
 apply them and add no behavior.
 
 Each recipe turns one selected planner item into one local task per action, with
-`--source` naming the item. The planner stays authoritative: SAKO keeps the
-reference as exact text and never fetches, watches or edits the source. Run the
-same intake again whenever you revisit the planner; the method says how a repeated
-or changed item is handled, and how to return the result.
+`--source` naming the item. The planner stays authoritative, and SAKO never
+fetches, watches or edits the source. Rerun the intake whenever you revisit the
+planner; the method covers repeated and changed items and returning the result.
 
 ## A spec checklist
 
@@ -19,7 +18,7 @@ For checkbox items in a SPEC.md or a README section.
   Line numbers and positions shift when the list changes.
 - Take `--done-when` from the item's acceptance wording.
 - Scope the files the work needs, plus `SPEC.md` when the task ticks the box.
-- Tick the box before `verify` and `close`, and commit it with the work: a tick
+- Tick the box before `verify` and `close`, and commit it with the work. A tick
   after close changes checked content and needs a fresh check. If the spec is the
   owner's, leave the box to them and report the receipt instead.
 
@@ -52,10 +51,10 @@ For an issue such as `owner/repo#42` on GitHub or `ENG-42` in Linear.
 - When one issue needs several local actions, give each its own reference, such
   as `owner/repo#42/1` and `owner/repo#42/2`. A second action under the same
   reference refuses.
-- SAKO never reads or writes the tracker. Return the result through the project's
-  authorized procedure: a comment with the receipt, or a closing reference such as
-  `Fixes owner/repo#42` in the commit that finishes the last action. GitHub, not
-  SAKO, closes the issue when that commit is merged into the default branch.
+- Return the result through the project's authorized procedure: a comment with
+  the receipt, or a closing reference such as `Fixes owner/repo#42` in the commit
+  that finishes the last action. GitHub, not SAKO, closes the issue when that
+  commit is merged into the default branch.
 
 ```sh
 python3 .sako/sako.py add "Import skips blank lines" --done-when "A notes file with blank lines imports without an error" --source owner/repo#42/1 --scope src/

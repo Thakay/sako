@@ -290,6 +290,27 @@ class Words(unittest.TestCase):
             self.assertIn(words, limits)
         self.assertIn("and against faults in the records. It refuses a stop once and names the fix; findings about other "
                       "sessions are only notes", self.text("docs/glossary.md"))
+        validation = self.text("docs/validation.md")
+        self.assertIn("| Who made a change, which Git does not show |", validation)
+        for words in ("apply to the session's own changes", "a hook's own error"):
+            self.assertNotIn(words, validation)
+        self.assertIn("and checks the ledger for faults", self.text("README.md"))
+
+    def test_receipts_are_described_by_their_times_and_the_records_only_form(self):
+        for name in ("SAKO.md", "docs/glossary.md", "docs/validation.md"):
+            self.assertIn("the claim's marker and time, the close time", self.text(name))
+        for name in ("SAKO.md", "docs/validation.md"):
+            self.assertIn("(records only)", self.text(name))
+        self.assertNotIn("the closing session, the date", self.text("docs/validation.md"))
+
+    def test_security_names_every_environment_variable_a_hook_reads(self):
+        source = (self.ROOT / "sako.py").read_text(encoding="utf-8")
+        names = set(re.findall(r'os\.environ\.get\("(\w+)"\)', source)) | set(re.findall(r"\$\{([A-Z_]+)",
+                                                                                          sako.hook_command("claude")))
+        self.assertIn("CLAUDE_PROJECT_DIR", names)
+        security = self.text("SECURITY.md")
+        for name in sorted(names):
+            self.assertIn(f"`{name}`", security)
 
     def test_a_subagent_carries_its_parents_session_id(self):
         beside = self.section("Working beside other sessions")
