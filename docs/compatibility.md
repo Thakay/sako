@@ -23,9 +23,11 @@ as the method says.
 
 `init` prints which clients it wired and why, and `status` says when each client's
 hook last ran, or "not seen yet". A tracked client settings file is left unchanged,
-with a note to add the hooks there yourself or run the commands. A new linked
-worktree needs `init` there for its own hook settings and, for Codex, a writable
-root for the main checkout's `.sako/`.
+with a note to add the hooks there yourself or run the commands; `remove`, or
+dropping that client, also leaves it unchanged, with a note to take SAKO's hooks out
+yourself and the content without them. A new linked worktree needs `init` there for
+its own hook settings and, for Codex, a writable root for the main checkout's
+`.sako/`.
 
 ## Checked live
 
@@ -69,6 +71,11 @@ through the start context.
   it is merged. Claude Code's [worktree guide](https://code.claude.com/docs/en/worktrees)
   suggests adding `.claude/worktrees/` to `.gitignore`, which keeps the folders out
   of `git status`.
+- Claude Code refuses a subagent's write of a file named like a report, such as
+  `REPORT.md`, `report.md` or `FINDINGS.md`, while other names pass, and a
+  subagent's report reaches only the session that started it, as its final message.
+  So that session writes any report file a receipt cites. Seen in use with Claude
+  Code 2.1.291 and 2.1.301 on WSL2, 2026-10-06 to 2026-10-16.
 - `codex exec` records each new checkout it runs in as trusted in your
   `~/.codex/config.toml`.
 - In a Claude Code background session, `/exit` detaches and the session keeps

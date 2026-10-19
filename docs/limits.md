@@ -47,8 +47,8 @@ footprint the records are not in Git; `.sako/` is listed in `.git/info/exclude`,
 
 ## Local coordination
 
-`add`, `claim`, and `close` share an advisory file lock in `.sako/state/`, which
-every worktree of the repository uses. This prevents duplicate allocations and
+`add`, `claim`, `edit` and `close` share an advisory file lock in `.sako/state/`,
+which every worktree of the repository uses. This prevents duplicate allocations and
 competing successful claims among cooperating SAKO commands. Complete file
 replacements avoid partial rows. A busy lock refuses after two seconds so the
 caller can retry. On Windows, whose locks are exclusive, only writes take the lock;
@@ -62,21 +62,40 @@ or other clones. A Git push is not a task lock. Keep one writer for shared files
 avoid overlapping scopes, and serialize shared Git operations. Use separate
 worktrees when you need that isolation.
 
-Worktrees share one ledger, one numbering, one lock and one presence roster; each
-keeps its own check stamp. The gate judges only the checkout it runs in; work in
-another worktree counts once merged, or when `check --gate --session <id>` runs
-there. How Codex's sandbox treats linked worktrees is in
-[compatibility](compatibility.md#client-behavior-worth-knowing).
+`edit` changes a task's Scope, After, Done when and Status, and only its holder
+edits a claimed task. Task and Pri stay hand edits, as does untangling two ended
+sessions' overlapping claims, since neither can be taken over while they overlap.
+`edit --park` replaces the whole Status cell, a takeover note included.
+
+Worktrees share one ledger, one numbering, one ledger lock and one presence roster.
+Each keeps its own stamps and verify lock, so one checkout runs one check at a time,
+named or not. A pass from another checkout counts here on identical checked content
+and the same command, and the receipt names that checkout and its commit; that
+checkout's ignored files and dependencies are not proven here. A failing run removes
+only its own checkout's stamp, so another's pass still counts, even a removed
+worktree's while its folder in `.sako/state/` remains. The gate judges only the
+checkout it runs in; work in another worktree counts once merged, or when
+`check --gate --session <id>` runs there. How Codex's sandbox treats linked
+worktrees is in [compatibility](compatibility.md#client-behavior-worth-knowing).
 
 In a shared checkout the gate sees what changed, not who changed it. Closing a task
 scoped `.` makes the Committed fix stage every uncommitted change made here between
 your start and its close, a peer's included; check `git status` first, or narrow the
 scope. Recorded cannot tell who made a commit either, so another session's closed
 task can excuse your commit, while a peer's commit of its closed work on a later
-day, even just after midnight or in another time zone, counts against you. A closed
-task still covers edits made in the minute it closed, so read `git diff` before
-following a Committed fix. A peer's edits to checked content also make your check
-stale.
+day, even just after midnight or in another time zone, counts against you. Recorded
+reads the commits after your start revision from a minute before your start, since
+a wall clock can step back. A closed task still covers edits made in the minute it
+closed, so read `git diff` before following a Committed fix. A peer's edits to
+checked content also make your check stale.
+
+Claim refuses overlap only with claimed rows, so a live peer in your checkout can
+claim a scope over your closed files, and `.` covers them all. While that peer is
+live, which is up to 24 hours after its last start when SAKO cannot verify it, edits
+and commits in its scope count as its own under Recorded and Proven, whoever made
+them. Committed still names your uncommitted closed files, except one written again
+in a later minute than your close. The backstop is the peer's own close, which needs
+a fresh check.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
 different branches keep separate ledgers. They can allocate the same task ID and
@@ -91,11 +110,13 @@ Presence only estimates liveness; the method explains
 [how it works](../SAKO.md#pause-handoff-and-takeover). PID reuse, containers and
 unexpected wrappers, such as a `timeout` around the command, can misrepresent it,
 and a session without an end event can appear live until its host exits or its 24
-hours pass. On Linux and WSL a restart ends presence. A claim left on purpose for
-another session reads as stale to every other session until it is taken over;
-close your part and leave the rest as a second row.
-Do not give concurrent workers the same session ID. A helper on its parent's ID is
-the parent, so the ledger shows no separate holder for it.
+hours pass. On Linux and WSL a restart ends presence. SAKO reads all peers'
+progress for `start` and `status` within 2 seconds, so a slow checkout's line says
+"not read in time". A peer in your own checkout lists your uncommitted paths too. A
+claim left on purpose for another session reads as stale to every other session
+until it is taken over; close your part and leave the rest as a second row. Do not
+give concurrent workers the same session ID. A helper on its parent's ID is the
+parent, so the ledger shows no separate holder for it.
 
 ## Records and evidence
 
@@ -103,7 +124,8 @@ This is a deliberately narrow Markdown table parser. It recognizes `T-<number>`
 rows in tables whose header names the required columns, and fenced examples. It
 detects task-like malformed IDs and shapes; it cannot recognize arbitrary prose
 as a lost task. Task cells can contain references; they are not a full issue
-schema.
+schema. SAKO does not check the commits, paths or links a receipt cites, and keeps
+no lasting map from a marker to its session.
 
 Of a file's mode, the [fingerprint](../SAKO.md#the-gate-and-checks-in-detail)
 counts only the owner's executable bit, the one Git tracks. It leaves out ignored
@@ -121,11 +143,19 @@ Git ignores the executable bit. A change to only that bit, on a file with no
 uncommitted changes at the start, then makes the check stale without counting as the
 session's change. Run `verify` after such a change.
 
+Whether a closed task still covers an uncommitted file goes by when the file was
+last written, not by what it holds. A stash and its pop, a Git hook, a formatter or
+an editor save that rewrites the file in a later minute than the close makes
+Recorded list it as "changed after you closed T-n", or after a live peer in your
+checkout closed it; the fix then starts with committing it under that task's title
+when the content is still its work. Deletions and renames after the close stay the
+closed task's, since a missing file has no write time and a rename keeps the old one.
+
 The before/after fingerprint detects persistent changes during a check, not an
-edit that changes and returns to identical bytes during the run. Verification is
-serialized with other SAKO verification commands, not with application editors.
-Large trees increase hashing and start/gate cost. Narrow coverage responsibly;
-no large-repository benchmark has been established.
+edit that changes and returns to identical bytes during the run. Verification in a
+checkout is serialized with other SAKO verification there, not with application
+editors. Large trees increase hashing and start/gate cost. Narrow coverage
+responsibly; no large-repository benchmark has been established.
 
 `check` can be consistent while evidence is absent or stale. It checks the
 ledger's structure and reports automated evidence separately. Its exit status does
@@ -133,9 +163,11 @@ not require a passing baseline or judge the project's direction or a task's
 acceptance condition; planning and those judgments belong to the agent and owner.
 The finish gate checks only recorded ownership, scoped changes, and its evidence
 conditions, judging ownership at the stop, not at each write, so a late claim covers
-earlier edits. It cannot prove the requested behavior, honest task wording, complete
-scope declarations, test quality, deployment health, or that another process will
-not edit after the check.
+earlier edits. A named check, run by `verify NAME`, is evidence, not a gate rule,
+since `close` and the Proven rule read only the pass of `verify_command`; a receipt
+lists a named check's pass only while it is fresh. The gate cannot prove the
+requested behavior, honest task wording, complete scope declarations, test quality,
+deployment health, or that another process will not edit after the check.
 
 The Committed fix for receipts stages only the two ledger files, whole, so it can
 carry another session's pending rows and leaves other files you keep in `.sako/` to
