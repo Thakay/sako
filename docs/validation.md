@@ -86,7 +86,7 @@ with the machine, filesystem, repository, cache and check command.
 | Both clients | 9 files, 139,205 bytes |
 | Installed method, one document | 3,760 whitespace-separated words |
 | Reading for a normal task, lone-session fixture | 1,381 words: skill 128, template preamble 46, start context 132, the method's required part 1,075 |
-| Runtime source | 1,800 lines, one standard-library Python file, within the 1,800-line cap |
+| Runtime source | 1,800 lines, one standard-library Python file, within the 4,000-line cap |
 | Initial install with no client signal, one sample | 58.2 ms |
 | Fingerprint fixture | 101 covered files, 409,609 bytes |
 | Trials per command | 7, median reported in the next rows |

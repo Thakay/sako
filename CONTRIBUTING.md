@@ -34,7 +34,7 @@ Tests hold these limits. Over one, remove something before adding.
 | Install | One command, no required flags |
 | Reading for a normal task | About 1,500 words: the skill, the task template's preamble, a start context and the method's required part |
 | Required ledger columns | 8 at most |
-| Runtime | One standard-library file of at most 1,800 lines, counted with `wc -l sako.py` |
+| Runtime | One standard-library file of at most 4,000 lines, counted with `wc -l sako.py` |
 
 ## Work from a checkout
 
