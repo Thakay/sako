@@ -19,10 +19,10 @@ In the project, with no flags. The project has a `CLAUDE.md`, so Claude Code get
 ```text
 $ python3 ../sako/sako.py init
 SAKO installed in .sako/ (local). Nothing tracked changed; the folder is listed in .git/info/exclude.
-Records: .sako/work/TASKS.md and DONE.md. They are not in Git yet; git clean -x deletes them.
+Records: .sako/work/TASKS.md and DONE.md. They are not in Git yet; git clean -dx deletes them.
   Keep their history, or share them privately:  uvx sako init --repo [url]
   Commit them with the code:                    uvx sako init --shared
-Hooks written: Claude Code (.claude/settings.local.json), chosen from CLAUDE.md. Start a session to begin. Change the client with: uvx sako init --client claude|codex|none.
+Hooks: Claude Code (.claude/settings.local.json), chosen from CLAUDE.md. Start a session to begin. Change the client with: uvx sako init --client claude|codex|none.
 ```
 
 The check is the project's own `check.py`, set in `.sako/config.json` as `"verify_command": ["python3", "check.py"]`.
@@ -33,14 +33,14 @@ The owner opens the agent in their coding tool. Its hook registers the existing 
 
 ```text
 $ # Claude Code's SessionStart hook (demo-agent)
-sako 0.5.1 · work /work/greeting (main @ 689762746)
-This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
+sako 0.6.0 · work /work/greeting (main @ 689762746)
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-agent
-your marker: sk-0115-7a281dacac30  (use claim to record task ownership)
+your marker: sk-0115-7a281dacac30
 session: "demo-agent" (use this ID with --session)
 peers: none recorded
-evidence: none; no passing check recorded; run: sako.py verify
+evidence: none; no passing check recorded; run sako.py verify, which runs python3 check.py
 ledger: consistent
 next: nothing is ready
 no recorded work: establish direction and one useful action with the selected planner or work source.
@@ -65,17 +65,17 @@ SAKO gate: 1 problem(s) before you stop:
 
 ## 3. The agent fixes it
 
-It claims the task and runs the check, which fails: the output lacks the comma and the exclamation mark.
+It claims the task and runs the check, which fails because the output lacks the comma and the exclamation mark.
 
 ```text
 $ python3 .sako/sako.py claim T-1 --session demo-agent
-T-1: claimed; recorded locally, not committed. If it pauses or needs working notes, keep them in .sako/work/T-1-a-named-visitor-gets/ (handoff.md for where it stands).
+T-1: claimed; recorded locally, not committed. Working notes go in .sako/work/T-1-a-named-visitor-gets/. If this session ends before closing it, the claim reads as stale and another session may take it over with a reason, so write handoff.md there first, with where it stands.
 ```
 
 ```text
 $ python3 .sako/sako.py verify
-check: FAILED (exit 1) after 0s; no stamp written
 expected Hello, Ada! but got Hello Ada
+check: FAILED (exit 1) after 0s; no stamp written; output in /work/greeting/.sako/state/verify-failed.log
 (exit 1)
 ```
 
@@ -84,7 +84,7 @@ It fixes `greeting.py`, checks again, and closes the task with its evidence.
 ```text
 $ python3 .sako/sako.py verify
 greeting check passed
-check: PASS in 0s; covered 3 file(s); stamp bcb4b12f530eb1ce -> /work/greeting/.sako/state/stamp.json
+check: PASS in 0s; covered 3 file(s); stamp bcb4b12f530eb1ce -> /work/greeting/.sako/state/stamp.json; output in /work/greeting/.sako/state/verify.log
 ```
 
 ```text
@@ -92,13 +92,13 @@ $ python3 .sako/sako.py close T-1 --session demo-agent --evidence "greeting.py p
 T-1: done; recorded locally, not committed
 ```
 
-Stopping now is refused again: the work is closed but not committed.
+Stopping now is refused again, since the work is closed but not committed.
 
 ```text
 $ # Claude Code's Stop hook (demo-agent)
 SAKO gate: 1 problem(s) before you stop:
   Committed: T-1 is closed but its changes are not committed: greeting.py
-    fix: git add -- greeting.py, then git commit -m 'T-1: A named visitor gets a personal greeting' when the owner has allowed commits in this session; otherwise ask, or say in your reply: T-1 closed, commit awaiting approval.
+    fix: git add -- greeting.py, then git commit -m 'A named visitor gets a personal greeting' when the owner has allowed commits in this session; otherwise ask, or say in your reply: T-1 closed, commit awaiting approval.
 (exit 2)
 ```
 
@@ -107,7 +107,7 @@ $ git add -- greeting.py
 ```
 
 ```text
-$ git commit -qm "T-1: A named visitor gets a personal greeting"
+$ git commit -qm "A named visitor gets a personal greeting"
 ```
 
 Before leaving, the agent records the owner's next request. Now the gate is clear.
@@ -129,11 +129,11 @@ $ # Claude Code's SessionEnd hook (demo-agent)
 
 ## 4. The receipt
 
-The done record pairs the task's completion condition with the evidence, the closing session, the date and what the check said.
+The done record pairs the task's completion condition with the evidence, the closing session and when it claimed the task, the close time, and what the check said at which commit.
 
 ```text
 $ tail -1 .sako/work/DONE.md
-| T-1 | A named visitor gets a personal greeting | python3 greeting.py Ada prints Hello, Ada! | greeting.py prints Hello, Ada!; check.py passes [sk-0115-7a281dacac30; closed 2026-01-15; check pass 2026-01-15T09:30:00+0000 on bcb4b12f530eb1ce] | `greeting.py` | - |
+| T-1 | A named visitor gets a personal greeting | python3 greeting.py Ada prints Hello, Ada! | greeting.py prints Hello, Ada!; check.py passes [sk-0115-7a281dacac30 since 2026-01-15T09:30+0000; closed 2026-01-15T09:30+0000; check pass 2026-01-15T09:30:00+0000 on bcb4b12f530eb1ce at 68976274634f plus uncommitted changes] | `greeting.py` | - |
 ```
 
 ## 5. A fresh session picks up
@@ -142,16 +142,16 @@ The owner opens a new conversation in the coding tool. Its hook checks it in wit
 
 ```text
 $ # Claude Code's SessionStart hook (demo-next)
-sako 0.5.1 · work /work/greeting (main @ 8b1102e9b)
-This project uses SAKO for task execution: before carrying out a project task, read .sako/SAKO.md and follow its daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.
+sako 0.6.0 · work /work/greeting (main @ 7500e251e)
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next
-your marker: sk-0115-a5133dc77184  (use claim to record task ownership)
+your marker: sk-0115-a5133dc77184
 session: "demo-next" (use this ID with --session)
 peers: none recorded
 evidence: fresh; last pass 2026-01-15T09:30:00+0000 on content bcb4b12f530eb1ce
 ledger: consistent
-next: T-2 (P2, the only ready task): An empty name gets a clear error
+next, if no task was named for you: T-2 (P2, the only ready task): An empty name gets a clear error
   done when: python3 greeting.py with no name prints Usage: greeting.py NAME
   scope: greeting.py
 (exit 0)

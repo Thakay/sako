@@ -31,8 +31,8 @@ records allow one writer at a time. Move once; do not run two task systems.
 
 3. **Link prerequisites in a second pass**, once every item has an id: each ID in
    After becomes a blocked-by link.
-4. **Keep `DONE.md` as the history.** It is plain Markdown, but not in Git, and
-   `git clean -x` deletes it: keep a copy.
+4. **Keep `DONE.md` as the history.** It is plain Markdown, but not in Git;
+   `git clean -dx` deletes it, so keep a copy.
 5. **Choose how work runs from now on.**
    - **Keep SAKO for execution.** The tracker is the authority for intent and
      status; a local row holds only ownership, scope and evidence. Take in each item

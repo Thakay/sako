@@ -104,7 +104,7 @@ class Compatibility(unittest.TestCase):
     @unittest.skipIf(fixture.WINDOWS, fixture.NO_CODEX)
     def test_the_client_flag_replaces_the_choice_and_clears_what_it_no_longer_needs(self):
         printout = self.fresh("switch", {"AGENTS.md": "rules\n"})
-        self.assertIn("Hooks written: Claude Code (.claude/settings.local.json) and Codex (.codex/hooks.json, "
+        self.assertIn("Hooks: Claude Code (.claude/settings.local.json) and Codex (.codex/hooks.json, "
                       "which runs them only after you trust them in Codex), chosen from AGENTS.md", printout)
         claude_skill = self.root / ".claude/skills/sako/SKILL.md"
         self.assertIn("chosen from --client.", fixture.succeeds(fixture.seed(self.root, "--client", "codex")))
@@ -304,22 +304,35 @@ class Compatibility(unittest.TestCase):
         self.cli("end", session="conversation-one")
         self.assertEqual(sako.read_presence(roots), [])
 
-    def test_a_claude_code_session_needs_no_session_flag(self):
+    def test_a_claude_code_session_and_its_subagents_need_no_session_flag(self):
+        """In Claude Code, as in Codex, a subagent's shell carries its parent's session ID, so a command there without
+        --session acts as the parent. A helper given an ID of its own passes it on every command."""
         host = self.host()
 
         def run(*args, **env):
             return subprocess.run([sys.executable, str(fixture.SAKO), *args], cwd=self.root, text=True,
                                   capture_output=True, env=dict(fixture.ENV, SAKO_AGENT_PID=str(host.pid), **env))
 
-        fixture.succeeds(run("start", CLAUDE_CODE_SESSION_ID="conversation-main"))
-        fixture.succeeds(run("claim", "T-1", CLAUDE_CODE_SESSION_ID="conversation-main"))
-        self.assertIn(sako.marker_for("conversation-main"), (self.root / ".sako/work/TASKS.md").read_text())
-        refusal = run("close", "T-1", "--evidence", "Checked", CLAUDE_CODE_SESSION_ID="subagent-own-id")
+        parent, main = sako.marker_for("conversation-main"), {"CLAUDE_CODE_SESSION_ID": "conversation-main"}
+        subagent = dict(main, CLAUDE_CODE_CHILD_SESSION="1")  # main sessions' shells set it too, so it tells nothing apart
+        fixture.succeeds(run("start", **main))
+        fixture.succeeds(run("claim", "T-1", **main))
+        self.assertIn(parent, (self.root / ".sako/work/TASKS.md").read_text())
+        self.assertIn(f"you: {parent} since ", fixture.succeeds(run("status", **subagent)), "the subagent is its parent here")
+        self.cli("add", "Record the sample", "--scope", "src/sample/")
+        refusal = run("claim", "T-10", "--session", "helper-own-id", **subagent)
         self.assertEqual(refusal.returncode, 3, refusal.stderr)
-        self.assertIn("session 'subagent-own-id' has not started here; pass --session", refusal.stderr)
-        explicit = run("close", "T-1", "--evidence", "Checked", "--session", "conversation-main",
-                       CLAUDE_CODE_SESSION_ID="subagent-own-id")
-        fixture.succeeds(explicit)
+        self.assertIn("session 'helper-own-id' has not started here; pass --session", refusal.stderr)
+        fixture.succeeds(run("start", "--session", "helper-own-id", **subagent))
+        refusal = run("claim", "T-10", "--session", "helper-own-id", **subagent)
+        self.assertEqual(refusal.returncode, 3, refusal.stderr)
+        self.assertIn(f"T-10's scope overlaps T-1 (src/), claimed by {parent}; wait for it to close, or ", refusal.stderr,
+                      "a helper on its own ID is another holder, refused inside its parent's claim")
+        fixture.succeeds(run("close", "T-1", "--evidence", "Checked", **subagent))
+        receipt = sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})[0].evidence
+        self.assertTrue(receipt.startswith(f"Checked [{parent} since "), "the subagent closes as its parent")
+        self.assertEqual(fixture.succeeds(run("end", **subagent)), "sako: presence ended\n")
+        self.assertIsNone(sako.my_entry(sako.resolve_roots(self.root), "conversation-main"), "and ends its parent's presence")
         fixture.succeeds(run("status", SAKO_SESSION="conversation-main", CLAUDE_CODE_SESSION_ID="other"))
         self.assertIn("needs --session <id>, SAKO_SESSION, or the session ID of Claude Code or Codex", run("end").stderr)
 
@@ -350,12 +363,12 @@ class Compatibility(unittest.TestCase):
                                 env=dict(env, CLAUDE_CODE_SESSION_ID="outer"))  # one client inside the other: no default
         self.assertIn("your rows: none", fixture.succeeds(nested))
 
-    def hidden(self, session, seen):
+    def hidden(self, session, seen, ns="pid:[elsewhere]"):
         """A presence entry whose host another PID namespace hides, as a client's sandbox shows the hook's entry."""
         path = sako.presence_dir(sako.resolve_roots(self.root)) / f"{sako.session_key(session)}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"marker": sako.marker_for(session), "session_id": session, "pid": 2 ** 22,
-                                    "ns": "pid:[elsewhere]", "seen": seen, "started": "2026-01-01T00:00:00+0000",
+                                    "ns": ns, "seen": seen, "started": "2026-01-01T00:00:00+0000",
                                     "started_at": seen, "work_root": str(self.root), "branch": "main",
                                     "work_start_rev": fixture.git(self.root, "rev-parse", "HEAD"), "dirty_at_start": {}}))
 
@@ -375,6 +388,67 @@ class Compatibility(unittest.TestCase):
         fixture.succeeds(fixture.installed(self.root, "remove"))
         hooks = json.loads((self.root / ".claude/settings.local.json").read_text())["hooks"]
         self.assertEqual([h["command"] for e in events for entry in hooks[e] for h in entry["hooks"]], ["echo mine"] * 3)
+
+    def test_update_replaces_the_previous_release_hook_command(self):
+        previous = ('c="$(git rev-parse --path-format=absolute --git-common-dir)"; k="${c%/.git}/.sako/sako.py"; '
+                    '[ -f "$k" ] || { echo "sako: no kit at $k; run: uvx sako init" >&2; exit 1; }; '
+                    'exec python3 "$k" hook claude')
+        fixture.succeeds(fixture.seed(self.root, "--client", "claude"))
+        linked, unwired = self.root.parent / "project-linked", self.root.parent / "project-unwired"
+        for checkout in (linked, unwired):
+            fixture.git(self.root, "worktree", "add", "-q", str(checkout))
+        fixture.succeeds(fixture.seed(linked))
+        for checkout in (self.root, linked):
+            path = checkout / sako.hook_file("claude")
+            settings = json.loads(path.read_text())
+            for entries in settings["hooks"].values():
+                entries[0]["hooks"][0]["command"] = previous
+            settings["hooks"]["Stop"].insert(0, {"hooks": [{"type": "command", "command": "echo mine"}]})
+            path.write_text(json.dumps(settings))
+        fixture.succeeds(fixture.seed(self.root, "--update"))
+        for checkout in (self.root, linked):
+            for event, entries in json.loads((checkout / sako.hook_file("claude")).read_text())["hooks"].items():
+                commands = [h["command"] for entry in entries for h in entry["hooks"]]
+                self.assertEqual(commands, ["echo mine"] * (event == "Stop") + [sako.hook_command("claude")],
+                                 f"{checkout.name} {event}: a linked worktree's entries are refreshed from the main checkout")
+        self.assertFalse((unwired / sako.hook_file("claude")).exists(), "a worktree that has no SAKO hooks gets none")
+
+    def test_a_tracked_settings_file_is_left_unchanged_and_the_note_gives_the_content_to_write(self):
+        team, hooks = '{"permissions": {"allow": []}}\n', sako.hook_file("claude")
+        fixture.write(self.root, {hooks: team})
+        fixture.git(self.root, "add", "-f", hooks)  # forced, since Claude Code may list the file in a global ignore
+        fixture.commit_all(self.root, "the team's settings")
+        linked = self.root.parent / "project-team"  # a branch whose tracked file holds SAKO's hook from an older release
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "team", str(linked))
+        settings = json.loads(sako.edit_hooks(team, "claude"))
+        for entries in settings["hooks"].values():
+            entries[0]["hooks"][0]["command"] = "python3 .sako/sako.py hook claude"
+        older = json.dumps(settings, indent=2) + "\n"
+        fixture.write(linked, {hooks: older})
+        fixture.git(linked, "add", "-f", hooks)
+        fixture.commit_all(linked, "the team's hooks")
+        printout = fixture.succeeds(fixture.seed(self.root, "--client", "claude"))
+        self.assertEqual(((self.root / hooks).read_text(), (linked / hooks).read_text()), (team, older), "tracked files never change")
+        self.assertIn("Hooks: Claude Code (.claude/settings.local.json), chosen from --client.", printout)
+        lead = ("Claude Code: .claude/settings.local.json is tracked, so SAKO left it unchanged; run start, check --gate and end "
+                "explicitly, or give it this content yourself:\n")
+        self.assertIn(lead, printout)
+        self.assertEqual(json.JSONDecoder().raw_decode(printout.split(lead)[1])[0], json.loads(sako.edit_hooks(team, "claude")),
+                         "the file's own settings with SAKO's hooks added")
+        self.assertIn(f"Claude Code: {(linked / hooks).resolve().as_posix()} is tracked, so SAKO left it unchanged;", printout,
+                      "another checkout's file is named in full")
+
+    def test_remove_or_a_dropped_client_leaves_a_tracked_settings_file_and_says_to_take_sakos_hooks_out(self):
+        hooks = sako.hook_file("claude")
+        fixture.succeeds(fixture.seed(self.root, "--client", "claude"))
+        fixture.git(self.root, "add", "-f", hooks)  # forced, since Claude Code may list the file in a global ignore
+        fixture.commit_all(self.root, "the team's hooks")
+        wired = (self.root / hooks).read_text()
+        note = ("Claude Code: .claude/settings.local.json is tracked, so SAKO left it unchanged; remove SAKO's hooks from it "
+                "yourself; without them it reads:\n{}\n")
+        self.assertIn(note, fixture.succeeds(fixture.seed(self.root, "--update", "--client", "none")))
+        self.assertIn(note, fixture.succeeds(fixture.installed(self.root, "remove")), "remove names the hooks it could not remove")
+        self.assertEqual((self.root / hooks).read_text(), wired, "a tracked file never changes")
 
     def test_on_windows_codex_gets_no_hooks_and_a_note_says_why(self):
         self.root, printed = fixture.make_repo(Path(self.workspace.name) / "windows", {"AGENTS.md": "rules\n"}), []
@@ -415,6 +489,56 @@ class Compatibility(unittest.TestCase):
         self.hidden("sandboxed", int(time.time()) - sako.LEASE - 1)
         self.assertIn("T-10 is claimed by", self.cli("check", expected=1), "past its lease the claim is stale")
         self.assertTrue(sako.my_entry(sako.resolve_roots(self.root), "sandboxed"), "and its starting facts stay on disk")
+
+    @unittest.skipUnless(Path("/proc/sys/kernel/random/boot_id").is_file(), "needs a kernel that names each boot (Linux)")
+    def test_a_session_from_before_a_restart_has_ended_and_a_resume_keeps_its_starting_facts(self):
+        started = int(time.time()) - 60
+        self.hidden("restarted", started)
+        self.cli("claim", "T-1", session="restarted")
+        self.hidden("restarted", started, ns="pid:[elsewhere] boot earlier")  # the machine restarted since
+        self.assertIn("T-1 is claimed by", self.cli("check", expected=1), "its claim is stale at once, not after the lease")
+        self.cli("start", session="restarted", pid=self.host().pid)
+        self.assertEqual(sako.my_entry(sako.resolve_roots(self.root), "restarted")["started_at"], started,
+                         "a resume keeps its starting facts")
+        self.assertIn("ledger: consistent", self.cli("check"))
+
+    @unittest.skipUnless(Path("/proc/sys/kernel/random/boot_id").is_file(), "needs a kernel that names each boot (Linux)")
+    def test_a_resume_in_a_sandbox_after_a_restart_counts_by_its_lease(self):
+        started = int(time.time()) - 60
+        self.hidden("resumed", started, ns="pid:[elsewhere] boot earlier")  # the hook's entry, from before a restart
+        self.cli("start", session="resumed", pid=2 ** 22)  # no host visible from here, and no hook ran
+        entry = sako.my_entry(sako.resolve_roots(self.root), "resumed")
+        self.assertEqual((entry["pid"], entry["started_at"]), (0, started), "the ended host goes and the starting facts stay")
+        self.assertEqual(entry["ns"], sako.PID_NS, "it names this boot, so the next restart ends it")
+        self.assertIn("T-1: claimed", self.cli("claim", "T-1", session="resumed"))
+        self.assertIn("ledger: consistent", self.cli("check"), "its claim counts as live for the lease")
+
+    def test_a_takeover_blocked_by_a_hidden_sessions_overlapping_claim_offers_to_wait(self):
+        ended, hidden = sako.marker_for("ended-session"), sako.marker_for("sandboxed")
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim=ended),
+            fixture.row("T-2", status="claimed", claim=hidden, touches="`src/app.py`"))})
+        self.hidden("sandboxed", int(time.time()))
+        host = self.host()
+        self.cli("start", session="host-session", pid=host.pid)
+        reason = ("--takeover", "its session ended; inspected its work")
+        self.assertIn(f"T-1's scope overlaps T-2 (src/app.py), claimed by {hidden}; neither claim can be taken over while they "
+                      "overlap, so wait for it to close, or narrow a Scope in .sako/work/TASKS.md",
+                      self.cli("claim", "T-1", *reason, session="host-session", expected=3))
+        self.assertIn(f"T-2's scope overlaps T-1 (src/), claimed by {ended}; neither claim can be taken over while they overlap, "
+                      "so narrow a Scope in .sako/work/TASKS.md", self.cli("claim", "T-2", *reason, session="host-session", expected=3))
+
+    def test_a_claim_overlapping_a_hidden_sessions_claim_offers_to_wait_until_its_lease_ends(self):
+        hidden = sako.marker_for("sandboxed")
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim=hidden), fixture.row("T-2", touches="`src/app.py`"))})
+        self.cli("start", session="host-session", pid=self.host().pid)
+        takeover = "if it stopped, inspect its handoff and take it over first (claim T-1 --takeover REASON), or "
+        for seen, wait in ((int(time.time()), "wait for it to close, or "), (int(time.time()) - sako.LEASE - 1, "")):
+            with self.subTest(live=bool(wait)):  # live but unverified within its lease, stale past it
+                self.hidden("sandboxed", seen)
+                self.assertIn(f"T-2's scope overlaps T-1 (src/), claimed by {hidden}; {wait}{takeover}narrow a Scope in "
+                              ".sako/work/TASKS.md", self.cli("claim", "T-2", session="host-session", expected=3))
 
     @unittest.skipUnless(shutil.which("bwrap") and subprocess.run(
         ["bwrap", "--dev-bind", "/", "/", "--unshare-pid", "--proc", "/proc", "true"], capture_output=True).returncode == 0,

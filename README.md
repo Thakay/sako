@@ -104,8 +104,8 @@ explains setup and how to confirm the hooks ran.
 SAKO coordinates existing agent sessions. You or your agent platform launch
 and direct them. The agents share a Markdown **task ledger**. A **finish gate**
 checks their work
-against three rules: **Recorded**, **Proven**, and **Committed**. Closed tasks
-leave receipts for review and future sessions.
+against three rules, **Recorded**, **Proven**, and **Committed**, and checks the
+ledger for faults. Closed tasks leave receipts for review and future sessions.
 
 ![You direct agent sessions. They invoke SAKO through commands or hooks. SAKO reads and writes task records, runs your configured checks, and reads Git state. It returns context and findings to the agents.](https://raw.githubusercontent.com/Thakay/sako/main/docs/assets/readme/how-it-works.svg)
 

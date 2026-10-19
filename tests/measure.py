@@ -54,12 +54,14 @@ def main():
                 fixture.succeeds(fixture.installed(project, *args, pid=pid))
                 samples[name].append((time.perf_counter() - started) * 1000)
         fixture.kill(pid)
+        reading = fixture.reading()[0]  # counted as the budget test counts it
         output = {"python": platform.python_version(), "platform": platform.system(),
                   "git": subprocess.check_output(["git", "--version"], text=True).strip(),
                   "no_signal_install": footprint, "no_signal_install_ms_single_sample": round(install_ms, 1),
                   "single_client_installs": clients,
                   "both_clients": integrated,
                   "runtime_lines": len(fixture.SAKO.read_text().splitlines()),
+                  "reading_words": dict(reading, total=sum(reading.values())),
                   "covered_files": 101, "covered_bytes": 409609,
                   "trials_per_command": 7,
                   "command_median_ms": {name: round(statistics.median(values), 1) for name, values in samples.items()}}

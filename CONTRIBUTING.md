@@ -68,9 +68,9 @@ git diff --check
 ```
 
 Run both suites on Python 3.10 when available; CI runs them on Linux, Windows and
-macOS. The scenario suite is also part of discovery, so the counts overlap. Tests use
-temporary repositories and process stand-ins: they do not establish live-client
-behavior or newcomer usability. Add a focused regression for a behavior bug.
+macOS. Tests use temporary repositories and process stand-ins. They do not establish
+live-client behavior or newcomer usability. Add a focused regression for a behavior
+bug.
 
 ## Documentation
 
@@ -83,7 +83,7 @@ behavior or newcomer usability. Add a focused regression for a behavior bug.
 - The `Links` test in `tests/test_release.py` checks that every relative link and
   heading anchor resolves, that the README's links to this repository point at real
   files, and that no page has an em dash.
-- The [demo](docs/demo.md) is generated: after a change to what it shows, run
+- The [demo](docs/demo.md) is generated. After a change to what it shows, run
   `PYTHONDONTWRITEBYTECODE=1 python3 tests/demo.py > docs/demo.md` and never edit
   the page by hand.
 - Update [validation](docs/validation.md) when measured results or their scope
@@ -137,5 +137,5 @@ No session links. Agents working from a fork follow
 
 One maintainer reviews and decides; decisions live in issues and pull requests.
 Expect a first reply within 7 days, and within 14 days for a security report. There
-is no contributor license agreement: under GitHub's terms of service, a contribution
+is no contributor license agreement. Under GitHub's terms of service, a contribution
 is licensed under the repository's MIT license.

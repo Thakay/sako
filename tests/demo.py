@@ -42,10 +42,11 @@ class Demo:
 
     def normalize(self, text: str) -> str:
         text = text.replace(str(self.root.parent), "/work").replace(str(fixture.SAKO), "../sako/sako.py")
+        text = text.replace(sys.executable, "python3")  # the configured check command, as the page shows it
         text = re.sub(r"\bsk-\d{4}-", "sk-0115-", text)
         text = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d{4}", "2026-01-15T09:30:00+0000", text)
         text = re.sub(r"\d{4}-\d\d-\d\d \d\d:\d\d", "2026-01-15 09:30", text)
-        text = re.sub(r"closed \d{4}-\d\d-\d\d", "closed 2026-01-15", text)
+        text = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d[+-]\d{4}", "2026-01-15T09:30+0000", text)
         return re.sub(r"(PASS in|after) \d+s", r"\1 0s", text)
 
     def say(self, text: str) -> None:
@@ -105,7 +106,7 @@ def main() -> None:
             demo.say("The agent edits `greeting.py` but never claims the task, then tries to stop. The gate "
                      "refuses; exit 2 keeps the session going and shows the agent the message.")
             demo.hook("Stop", "demo-agent", expect=2)
-            demo.say("## 3. The agent fixes it\n\nIt claims the task and runs the check, which fails: the "
+            demo.say("## 3. The agent fixes it\n\nIt claims the task and runs the check, which fails because the "
                      "output lacks the comma and the exclamation mark.")
             demo.sako("claim", "T-1", "--session", "demo-agent")
             demo.sako("verify", expect=1)
@@ -114,17 +115,18 @@ def main() -> None:
             demo.sako("verify")
             demo.sako("close", "T-1", "--session", "demo-agent", "--evidence",
                       "greeting.py prints Hello, Ada!; check.py passes")
-            demo.say("Stopping now is refused again: the work is closed but not committed.")
+            demo.say("Stopping now is refused again, since the work is closed but not committed.")
             demo.hook("Stop", "demo-agent", expect=2)
             demo.git("add", "--", "greeting.py")
-            demo.git("commit", "-qm", "T-1: A named visitor gets a personal greeting")
+            demo.git("commit", "-qm", "A named visitor gets a personal greeting")
             demo.say("Before leaving, the agent records the owner's next request. Now the gate is clear.")
             demo.sako("add", "An empty name gets a clear error", "--done-when",
                       "python3 greeting.py with no name prints Usage: greeting.py NAME", "--scope", "greeting.py")
             demo.hook("Stop", "demo-agent")
             demo.hook("SessionEnd", "demo-agent")
             demo.say("## 4. The receipt\n\nThe done record pairs the task's completion condition with the "
-                     "evidence, the closing session, the date and what the check said.")
+                     "evidence, the closing session and when it claimed the task, the close time, and what the "
+                     "check said at which commit.")
             demo.run("tail -1 .sako/work/DONE.md", ["tail", "-1", ".sako/work/DONE.md"])
             demo.say("## 5. A fresh session picks up\n\nThe owner opens a new conversation in the coding tool. "
                      "Its hook checks it in with SAKO and gets the records and next task from the files.")
@@ -227,7 +229,7 @@ def coordination() -> tuple[str, dict[str, str]]:
                      "with SAKO and gets the current check evidence and the next task from the files.")
             context = demo.sako("start", "--session", "demo-next")
             captured["next_task"] = next(line.split("): ", 1)[1] for line in context.splitlines()
-                                         if line.startswith("next: T-3 ("))
+                                         if line.startswith("next, if no task was named for you: T-3 ("))
             demo.say("The new session checks out with `end`, removing its SAKO presence "
                      "without stopping the agent process.")
             demo.sako("end", "--session", "demo-next")

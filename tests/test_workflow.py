@@ -3,17 +3,24 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 import argparse
+import io
 import json
 import os
+import re
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 
 import sako
 import selftest as fixture
+
+MINUTE = r"\d{4}-\d\d-\d\dT\d\d:\d\d[+-]\d{4}"  # a claim or close time, to the minute with its zone
 
 
 class Workflow(unittest.TestCase):
@@ -123,7 +130,9 @@ class Workflow(unittest.TestCase):
         args = ("add", "Print sorted names", "--source", "PLAN.md#preview", "--scope", "preview.py", "--after", "T-1", "--after", "T-10")
         self.assert_ok(self.run_cli(*args))
         self.start("dependency-session")
-        self.assertEqual(self.run_cli("claim", "T-11", session="dependency-session")[0], 3)
+        code, _, err = self.run_cli("claim", "T-11", session="dependency-session")
+        self.assertEqual(code, 3, err)
+        self.assertIn("T-11 waits for T-1, T-10; finish those first", err)
         for task_id in ("T-10", "T-1"):
             self.assert_ok(self.run_cli("claim", task_id, session="dependency-session"))
             self.assert_ok(self.run_cli("close", task_id, "--evidence", "Recorded the requested findings",
@@ -137,6 +146,12 @@ class Workflow(unittest.TestCase):
         fixture.commit_all(self.root, "retain completed prerequisites and the dependent action")
         self.assert_ok(self.run_cli("check", "--gate", session="dependency-session"))
         self.assert_ok(self.run_cli("claim", "T-11", session="dependency-session"))
+        self.assert_ok(self.run_cli("close", "T-11", "--evidence", "Printed the sorted sample", session="dependency-session"))
+        self.assertIn("T-11: done; reused source", self.assert_ok(self.run_cli(*args)),
+                      "the done record keeps no After, so repeating the intake of done work with prerequisites reuses it")
+        code, _, err = self.run_cli("add", "Print names", *args[2:])
+        self.assertEqual(code, 3, err)
+        self.assertIn("already maps to T-11", err, "a changed task still refuses")
 
     def test_invalid_intake_references_leave_the_ledger_unchanged(self):
         active = self.root / ".sako/work/TASKS.md"
@@ -185,8 +200,8 @@ class Workflow(unittest.TestCase):
         self.assertIn("| T-2 | - | P2 | Export | Reads back | open | `src/export/` | - | - | - |", active.read_text())
         self.start("columns")
         self.assert_ok(self.run_cli("claim", "T-1", session="columns"))
-        self.assertIn(f"| T-1 | ui | P2 | Theme | Survives reload | {sako.marker_for('columns')} | `src/` | - | - | 2d |",
-                      active.read_text())
+        self.assertRegex(active.read_text(), rf"\| T-1 \| ui \| P2 \| Theme \| Survives reload \| {sako.marker_for('columns')} "
+                         rf"since {MINUTE} \| `src/` \| - \| - \| 2d \|")
         output = self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Kept after reload", session="columns"))
         self.assertIn("not carried, the done file has no such column: Estimate=2d", output)
         row = sako.parse_rows({"done": done.read_text()})[0]
@@ -201,10 +216,11 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.run_cli(*base, "--pri", "urgent")[0], 3)
 
     def test_receipts_say_what_the_check_said_at_close(self):
-        cases = ((None, None, "no automated check"), ([sys.executable, "-c", "pass"], False, "no passing check recorded"),
-                 ([sys.executable, "-c", "pass"], True, "check pass "))
+        cases = ((None, None, "no automated check"), ([sys.executable, "-c", "pass"], None, "no passing check recorded"),
+                 ([sys.executable, "-c", "pass"], "committed", "check pass "),
+                 ([sys.executable, "-c", "pass"], "uncommitted", "check pass "))
         for number, (command, verified, expected) in enumerate(cases, 1):
-            with self.subTest(expected=expected):
+            with self.subTest(expected=expected, verified=verified):
                 fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": command, "verify_paths": ["src"]})})
                 session = f"receipt-{number}"
                 self.start(session)
@@ -212,16 +228,25 @@ class Workflow(unittest.TestCase):
                 task = [r.id for r in sako.parse_rows({"tasks": (self.root / ".sako/work/TASKS.md").read_text()})
                         if r.task == f"Receipt {number}"][0]
                 self.assert_ok(self.run_cli("claim", task, session=session))
+                claimed = re.search(rf"\| {sako.marker_for(session)} since ({MINUTE}) \|",
+                                    (self.root / ".sako/work/TASKS.md").read_text())
+                self.assertTrue(claimed, "claim writes its time after the marker")
+                since = claimed[1]
+                fixture.write(self.root, {f"docs/{number}/notes.md": "outside the checked paths\n"})
+                if verified == "uncommitted":
+                    fixture.write(self.root, {"src/draft.py": "print(0)\n"})
                 if verified:
                     self.assert_ok(self.run_cli("verify"))
                 self.assert_ok(self.run_cli("close", task, "--evidence", "Observed", session=session))
                 receipt = next(r.evidence for r in sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})
                                if r.id == task)
-                self.assertRegex(receipt, rf"^Observed \[{sako.marker_for(session)}; closed \d{{4}}-\d\d-\d\d; {expected}")
+                self.assertRegex(receipt, rf"^Observed \[{sako.marker_for(session)} since {re.escape(since)}; closed {MINUTE}; {expected}")
                 if verified:
                     stamp = json.loads((self.root / ".sako/state/stamp.json").read_text())
-                    self.assertIn(f"check pass {stamp['time']} on {stamp['content_id']}]", receipt,
-                                  "the stamp's own time, never the close time")
+                    at = fixture.git(self.root, "rev-parse", "HEAD")[:12]
+                    at += " plus uncommitted changes" if verified == "uncommitted" else ""
+                    self.assertIn(f"check pass {stamp['time']} on {stamp['content_id']} at {at}]", receipt,
+                                  "the stamp's own time and commit, never the close's; only checked files count")
         fixture.write(self.root, {"src/app.py": "print(5)\n"})
         fixture.commit_all(self.root, "covered content moves on")
         self.start("receipt-stale")
@@ -231,6 +256,37 @@ class Workflow(unittest.TestCase):
         self.assert_ok(self.run_cli("claim", task, session="receipt-stale"))
         self.assert_ok(self.run_cli("close", task, "--evidence", "Docs only", session="receipt-stale"))
         self.assertIn("; check stale: last pass ", (self.root / ".sako/work/DONE.md").read_text())
+
+    def test_a_check_before_the_first_commit_names_no_commit(self):
+        root = Path(self.workspace.name) / "fresh"
+        root.mkdir()
+        fixture.git(root, "init", "-q", "-b", "main")
+        fixture.write(root, {".git/info/exclude": "/.sako/\n", ".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1")),
+                             ".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"],
+                                                              "verify_paths": ["src"]}), "src/app.py": "print(1)\n"})
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        self.assert_ok(fixture.cli(root, "start", session="fresh", pid=agent.pid))
+        for args in (("claim", "T-1"), ("verify",), ("close", "T-1", "--evidence", "Prints 1")):
+            self.assert_ok(fixture.cli(root, *args, session="fresh"))
+        self.assertIn(" at no commit plus uncommitted changes]", (root / ".sako/work/DONE.md").read_text())
+
+    def test_claims_without_a_claim_time_still_close(self):
+        marker = sako.marker_for("upgraded")
+        claims = {"T-1": marker, "T-2": f"{marker} (took over from sk-0101-bbbbbbbbbbbb: gone)",
+                  "T-3": f"{marker} since [owner-ok]"}
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(*(
+            fixture.row(task, status="claimed", claim=claim, touches=f"`src/{task}/`") for task, claim in claims.items()))})
+        self.start("upgraded")
+        for task in claims:
+            with self.subTest(claim=claims[task]):
+                self.assert_ok(self.run_cli("close", task, "--evidence", "Observed", session="upgraded"))
+                done = next(r for r in sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})
+                            if r.id == task)
+                self.assertRegex(done.evidence, rf"^Observed \[{marker}; closed {MINUTE}; no automated check\]$",
+                                 "a claim written before claim times, or a hand edit after the marker, leaves the marker alone")
+                self.assertEqual(done.claim, marker, "the done row keeps its closer")
+        self.assertIn("your rows: T-1 (done); T-2 (done); T-3 (done)", self.assert_ok(self.run_cli("status", session="upgraded")))
 
     def test_ready_and_the_id_preview_are_gone(self):
         self.assertEqual(self.run_cli("ready")[0], 2)
@@ -247,6 +303,30 @@ class Workflow(unittest.TestCase):
                 self.assert_ok(self.run_cli(*args))
         self.assertIn("| T-10 | Printed line |", (self.root / ".sako/work/DONE.md").read_text())
 
+    def test_every_verbs_help_says_what_the_verb_does(self):
+        env = dict(fixture.ENV, COLUMNS="300", NO_COLOR="1")  # wide enough that argparse wraps no entry
+
+        def shown(*args):
+            return fixture.succeeds(subprocess.run([sys.executable, str(fixture.SAKO), *args], cwd=self.root, env=env,
+                                                   capture_output=True, text=True))
+
+        verbs = dict(re.findall(r"(?m)^    (\w+) {2,}(\S.*)$", shown("--help")))
+        self.assertEqual(set(verbs), {"start", "end", "check", "verify", "status", "next", "add", "claim", "close", "hook",
+                                      "remove", "init"})
+        for verb, description in verbs.items():
+            with self.subTest(verb=verb):
+                self.assertIn(f"\n\n{description}\n\n", shown(verb, "--help"), "the listing's line is the verb's description")
+        self.assertEqual(verbs["verify"], "run the project's check command and stamp the content")
+
+    def test_status_and_a_missing_stamp_name_the_command_verify_runs(self):
+        command = [sys.executable, "-B", "check.py"]
+        fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": command, "verify_paths": ["src"]})})
+        out = self.assert_ok(self.run_cli("status"))  # the config line's end, since Windows reads its middle dot back in its code page
+        self.assertIn(f" verify runs {shlex.join(command)}\nevidence: none; no passing check recorded; run sako.py verify, which "
+                      f"runs {shlex.join(command)}\n", out)
+        fixture.write(self.root, {".sako/config.json": "{}"})
+        self.assertIn(" verify_command not set\nevidence: none; no verify_command configured", self.assert_ok(self.run_cli("status")))
+
     @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
     def test_parallel_claims_have_one_winner(self):
         for session in ("session-a", "session-b"):
@@ -262,29 +342,98 @@ class Workflow(unittest.TestCase):
         first = self.start("session-a")
         self.start("session-b")
         self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
-        self.assert_ok(self.run_cli("add", "Overlapping work", "--scope", "src/nested/"))
+        holder = fixture.marker("session-a")
+        out = self.assert_ok(self.run_cli("add", "Overlapping work", "--scope", "src/nested/"))
+        self.assertEqual(out.strip(), f"T-10: open; recorded locally, not committed; its scope overlaps claimed T-1 ({holder}), "
+                                      "so a claim of it by another session is refused until that closes or a scope narrows")
+        self.assertEqual(self.assert_ok(self.run_cli("add", "Separate work", "--scope", "docs/")).strip(),
+                         "T-11: open; recorded locally, not committed")
         code, _, err = self.run_cli("claim", "T-10", session="session-b")
         self.assertEqual(code, 3)
-        self.assertIn("overlap", err)
+        advice = "wait for it to close, or " + ("if it stopped, inspect its handoff and take it over first (claim T-1 --takeover "
+                                                "REASON), or " if fixture.WINDOWS else "")  # Windows sees no process, so the holder is unverified
+        self.assertIn(f"T-10's scope overlaps T-1 (src/), claimed by {holder}; {advice}narrow a Scope in .sako/work/TASKS.md", err)
         first.terminate()
         first.wait()
         code, _, err = self.run_cli("claim", "T-1", session="session-b")
         self.assertEqual(code, 3)
-        self.assertIn("--takeover", err)
+        self.assertRegex(err, rf"T-1 is held by {sako.marker_for('session-a')}, (a stale claim;|which SAKO cannot verify from here "
+                         r"\(a sandbox, or Windows, hides its process\); if it stopped,) inspect its handoff and use --takeover")
         self.assert_ok(self.run_cli("claim", "T-1", "--takeover", "previous session ended; inspected its work", session="session-b"))
         text = (self.root / ".sako/work/TASKS.md").read_text()
         self.assertIn("took over from", text)
         self.assertIn("previous session ended", text)
+        self.assertRegex(text, rf"\| {sako.marker_for('session-b')} since {MINUTE} \(took over from "
+                         rf"{sako.marker_for('session-a')}(, unverified)?: previous session ended; inspected its work\) \|",
+                         "the taker's own claim time; the note names the previous marker alone")
 
     def test_a_takeover_reason_on_an_open_task_is_no_crash(self):
         self.start("session-a")
         self.assert_ok(self.run_cli("claim", "T-1", "--takeover", "nobody held it", session="session-a"))
 
+    def test_a_takeover_moves_an_ended_sessions_overlapping_claims_one_after_another(self):
+        ended, gone, lost = (fixture.marker(name) for name in ("ended-session", "gone-session", "lost-session"))
+        active = self.root / ".sako/work/TASKS.md"
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim=ended),
+            fixture.row("T-2", status="claimed", claim=ended, touches="`src/app.py`"),
+            fixture.row("T-3", status="claimed", claim=ended, touches="`src/`, `tests/`"),
+            fixture.row("T-4", status="claimed", claim=gone, touches="`notes/`"),
+            fixture.row("T-5", status="claimed", claim=lost, touches="`notes/plan.md`"),
+            fixture.row("T-6", touches="`notes/plan.md`")),
+            ".sako/work/DONE.md": fixture.done_file(fixture.row("T-7", status="done", claim=ended, touches="`src/`"))})
+        self.start("session-b")
+        self.start("session-c")
+        taker, reason = fixture.marker("session-b"), ("--takeover", "its session ended; inspected its work")
+        out = self.assert_ok(self.run_cli("claim", "T-1", *reason, session="session-b"))
+        self.assertIn("Its previous holder also holds overlapping T-2, T-3; take them over too before you stop.", out)
+        code, _, err = self.run_cli("claim", "T-2", *reason, session="session-c")
+        self.assertEqual(code, 3, "a third session is refused against a claim the taker now holds")
+        advice = ("neither claim can be taken over while they overlap, so " if fixture.WINDOWS else "") + "wait for it to close, or "
+        self.assertIn(f"T-2's scope overlaps T-1 (src/), claimed by {taker}; {advice}narrow a Scope in .sako/work/TASKS.md", err)
+        out = self.assert_ok(self.run_cli("claim", "T-2", *reason, session="session-b"))
+        self.assertIn("Its previous holder also holds overlapping T-3; take it over too before you stop.", out)
+        self.assertNotIn("also holds", self.assert_ok(self.run_cli("claim", "T-3", *reason, session="session-b")),
+                         "a row the ended session already closed is not named")
+        rows = {r.id: r for r in sako.parse_rows({"tasks": active.read_text()})}
+        for task_id in ("T-1", "T-2", "T-3"):
+            self.assertRegex(rows[task_id].claim, rf"^{taker} since {MINUTE} \(took over from {ended}: ")
+        before = active.read_bytes()
+        code, _, err = self.run_cli("claim", "T-6", session="session-b")
+        self.assertEqual(code, 3)
+        self.assertIn(f"T-6's scope overlaps T-4 (notes/), claimed by {gone}; if it stopped, inspect its handoff and take it "
+                      "over first (claim T-4 --takeover REASON), or narrow a Scope in .sako/work/TASKS.md", err)
+        code, _, err = self.run_cli("claim", "T-4", *reason, session="session-b")
+        self.assertEqual(code, 3, "overlapping claims of two different ended sessions still refuse each other")
+        self.assertIn(f"T-4's scope overlaps T-5 (notes/plan.md), claimed by {lost}; neither claim can be taken "
+                      "over while they overlap, so narrow a Scope in .sako/work/TASKS.md", err)
+        self.assertEqual(active.read_bytes(), before)
+        out = self.assert_ok(self.run_cli("add", "Shared follow-up", "--scope", "src/lib/", "--scope", "notes/"))
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertIn(f"its scope overlaps claimed T-1 ({taker}), T-3 ({taker}), T-4 ({gone}), T-5 ({lost}), so a claim "
+                      "of it by another session is refused until those close or a scope narrows", out)
+
+    def test_a_parked_task_names_how_to_reopen_it_from_any_checkout(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1", status="parked: the owner decides"))})
+        self.start("session-a")
+        code, _, err = self.run_cli("claim", "T-1", session="session-a")
+        self.assertEqual(code, 3)
+        self.assertIn("T-1 is parked; once its reason is resolved, set its Status to open in .sako/work/TASKS.md", err)
+        linked = Path(self.workspace.name) / "linked"
+        fixture.git(self.root, "worktree", "add", "-q", str(linked))
+        code, _, err = fixture.cli(linked, "claim", "T-1", session="session-a")
+        self.assertEqual(code, 3, "a linked worktree has no records folder of its own, so the path is absolute")
+        ledger = (self.root.resolve() / ".sako/work/TASKS.md").as_posix()
+        self.assertIn(f"set its Status to open in {ledger}", err)
+        self.assertIn(f"T-99 needs exactly one row in {ledger}", fixture.cli(linked, "claim", "T-99", session="session-a")[2])
+
     def test_handoff_folders_are_found_by_id_listed_and_never_checked(self):
         fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": []})})
         self.start("session-a")
         out = self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
-        self.assertIn("keep them in .sako/work/T-1-invented-task/ (handoff.md for where it stands)", out)
+        self.assertIn("; recorded locally, not committed. Working notes go in .sako/work/T-1-invented-task/. If this session "
+                      "ends before closing it, the claim reads as stale and another session may take it over with a reason, "
+                      "so write handoff.md there first, with where it stands.", out)
         self.assert_ok(self.run_cli("verify"))
         self.assert_ok(self.run_cli("add", "Other work", "--scope", "docs/"))
         fixture.write(self.root, {".sako/work/T-1-invented-task/handoff.md": "Where it stands: started\n",
@@ -292,12 +441,144 @@ class Workflow(unittest.TestCase):
                                   ".sako/work/T-10-renamed-by-hand/notes.md": "found by its ID\n"})
         out = self.assert_ok(self.run_cli("check", "--session", "session-a"))
         self.assertIn("evidence: fresh", out)
-        self.assertIn("changed this session: 0", out)
+        self.assertIn(f"changed this session in {self.root.resolve().as_posix()}: 0", out)
         listed = "handoffs: T-1 .sako/work/T-1-invented-task/, T-10 .sako/work/T-10-renamed-by-hand/"
         self.assertIn(listed, self.assert_ok(self.run_cli("status", "--session", "session-a")))
         agent = subprocess.Popen(["sleep", "60"])
         self.agents.append(agent)
         self.assertIn(listed, self.assert_ok(fixture.cli(self.root, "start", session="session-b", pid=agent.pid)))
+
+    def test_a_closed_tasks_handoff_folder_is_listed_for_everyone_and_the_advisory_stays_with_the_closer(self):
+        self.start("closer")
+        self.assert_ok(self.run_cli("claim", "T-1", session="closer"))
+        fixture.write(self.root, {".sako/work/T-1-invented-task/handoff.md": "Kept for a later task\n"})
+        self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Recorded", session="closer"))
+        self.assert_ok(self.run_cli("add", "Other work", "--scope", "docs/"))
+        fixture.write(self.root, {".sako/work/T-10-other-work/handoff.md": "Where it stands: started\n"})
+        listed = "handoffs: T-10 .sako/work/T-10-other-work/, T-1 (closed: delete) .sako/work/T-1-invented-task/"
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        self.assertIn(listed, self.assert_ok(fixture.cli(self.root, "start", session="newcomer", pid=agent.pid)))
+        self.assertIn(listed, self.assert_ok(self.run_cli("status", session="newcomer")))
+        self.assertNotIn("advisory", self.assert_ok(self.run_cli("check", "--gate", session="newcomer")))
+        self.assertIn("advisory: T-1 is closed and its handoff folder remains; move lasting facts to their home, then "
+                      "delete .sako/work/T-1-invented-task/.", self.assert_ok(self.run_cli("check", "--gate", session="closer")))
+
+    def test_a_handoff_folder_is_listed_once_after_an_interrupted_close(self):
+        closer = fixture.marker("closer")
+        fixture.write(self.root, {  # the close wrote the done row, then stopped before it removed the tasks row
+            ".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1", status="claimed", claim=closer)),
+            ".sako/work/DONE.md": fixture.done_file(fixture.row("T-1", status="done", claim=closer)),
+            ".sako/work/T-1-invented-task/handoff.md": "Where it stands: closing\n"})
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        context = self.assert_ok(fixture.cli(self.root, "start", session="reader", pid=agent.pid))
+        for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
+            with self.subTest(view=view):
+                listed = [line for line in out.splitlines() if line.startswith("handoffs: ")]
+                self.assertEqual(listed, ["handoffs: T-1 .sako/work/T-1-invented-task/"],
+                                 "once, and with no delete mark while its tasks row still holds the claim")
+
+    def test_the_start_context_offers_its_pick_for_a_session_with_no_task_named(self):
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        context = self.assert_ok(fixture.cli(self.root, "start", session="session-a", pid=agent.pid))
+        self.assertIn("\nnext, if no task was named for you: T-1 (P2, the only ready task): Invented task\n", context)
+        self.assertNotIn("\nnext: ", context)
+        self.assertTrue(self.assert_ok(self.run_cli("next")).startswith("next: T-1 (P2, the only ready task): Invented task\n"))
+
+    def test_a_peer_line_lists_its_claims_and_the_end_of_its_session_id_and_the_header_gives_the_advice_once(self):
+        # time-ordered IDs (UUID version 7, as Codex makes) of sessions started close together share their start
+        holder, idle = "01920000-0000-7000-8000-00000000a1b2", "01920000-0000-7000-8000-00000000c3d4"
+        self.start(holder)
+        self.assert_ok(self.run_cli("add", "Docs work", "--scope", "docs/"))
+        self.assert_ok(self.run_cli("claim", "T-1", session=holder))
+        self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Recorded", session=holder))
+        self.assert_ok(self.run_cli("claim", "T-10", session=holder))
+        self.start(idle)
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        context = self.assert_ok(fixture.cli(self.root, "start", session="reader", pid=agent.pid))
+        for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
+            with self.subTest(view=view):
+                self.assertIn("live peers (disjoint: share the tree; overlap: wait or negotiate; no claim: ask before "
+                              "touching shared paths):", out)
+                self.assertEqual(out.count("ask before touching shared paths"), 1, out)
+                line = next(line for line in out.splitlines() if sako.marker_for(holder) in line)
+                self.assertTrue(line.startswith(f"  peer {sako.marker_for(holder)} (session ID ends 0000a1b2) on main"), line)
+                self.assertTrue(line.endswith(" -> T-10 (claimed) touches docs/  [from the claim column]"), line)
+                line = next(line for line in out.splitlines() if sako.marker_for(idle) in line)
+                self.assertTrue(line.startswith(f"  peer {sako.marker_for(idle)} (session ID ends 0000c3d4) on main"), line)
+                self.assertTrue(line.endswith(" -> no claim"), line)
+
+    def test_one_scope_flag_takes_several_paths_and_a_task_text_after_them_fails(self):
+        active = self.root / ".sako/work/TASKS.md"
+        self.assert_ok(self.run_cli("add", "Several paths", "--scope", "src/", "docs/", "README.md"))
+        self.assert_ok(self.run_cli("add", "Repeated flag", "--scope", "src/", "--scope", "docs/"))
+        self.assert_ok(self.run_cli("add", "Both forms", "--scope", "src/", "docs/", "--scope", "tests/"))
+        scopes = {r.task: r.touches for r in sako.parse_rows({"tasks": active.read_text()})}
+        self.assertEqual([scopes["Several paths"], scopes["Repeated flag"], scopes["Both forms"]],
+                         [["src/", "docs/", "README.md"], ["src/", "docs/"], ["src/", "docs/", "tests/"]])
+        before = active.read_bytes()
+        code, out, err = self.run_cli("add", "--scope", "src/", "A task text after the path")
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("the following arguments are required: task", err)
+        self.assertEqual(active.read_bytes(), before, "nothing is added")
+
+    def test_end_says_whether_it_ended_this_sessions_presence(self):
+        self.start("session-a")
+        self.assertEqual(self.assert_ok(self.run_cli("end", session="session-a")), "sako: presence ended\n")
+        nothing = "sako: no presence entry for this session ID; nothing ended\n"
+        self.assertEqual(self.assert_ok(self.run_cli("end", session="session-a")), nothing, "a repeated end")
+        self.assertEqual(self.assert_ok(self.run_cli("end", session="mistyped-id")), nothing)
+        self.start("session-b")
+        self.assertEqual(fixture.hook(self.root, "SessionEnd", "session-b"), (0, "", ""), "the hook stays quiet")
+        self.assertEqual(list((self.root / ".sako/state/live").glob("*.json")), [])
+
+    def test_the_end_hook_removes_presence_even_when_the_config_does_not_parse(self):
+        self.start("session-a")
+        fixture.write(self.root, {".sako/config.json": "{ not json"})
+        code, out, err = fixture.hook(self.root, "SessionEnd", "session-a")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertIsNone(sako.my_entry(sako.resolve_roots(self.root), "session-a"), "a broken config never keeps a session live")
+        code, _, err = fixture.hook(self.root, "Stop", "session-a")
+        self.assertEqual(code, 2, err)
+        self.assertIn(".sako/config.json: invalid JSON", err, "the gate still names the broken config")
+
+    def test_start_and_status_list_the_ledger_findings_in_one_order(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", status="claimed", claim=fixture.marker("me")),
+            fixture.row("T-2", status="claimed", claim=fixture.marker("peer"), touches="`src/app.py`"),
+            fixture.row("T-3", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`lib/`"))})
+        self.start("peer")
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        context = self.assert_ok(fixture.cli(self.root, "start", session="me", pid=agent.pid))
+        status = self.assert_ok(self.run_cli("status", session="me"))
+        found = [[line for line in out.splitlines() if "both claimed" in line or "not a live session" in line]
+                 for out in (context, status)]
+        self.assertEqual(found[0], found[1])
+        self.assertEqual(len(found[0]), 2, found[0])
+        self.assertIn("T-1 and T-2 are both claimed", found[0][0], "this session's own overlap first, then the notes")
+
+    @unittest.skipIf(fixture.WINDOWS or os.geteuid() == 0, "needs POSIX folder permissions that bind this user")
+    def test_end_reports_a_presence_entry_it_cannot_remove_and_the_end_hook_stays_quiet(self):
+        self.start("session-a")
+        live = self.root / ".sako/state/live"
+        live.chmod(0o555)  # read-only, as a sandbox can keep the kit folder
+        try:
+            code, out, err = self.run_cli("end", session="session-a")
+            hooked = fixture.hook(self.root, "SessionEnd", "session-a")
+        finally:
+            live.chmod(0o755)
+        self.assertEqual(code, 3, out + err)
+        self.assertNotIn("nothing ended", out + err)
+        self.assertIn("Permission denied", err)
+        self.assertIn("if a sandbox keeps the kit folder read-only", err)
+        code, out, err = hooked
+        self.assertEqual((code, err), (0, ""), "the end hook neither blocks nor fails the client's session end")
+        self.assertIn("Permission denied", out, "it says what it could not remove")
+        self.assertTrue(sako.my_entry(sako.resolve_roots(self.root), "session-a"), "the entry is still there")
 
     def test_close_needs_fresh_check_and_commit(self):
         fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "from pathlib import Path; assert Path('src/app.py').read_text() == 'print(2)\\n'"], "verify_paths": ["src"]})})
@@ -338,11 +619,143 @@ class Workflow(unittest.TestCase):
         self.assertEqual((self.root / ".sako/work/DONE.md").read_text().count("| T-1 |"), 1)
 
     @unittest.skipIf(fixture.WINDOWS, "Windows keeps no executable bit")
-    def test_content_evidence_includes_executable_mode(self):
+    def test_content_evidence_includes_the_executable_bit_git_tracks(self):
         fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": ["src"]})})
         self.assert_ok(self.run_cli("verify"))
+        os.chmod(self.root / "src/app.py", 0o655)
+        self.assertIn("evidence: fresh", self.run_cli("check")[1], "Git tracks only the owner's bit, so the others' are no content")
         os.chmod(self.root / "src/app.py", 0o755)
         self.assertIn("evidence: stale", self.run_cli("check")[1])
+
+    def test_a_running_verify_keeps_the_last_pass_until_the_run_fails_or_moves(self):
+        seen, stamp = Path(self.workspace.name) / "seen.txt", self.root / ".sako/state/stamp.json"
+        fixture.write(self.root, {"control": "probe\n", "gen/out.txt": "generated\n", "check.py": (  # outside the checked paths
+            "import pathlib, shutil, subprocess, sys\nmode = pathlib.Path('control').read_text().strip()\n"
+            "if mode == 'probe':  # a peer reads the evidence while the check runs\n"
+            f"    pathlib.Path({str(seen)!r}).write_text(subprocess.run([sys.executable, {str(fixture.SAKO)!r}, 'status'], "
+            "capture_output=True, text=True).stdout)\n"
+            "if mode == 'move':\n    pathlib.Path('src/made.txt').write_text('written during the run')\n"
+            "if mode == 'vanish':  # a failing check that also takes a checked folder away\n"
+            "    shutil.rmtree('gen')\n    print('the generator broke', flush=True)\n"
+            "sys.exit(mode in ('fail', 'vanish'))\n"),
+            ".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": ["src", "gen"]})})
+        self.assert_ok(self.run_cli("verify"))
+        self.assertIn("evidence: none", seen.read_text())
+        self.assert_ok(self.run_cli("verify"))
+        self.assertIn("evidence: fresh", seen.read_text(), "a second run on unchanged content keeps the last pass")
+        for mode, why in (("fail", "a failing run deletes the last pass"), ("move", "so does a run whose content moved"),
+                          ("vanish", "and a failing run whose checked folder is gone afterwards")):
+            with self.subTest(mode=mode):
+                fixture.write(self.root, {"control": "probe\n", "gen/out.txt": "generated\n"})
+                self.assert_ok(self.run_cli("verify"))
+                self.assertTrue(stamp.exists())
+                fixture.write(self.root, {"control": f"{mode}\n"})
+                code, out, err = self.run_cli("verify")
+                self.assertEqual(code, 1, out + err)
+                self.assertFalse(stamp.exists(), why)
+                (self.root / "src/made.txt").unlink(missing_ok=True)
+        self.assertIn("the generator broke\ncheck: FAILED (exit 1)", out, "the folder it took away hides neither output nor failure")
+        self.assertEqual((self.root / ".sako/state/verify-failed.log").read_text(), "the generator broke\n")
+
+    def test_a_run_that_edits_the_check_command_or_fails_leaves_no_stamp_even_when_its_log_is_gone(self):
+        stamp, setting = self.root / ".sako/state/stamp.json", {"verify_command": [sys.executable, "check.py"], "verify_paths": ["src"]}
+        fixture.write(self.root, {"check.py": (  # outside the checked paths, like the file that steers it
+            "import json, pathlib, sys\nmode = pathlib.Path('control').read_text().strip()\n"
+            "if mode.startswith('edit'):  # the run edits verify_command in the kit's config\n"
+            "    config = pathlib.Path('.sako/config.json')\n    setting = json.loads(config.read_text())\n"
+            "    setting['verify_command'].append('--strict')\n    config.write_text(json.dumps(setting))\n"
+            "if mode == 'lose the log':  # so verify cannot read the output back\n"
+            "    pathlib.Path('.sako/state/verify.log').unlink()\n"
+            "sys.exit(mode in ('edit and fail', 'lose the log'))\n")})
+        modes = {"edit": 1, "edit and fail": 1} | ({} if fixture.WINDOWS else {"lose the log": 3})  # Windows keeps an open file
+        for mode, expected in modes.items():
+            with self.subTest(mode=mode):
+                fixture.write(self.root, {"control": "pass\n", ".sako/config.json": json.dumps(setting)})
+                self.assert_ok(self.run_cli("verify"))
+                self.assertTrue(stamp.exists())
+                fixture.write(self.root, {"control": f"{mode}\n"})
+                code, out, err = self.run_cli("verify")
+                self.assertEqual(code, expected, out + err)
+                self.assertFalse(stamp.exists(), "a run after a pass that edits its command or fails leaves no pass, "
+                                                 "whatever fails after the check")
+
+    def test_verify_keeps_its_output_and_a_pass_leaves_the_failed_output_in_place(self):
+        fixture.write(self.root, {"control": "fail\n", "check.py": (
+            "import pathlib, sys\nmode = pathlib.Path('control').read_text().strip()\nprint(f'checked in mode {mode}', flush=True)\n"
+            "sys.exit('the parser rejects an empty name' if mode == 'fail' else 0)\n"),
+            ".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": ["src"]})})
+        log, failed = (self.root.resolve() / ".sako/state" / name for name in ("verify.log", "verify-failed.log"))
+        code, out, _ = self.run_cli("verify")
+        self.assertEqual(code, 1)
+        self.assertIn("checked in mode fail\nthe parser rejects an empty name\ncheck: FAILED (exit 1)", out,
+                      "you still see the check's output, then the result")
+        self.assertIn(f"no stamp written; output in {failed.as_posix()}", out)
+        self.assertEqual(failed.read_text(), "checked in mode fail\nthe parser rejects an empty name\n", "standard output and error")
+        fixture.write(self.root, {"control": "pass\n"})
+        out = self.assert_ok(self.run_cli("verify"))
+        self.assertTrue(out.startswith("checked in mode pass\ncheck: PASS"), out)
+        self.assertIn(f"; output in {log.as_posix()}", out)
+        self.assertEqual(log.read_text(), "checked in mode pass\n")
+        self.assertIn("the parser rejects an empty name", failed.read_text(), "a later pass leaves the failed run's output")
+
+    def test_a_process_the_check_leaves_running_neither_holds_verify_nor_keeps_it_from_failing(self):
+        release, done = (Path(self.workspace.name) / name for name in ("release", "done"))
+        failed = self.root.resolve() / ".sako/state/verify-failed.log"
+        fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": ["src"]})})
+        for chatty in (False, True):  # either way the server holds the check's output open until released
+            server = (f"import os, pathlib, time\nend = time.time() + 20\n"
+                      f"while not pathlib.Path({str(release)!r}).exists() and time.time() < end:\n"
+                      + ("    print('a server line', flush=True)\n" if chatty else "") + "    time.sleep(0.02)\n"
+                      f"os.close(1)\nos.close(2)\npathlib.Path({str(done)!r}).write_text('done')\n")
+            fixture.write(self.root, {"check.py": (
+                "import subprocess, sys, tempfile\nprint('the parser rejects an empty name', flush=True)\n"
+                f"subprocess.Popen([sys.executable, '-c', {server!r}], stdout=sys.stdout, stderr=sys.stderr, cwd=tempfile.gettempdir())\n"
+                "sys.exit(1)\n")})
+            with self.subTest(chatty=chatty):
+                code, out, err = self.run_cli("verify")
+                running = not done.exists()
+                release.write_text("released")
+                for _ in range(1000):  # the server ends before the next run and before the workspace goes
+                    if done.exists() and done.read_text() == "done":
+                        break
+                    time.sleep(0.02)
+                release.unlink()
+                done.unlink(missing_ok=True)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn("check: FAILED (exit 1)", out)
+                self.assertIn(f"no stamp written; output in {failed.as_posix()}", out)
+                self.assertTrue(failed.read_text().startswith("the parser rejects an empty name\n"),
+                                "the failed run's output is kept while the server still holds verify.log")
+                self.assertTrue(running, "verify returns when the check ends, while the server it started still runs")
+
+    @unittest.skipIf(fixture.WINDOWS, "an interrupt reaches a single process only on POSIX")
+    def test_an_interrupted_verify_stops_its_check(self):
+        started, release, finished = (Path(self.workspace.name) / name for name in ("started", "release", "finished"))
+        fixture.write(self.root, {"check.py": (
+            f"import pathlib, time\npathlib.Path({str(started)!r}).write_text('started')\nend = time.time() + 20\n"
+            f"while not pathlib.Path({str(release)!r}).exists() and time.time() < end:\n    time.sleep(0.02)\n"
+            f"pathlib.Path({str(finished)!r}).write_text('finished')\n"),
+            ".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": ["src"]})})
+        run = subprocess.Popen([sys.executable, str(fixture.SAKO), "verify"], cwd=self.root, env=fixture.ENV,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(1000):
+            if started.exists() or run.poll() is not None:
+                break
+            time.sleep(0.02)
+        run.send_signal(signal.SIGINT)
+        out, err = run.communicate(timeout=30)
+        release.write_text("released")
+        time.sleep(0.5)  # a check still running would finish within a few hundredths of a second
+        self.assertEqual(run.returncode, 130, out + err)
+        self.assertFalse(finished.exists(), "an interrupted verify stops its check; none runs on without it")
+
+    def test_verify_shows_the_check_output_on_any_text_stream(self):
+        config = dict(sako.DEFAULTS, verify_command=[sys.executable, "check.py"], verify_paths=["src"])
+        fixture.write(self.root, {"check.py": "import sys\nsys.stdout.buffer.write('naïve café ✓\\n'.encode())\n",
+                                  ".sako/config.json": json.dumps(config)})
+        with patch.object(sys, "stdout", io.StringIO()) as shown:  # as under unittest -b: no byte buffer behind it
+            self.assertEqual(sako.verify(sako.resolve_roots(self.root), config), 0)
+        self.assertTrue(shown.getvalue().startswith("naïve café ✓\ncheck: PASS"), shown.getvalue())
 
     def test_every_verification_path_must_cover_something(self):
         (self.root / "empty").mkdir()
@@ -406,6 +819,17 @@ class Workflow(unittest.TestCase):
                 self.assertFalse(roots.state.exists(), "a read takes no lock, since Windows locks are exclusive")
             with sako.ledger_lock(roots, write=True):
                 self.assertEqual(calls, [(2, 1), (2, 1)], "a held lock is retried")
+
+    def test_on_windows_verify_looks_a_bare_command_up_on_the_path(self):
+        """Windows' own search tries System32 before PATH, where a bare bash is WSL's launcher, not Git Bash's bash."""
+        config = dict(sako.DEFAULTS, verify_command=["sako-test-python", "-c", "pass"], verify_paths=["src"])
+        fixture.write(self.root, {".sako/config.json": json.dumps(config)})
+        found = {"sako-test-python": sys.executable}
+        with patch.object(sako.sys, "platform", "win32"), patch.object(sako.shutil, "which", side_effect=found.get) as which:
+            self.assertEqual(sako.verify(sako.resolve_roots(self.root), config, out=lambda _: None), 0)
+        which.assert_called_once_with("sako-test-python")
+        with patch.object(sako.sys, "platform", "linux"), patch.object(sako.shutil, "which", side_effect=AssertionError("Windows only")):
+            self.assertRaisesRegex(sako.SakoError, "'sako-test-python' cannot run", sako.verify, sako.resolve_roots(self.root), config)
 
     def test_output_is_utf8_whatever_the_locale(self):
         fixture.succeeds(fixture.installed_copy(self.root, "add", "Show a → b", "--pri", "P1", "--scope", "src/"))

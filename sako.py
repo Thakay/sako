@@ -27,7 +27,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 
 TASK_ID = re.compile(r"\bT-\d+\b")
 MARKER = re.compile(r"sk-\d{4}-[0-9a-f]{12}")
@@ -40,12 +40,7 @@ COLUMNS = {"tasks": ("ID", "Pri", "Task", "Done when", "Status", "Scope", "After
 KIT = ".sako"
 PYTHON = "python" if sys.platform == "win32" else "python3"  # the command SAKO prints and its hooks run
 CONFIG = ".sako/config.json"
-DEFAULTS: dict[str, object] = {
-    "tasks": "work/TASKS.md",
-    "done": "work/DONE.md",
-    "verify_command": None,
-    "verify_paths": [],
-}
+DEFAULTS: dict[str, object] = {"tasks": "work/TASKS.md", "done": "work/DONE.md", "verify_command": None, "verify_paths": []}
 
 
 class SakoError(Exception):
@@ -86,8 +81,7 @@ def load_config(kit: Path) -> dict:
             raise SakoError(f"{CONFIG}: invalid JSON ({error})") from None
         if not isinstance(loaded, dict):
             raise SakoError(f"{CONFIG}: expected a JSON object")
-        unknown = sorted(set(loaded) - set(DEFAULTS))
-        if unknown:
+        if unknown := sorted(set(loaded) - set(DEFAULTS)):
             raise SakoError(f"{CONFIG}: unknown keys {unknown}")
         data.update(loaded)
     command, paths = data["verify_command"], data["verify_paths"]
@@ -129,7 +123,7 @@ class Roots:
 
     @property
     def local(self) -> Path:
-        """This checkout's own state: its check stamp, verify lock and hook sightings."""
+        """This checkout's own state: its check stamp, verify lock and output logs, and hook sightings."""
         return self.state / "worktrees" / self.worktree if self.home != self.work else self.state
 
 
@@ -184,8 +178,7 @@ def atomic_write(path: Path, text: str | bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     name = None
     try:
-        with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent,
-                                         prefix=".sako-", delete=False) as stream:
+        with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent, prefix=".sako-", delete=False) as stream:
             name = stream.name
             stream.write(text.encode("utf-8") if isinstance(text, str) else text)
             stream.flush()
@@ -245,7 +238,7 @@ class Row:
     task: str = ""
     done_when: str = ""
     status: str = "open"        # open, parked, claimed, done, or what a hand edit left
-    claim: str = ""             # the holder's marker, then any takeover note
+    claim: str = ""             # the holder's marker, since when, then any takeover note
     touches: list[str] = field(default_factory=list)
     source: str = ""
     after: list[str] = field(default_factory=list)
@@ -262,8 +255,7 @@ def record_lines(text: str):
     fence = ""
     for number, line in enumerate(text.splitlines(), 1):
         line = line.strip()
-        boundary = re.match(r"(`{3,}|~{3,})", line)
-        if boundary:
+        if boundary := re.match(r"(`{3,}|~{3,})", line):
             token = boundary.group(1)
             if not fence:
                 fence = token
@@ -307,9 +299,8 @@ def parse_rows(documents: dict[str, str]) -> list[Row]:
             cell = dict(zip(names, cells))
             value = {name: "" if text in EMPTY_CELL else text for name, text in cell.items()}
             touches = [t.strip().strip("`").strip() for t in value.get("scope", "").split(",")]
-            row = Row(first, label, number, titles, cell, task=value.get("task", ""),
-                      done_when=value.get("done when", ""), source=value.get("source", ""),
-                      touches=[t for t in touches if t and t not in EMPTY_CELL],
+            row = Row(first, label, number, titles, cell, task=value.get("task", ""), done_when=value.get("done when", ""),
+                      source=value.get("source", ""), touches=[t for t in touches if t and t not in EMPTY_CELL],
                       after=[a.strip() for a in value.get("after", "").split(",") if a.strip()])
             if label == "tasks":
                 state = value.get("status", "").strip("*` ")
@@ -346,11 +337,22 @@ def scopes_overlap(first: Row, second: Row) -> bool:
         return False
 
 
-def covers(row: Row, path: str) -> bool:
+def covers(row: Row, path: str, root: Path | None = None) -> bool:
+    """Given the checkout, a done row no longer covers a file changed in a later minute than its receipt's close, in that zone."""
     try:
-        return any(overlaps(tuple(Path(path).parts), scope(t)) for t in row.touches)
+        late = root and os.path.lexists(root / path) and any(time.strftime("%Y-%m-%dT%H:%M", time.gmtime(os.lstat(root / path).st_mtime
+            + int(h) * 3600 + int(h[0] + m) * 60)) > c for c, h, m in re.findall(r"; closed ([\dT:-]{16})([+-]\d\d)(\d\d)", row.evidence)[-1:])
+        return not late and any(overlaps(tuple(Path(path).parts), scope(t)) for t in row.touches)
     except SakoError:
         return False
+
+
+def records_only(row: Row) -> bool:
+    """True when every scope entry lies in the kit folder, which the project's check never covers. Close and the
+    Proven rule ask no check of such records work while only others moved checked content (others_moved)."""
+    with suppress(SakoError):  # a scope entry that escapes is a ledger finding, never records work
+        return bool(row.touches) and all(scope(t)[:1] == (KIT,) for t in row.touches)
+    return False
 
 
 def row_faults(row: Row, known: set[str]) -> list[str]:
@@ -376,36 +378,31 @@ def row_faults(row: Row, known: set[str]) -> list[str]:
     return out
 
 
-def ledger_findings(rows: list[Row], live_markers: set[str] | None = None) -> list[str]:
-    """Consistency findings over the records, each with its fix. Never edits rows."""
-    out, seen, sources = [], {}, {}
+def ledger_findings(rows: list[Row], live_markers: set[str] | None = None, bystander: str | None = None) -> tuple[list[str], list[str]]:
+    """Consistency findings over the records, each with its fix, as two lists; never edits rows. The second holds the
+    notes, findings only about sessions other than the bystander (the asking session, whose key may be given): their
+    stale claims and the overlaps none of its claims is in. The first holds the rest. The bystander counts as live."""
+    others, seen, sources = [], {}, {}
     for row in rows:
         seen.setdefault(row.id, []).append(f"{row.doc}:{row.line}")
-    for task_id, where in seen.items():
-        if len(where) > 1:
-            out.append(f"{task_id} is defined by {len(where)} rows ({', '.join(where)}); "
-                       "IDs are unique and never reused: renumber or merge them")
-    done = {r.id for r in rows if r.doc == DONE}
-    live = {key_of(m) for m in live_markers} if live_markers is not None else None
+    out = [f"{task_id} is defined by {len(where)} rows ({', '.join(where)}); "
+           "IDs are unique and never reused: renumber or merge them" for task_id, where in seen.items() if len(where) > 1]
+    live = {key_of(m) for m in live_markers} | {bystander} if live_markers is not None else None  # the asking session is alive, even after its own end
     claimed = [r for r in rows if r.status == "claimed"]
     for row in rows:
         if row.source and sources.setdefault(row.source, row.id) != row.id:
-            out.append(f"source {row.source!r} is mapped more than once: {sources[row.source]}, {row.id}; "
-                       "keep one row per source")
+            out.append(f"source {row.source!r} is mapped more than once: {sources[row.source]}, {row.id}; keep one row per source")
         out += row_faults(row, set(seen))
-        if row.status == "claimed":
-            waiting = [d for d in row.after if d not in done]
-            if waiting:
-                out.append(f"{row.id} is claimed before {', '.join(waiting)} is done; finish those first")
-            if live is not None and holder_key(row.claim) not in live:
-                out.append(f"{row.id} is claimed by {row.claim.split()[0]}, which is not a live session; "
-                           f"resume it, or take it over: claim {row.id} --takeover REASON")
+        if row.status == "claimed" and live is not None and holder_key(row.claim) not in live:
+            others.append(f"{row.id} is claimed by {row.claim.split()[0]}, which is not a live session; resume it, take it over "
+                          f"(claim {row.id} --takeover REASON), or park it (set its Status to parked with the reason)")
     for index, row in enumerate(claimed):
         for other in claimed[index + 1:]:
             if holder_key(row.claim) != holder_key(other.claim) and scopes_overlap(row, other):
-                out.append(f"{row.id} and {other.id} are both claimed and their scopes overlap; "
-                           "finish one first or narrow the scopes")
-    return out
+                own = bystander in (holder_key(row.claim), holder_key(other.claim))
+                (out if own else others).append(f"{row.id} and {other.id} are both claimed and their scopes overlap; "
+                                                "finish one first or narrow the scopes")
+    return out, others
 
 
 def next_lines(rows: list[Row], live_markers: set[str] | None = None, brief: bool = False) -> list[str]:
@@ -438,7 +435,8 @@ def next_lines(rows: list[Row], live_markers: set[str] | None = None, brief: boo
         pick, others = ready[0], ready[1:]
         reason = pick.pri + (", first in row order" if others and others[0].pri == pick.pri else
                              f", the only ready {pick.pri} task" if others else ", the only ready task")
-        out = [f"next: {pick.id} ({reason}): {pick.task}", f"  done when: {pick.done_when}",
+        label = "next, if no task was named for you" if brief else "next"  # brief: the start context
+        out = [f"{label}: {pick.id} ({reason}): {pick.task}", f"  done when: {pick.done_when}",
                f"  scope: {', '.join(pick.touches)}"] + ([f"  source: {pick.source}"] if pick.source else [])
         if others:
             out.append("also ready: " + ", ".join(f"{r.id} ({r.pri})" for r in others))
@@ -470,7 +468,7 @@ def read_ledger(roots: Roots, config: dict) -> list[Row]:
 
 
 def session_key(session_id: str) -> str:
-    """Twelve hex characters derived from the session id; stable across resumes."""
+    """Twelve hex characters derived from the session id; stable across resumes, while /clear and a fork start a new session ID."""
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
 
 
@@ -489,10 +487,13 @@ def holder_key(claim: str) -> str | None:
     return key_of(first) if first.startswith("sk-") else None
 
 
-PID_NS = ""  # the PID namespace a PID means something in; its number is reused, so its first process's start is added
+PID_NS = BOOT = ""  # the PID namespace a PID means something in; its number is reused, so its first process's start is added
 with suppress(OSError, IndexError):
     PID_NS = os.readlink("/proc/self/ns/pid")
     PID_NS += "@" + Path("/proc/1/stat").read_text().rsplit(")", 1)[1].split()[19]
+with suppress(OSError):  # Linux names each boot, and a restart ends every session, so the namespace names its boot too
+    BOOT = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    PID_NS += " boot " + BOOT
 LEASE = 24 * 3600  # seconds an entry no visible process vouches for counts as live after its last start
 
 
@@ -506,8 +507,7 @@ def parent_of(pid: int) -> tuple[str, int]:
         stat = Path(f"/proc/{pid}/stat").read_text()
         return stat[stat.index("(") + 1:stat.rindex(")")], int(stat[stat.rindex(")") + 2:].split()[1])
     except (OSError, ValueError, IndexError):
-        result = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)],
-                                capture_output=True, text=True)
+        result = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)], capture_output=True, text=True)
         fields = result.stdout.split(None, 1)
         if result.returncode or len(fields) != 2:
             raise SakoError(f"process {pid} not found")
@@ -547,15 +547,16 @@ def alive(pid: int) -> bool:
 
 
 def read_presence(roots: Roots) -> list[dict]:
-    """Every live entry. A process visible here judges its entry, and a gone or unreadable one is removed. An
-    entry from another PID namespace (a client's sandbox), or with no host, counts as live for LEASE after its
-    last start, marked unverified; it stays on disk either way, so a resume keeps its starting facts."""
+    """Every live entry. A process visible here judges its entry; a gone or unreadable one is removed. An entry from
+    another PID namespace (a client's sandbox), or with no host, counts as live for LEASE after its last start, marked
+    unverified, and one from an earlier boot has ended. Both stay on disk, so a resume before end keeps its starting facts."""
     entries, now = [], time.time()
     for path in sorted(presence_dir(roots).glob("*.json")):
         entry = read_json(path)
         pid = entry["pid"] if entry.get("marker") and isinstance(entry.get("pid"), int) else -1
-        judged = pid < 0 or pid > 1 and entry.get("ns", PID_NS) == PID_NS
-        if judged and alive(pid) or not judged and isinstance(entry.get("seen"), int) and entry["seen"] + LEASE > now:
+        judged = pid < 0 or pid > 1 and entry.get("ns", PID_NS) in (PID_NS, PID_NS.partition(" boot ")[0])  # 0.5 recorded no boot
+        ended = BOOT and str(entry.get("ns")).partition(" boot ")[2] not in ("", BOOT)  # recorded before a restart
+        if judged and alive(pid) or not (judged or ended) and isinstance(entry.get("seen"), int) and entry["seen"] + LEASE > now:
             entries.append(entry if judged else dict(entry, unverified=True))
         elif judged:
             with suppress(OSError):
@@ -564,13 +565,12 @@ def read_presence(roots: Roots) -> list[dict]:
 
 
 def write_presence(roots: Roots, session_id: str) -> dict:
-    """Write or refresh this session's entry; a resume keeps its starting facts. Raises SakoError
+    """Write or refresh this session's entry; a resume before end keeps the entry and its starting facts. Raises SakoError
     when it cannot be written; presence_entry still builds it for rendering."""
     directory = presence_dir(roots)
     mine = directory / f"{session_key(session_id)}.json"
     entry = presence_entry(roots, session_id, read_json(mine))
     try:
-        directory.mkdir(parents=True, exist_ok=True)
         read_presence(roots)  # Sweep dead hosts; distinct conversations may share a live host.
         atomic_write(mine, json.dumps(entry, indent=1) + "\n")
     except OSError as error:
@@ -579,31 +579,33 @@ def write_presence(roots: Roots, session_id: str) -> dict:
 
 
 def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) -> dict:
-    """This session's entry as it would be written; a resume keeps its starting facts."""
+    """This session's entry as it would be written; a resume before end keeps its starting facts, and one after end starts over."""
     previous = previous or {}
     pid = agent_pid()
     pid = pid if alive(pid) else 0  # a host hidden from here, such as SAKO_AGENT_PID inside a sandbox, is none
-    return {  # with no host visible (a sandbox), keep the one the hook recorded: better evidence than none
-        "marker": previous.get("marker") or marker_for(session_id),
-        "session_id": session_id,
-        "pid": pid or previous.get("pid", 0), "ns": PID_NS if pid else previous.get("ns", ""), "seen": int(time.time()),
-        "started": previous.get("started") or time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "started_at": previous.get("started_at") or int(time.time()),
-        "work_root": str(roots.work),
-        "branch": git(roots.work, "rev-parse", "--abbrev-ref", "HEAD", check=False) or "?",
+    hook = {} if BOOT and str(previous.get("ns")).partition(" boot ")[2] not in ("", BOOT) else previous  # a restart ended its host
+    return {  # with no host visible (a sandbox), keep the one the hook recorded in this boot: better evidence than none
+        "marker": previous.get("marker") or marker_for(session_id), "session_id": session_id,
+        "pid": pid or hook.get("pid", 0), "ns": PID_NS if pid else hook.get("ns", PID_NS), "seen": int(time.time()),
+        "started": previous.get("started") or time.strftime("%Y-%m-%dT%H:%M:%S%z"), "started_at": previous.get("started_at") or int(time.time()),
+        "start_root": previous.get("start_root") or previous.get("work_root") or str(roots.work),  # only there does dirty_at_start apply
+        "work_root": str(roots.work), "branch": git(roots.work, "rev-parse", "--abbrev-ref", "HEAD", check=False) or "?",
         "work_start_rev": previous.get("work_start_rev") or git(roots.work, "rev-parse", "HEAD", check=False),
         "dirty_at_start": previous["dirty_at_start"] if "dirty_at_start" in previous else
         {path: fingerprint(roots.work, path) for path in product(dirty_paths(roots.work))},
     }
 
 
-def remove_presence(roots: Roots, session_id: str) -> None:
-    with suppress(OSError):
-        (presence_dir(roots) / f"{session_key(session_id)}.json").unlink()
+def remove_presence(roots: Roots, session_id: str) -> bool:
+    with suppress(FileNotFoundError):  # any other failure, such as a read-only folder, reaches the caller
+        retried((presence_dir(roots) / f"{session_key(session_id)}.json").unlink)
+        return True
+    return False
 
 
 def my_entry(roots: Roots, session_id: str | None) -> dict | None:
-    return (read_json(presence_dir(roots) / f"{session_key(session_id)}.json") or None) if session_id else None
+    entry = (read_json(presence_dir(roots) / f"{session_key(session_id)}.json") or None) if session_id else None
+    return dict(entry, dirty_at_start={}) if entry and entry.get("start_root", entry.get("work_root")) != str(roots.work) else entry
 
 
 # ----------------------------------------------------------------------------
@@ -635,7 +637,7 @@ def content_id(root: Path, paths: list[str]) -> str:
     for relative in covered_files(root, paths):
         path = root / relative
         if path.is_symlink() or path.is_file():
-            kind = "link" if path.is_symlink() else str(path.stat().st_mode & 0o111)
+            kind = "link" if path.is_symlink() else str(path.stat().st_mode & 0o100)  # the owner's executable bit, the only one Git tracks
             digest.update(f"{relative}\0{kind}\0{fingerprint(root, relative)}\0".encode("utf-8", "surrogateescape"))
     return digest.hexdigest()[:16]
 
@@ -651,7 +653,7 @@ def evidence_state(roots: Roots, config: dict) -> tuple[str, str]:
         return "none", "no verify_command configured; SAKO keeps no check evidence"
     stamp = read_json(roots.local / "stamp.json")
     if not stamp:
-        return "none", "no passing check recorded; run: sako.py verify"
+        return "none", f"no passing check recorded; run sako.py verify, which runs {shlex.join(config['verify_command'])}"
     now = content_id(roots.work, list(config["verify_paths"]))
     if stamp.get("command_id") != command_id(config):
         return "stale", "the check command or paths changed since the last pass"
@@ -664,32 +666,35 @@ def verify(roots: Roots, config: dict, out=print) -> int:
     command = config["verify_command"]
     if not command:
         raise SakoError(f"{CONFIG} has no verify_command; nothing to run")
-    path = roots.local / "stamp.json"
-    path.unlink(missing_ok=True)  # a failing run must never leave a passing stamp behind
-    paths = list(config["verify_paths"])
-    listed = covered_files(roots.work, paths)
-    before = content_id(roots.work, paths)
-    started = time.time()
-    try:
-        result = subprocess.run(list(command), cwd=roots.work)
-    except OSError as error:
-        raise SakoError(f"verify_command {command[0]!r} cannot run: {error.strerror or error}") from None
-    after = content_id(roots.work, paths)
+    path, log, failed = (roots.local / name for name in ("stamp.json", "verify.log", "verify-failed.log"))
+    paths = list(config["verify_paths"])  # and the command, looked up on PATH on Windows, whose own search tries System32 first
+    run = [shutil.which(command[0]) or command[0], *command[1:]] if sys.platform == "win32" else list(command)  # bash: Git's, not WSL's
+    listed, before, started = covered_files(roots.work, paths), content_id(roots.work, paths), time.time()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("wb") as kept:  # written as the check runs; a process the check leaves behind never holds verify
+        try:
+            result = subprocess.run(run, cwd=roots.work, stdout=kept, stderr=subprocess.STDOUT)
+        except OSError as error:
+            raise SakoError(f"verify_command {command[0]!r} cannot run: {error.strerror or error}") from None
+    shown = lambda: log.read_text(encoding="utf-8", errors="replace")  # read after the stamp is settled, since reading can fail
     if result.returncode:
-        out(f"check: FAILED (exit {result.returncode}) after {time.time() - started:.0f}s; no stamp written")
+        retried(lambda: path.unlink(missing_ok=True))  # first, so the last pass, kept while the check ran, never outlives a failure
+        retried(lambda: shutil.copyfile(log, failed))  # kept until the next failure; verify.log holds the last run
+        out(f"{shown()}check: FAILED (exit {result.returncode}) after {time.time() - started:.0f}s; no stamp written; output in {failed.as_posix()}")
         return 1
+    after = content_id(roots.work, paths)  # taken past the failing branch, so a refusal here cannot keep the last pass after a failing run
     if before != after or command_id(config) != command_id(load_config(roots.kit)):
+        retried(lambda: path.unlink(missing_ok=True))  # nor does a run whose content or command moved
         made = sorted(set(covered_files(roots.work, paths)) - set(listed))  # often the check's own cache
-        out("check: passed, but the checked content changed during the run " f"({before} -> {after}); run it again for a stamp"
+        out(f"{shown()}check: passed, but the checked content changed during the run ({before} -> {after}); run it again for a stamp"
             + (f". The run created {', '.join(made[:4])}: ignore generated files in .gitignore, or keep the check from "
                f"writing them ({PYTHON} -B for Python), so they are not checked content" if made else ""))
         return 1
-    path.parent.mkdir(parents=True, exist_ok=True)
-    stamp = {"content_id": after, "command_id": command_id(config),
-             "product_rev": git(roots.work, "rev-parse", "HEAD", check=False),
+    stamp = {"content_id": after, "command_id": command_id(config), "uncommitted": bool(changed_since(roots.work, "HEAD", paths)),
+             "product_rev": git(roots.work, "rev-parse", "-q", "--verify", "HEAD", check=False),  # empty before a first commit
              "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "sako": VERSION}
     atomic_write(path, json.dumps(stamp, indent=1) + "\n")
-    out(f"check: PASS in {time.time() - started:.0f}s; covered {len(listed)} file(s); stamp {after} -> {path.as_posix()}")
+    out(f"{shown()}check: PASS in {time.time() - started:.0f}s; covered {len(listed)} file(s); stamp {after} -> {path.as_posix()}; output in {log.as_posix()}")
     return 0
 
 
@@ -727,22 +732,24 @@ def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
     for entry in read_presence(roots):
         if entry.get("marker") == me:
             continue
-        held = my_rows(rows, entry.get("marker"))
-        where = "; ".join(f"{r.id} ({r.status}) touches {', '.join(r.touches) or '?'}" for r in held) + \
-            "  [from the claim column]" if held else "no claimed row yet; ask before touching shared paths"
+        held = [r for r in my_rows(rows, entry.get("marker")) if r.status == "claimed"]  # a closed row holds nothing
+        where = "; ".join(f"{r.id} (claimed) touches {', '.join(r.touches) or '?'}" for r in held) + \
+            "  [from the claim column]" if held else "no claim"
         until = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry["seen"] + LEASE)) if entry.get("unverified") else ""
-        lines.append(f"  peer {entry.get('marker')} on {entry.get('branch')} since {entry.get('started')}"
+        lines.append(f"  peer {entry.get('marker')} (session ID ends {str(entry.get('session_id', '?'))[-8:]}) on "
+                     f"{entry.get('branch')} since {entry.get('started')}"
                      + (f", unverified from here (counts as live until {until})" if until else "") + f" -> {where}")
-    return lines
+    return ["live peers (disjoint: share the tree; overlap: wait or negotiate; "
+            "no claim: ask before touching shared paths):"] + lines if lines else []
 
 
 def fingerprint(root: Path, relative: str) -> str:
-    """What a path holds now: file bytes, a symlink's target, a submodule's commit, or absent."""
+    """What a path holds now: a file's bytes and executable bit, a symlink's target, a submodule's commit, or absent."""
     path = root / relative
     if path.is_symlink():
         data = b"link:" + os.readlink(path).encode("utf-8", "surrogateescape")
     elif path.is_file():
-        data = path.read_bytes()
+        data = path.read_bytes() + (b"\0exec" if path.stat().st_mode & 0o100 else b"")  # the bit Git tracks, which the stamp counts too
     elif path.is_dir():
         data = b"commit:" + git(path, "rev-parse", "HEAD", check=False).encode()
     else:
@@ -751,36 +758,44 @@ def fingerprint(root: Path, relative: str) -> str:
 
 
 def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], str]:
-    """Paths this session changed, each with a label: dirty now and not as they were at
-    start, or in a commit made since the session started. Without a start record every
-    dirty path counts and commits go unchecked; the note says so. A linked worktree nested
-    here (a harness's) is another checkout; its work counts here once merged."""
+    """Paths this session changed, each with a label: dirty now and not as they were at start, or in a commit made
+    since the session started. Without a start record every dirty path counts and commits go unchecked; the note
+    says so. A linked worktree nested here (a harness's) is another checkout; its work counts here once merged."""
     nested = {p.relative_to(roots.work).as_posix() + "/" for p in checkouts(roots) if roots.work in p.parents}
     dirty = [p for p in product(dirty_paths(roots.work)) if p not in nested]  # untracked only: a gitlink counts
     start, since = (entry or {}).get("dirty_at_start"), (entry or {}).get("started_at")
-    if not isinstance(start, dict) or not isinstance(since, int):
-        return ({path: "" if (roots.work / path).exists() or (roots.work / path).is_symlink() else "deleted"
-                 for path in dirty}, "no start record for this session (start did not run, or its entry was "
-                "swept); commits since you started were not checked")
-    changed = {}
-    for path in dirty:
-        if path not in start:
-            changed[path] = "" if (roots.work / path).exists() or (roots.work / path).is_symlink() else "deleted"
+    has_start = isinstance(start, dict) and isinstance(since, int)
+    changed = {path: "" if (roots.work / path).exists() or (roots.work / path).is_symlink() else "deleted"
+               for path in dirty if not has_start or path not in start}
+    if not has_start:
+        return changed, ("no start record for this session (start did not run, or its entry was swept); commits since "
+                         "you started were not checked")
     for path, before in start.items():
         gone = path.endswith("/") and not (roots.work / path).is_dir()  # a nested checkout removed or moved away
         if path not in nested and not gone and fingerprint(roots.work, path) != before:
             changed[path] = "edited after start; already dirty at start"
     rev = str(entry.get("work_start_rev") or "")
     known = rev and git(roots.work, "rev-parse", "-q", "--verify", f"{rev}^{{commit}}", check=False)
-    log = git(roots.work, "log", "--no-renames", "--name-only", "--format=%x00%h %s", f"--since=@{since}",
-              f"{rev}..HEAD" if known else "HEAD", check=False)
+    log = git(roots.work, "log", "--no-renames", "--name-only", "--format=%x00%h %ad %s", "--date=short-local",
+              f"--since=@{since}", f"{rev}..HEAD" if known else "HEAD", check=False)
     for block in log.split("\0")[1:]:
         subject, *paths = block.strip("\n").split("\n")
-        short, _, title = subject.partition(" ")
-        for path in product(paths):
-            if path not in start:
-                changed.setdefault(path, f'in commit {short} "{title}"')
+        short, day, title = (subject.split(" ", 2) + [""])[:3]  # the author's day, local like a receipt's; a rebase keeps it
+        for path in product(set(paths) - start.keys()):
+            changed.setdefault(path, f'in commit {short} of {day} "{title}"')
     return changed, ""
+
+
+def others_moved(roots: Roots, entry: dict | None, moved: list[str], changed: dict[str, str], rows: list[Row], live: list[dict]) -> bool:
+    """True when only others moved checked content since the start, by edits left uncommitted before it (committed since or not)
+    or by edits or commits in the scope of a row a live peer here claimed, or closed no earlier than the minute the file last changed.
+    Any other commit, and a merge, pull or checkout of older commits, is this session's, whoever made it, as is an unknown start."""
+    rev, marker = str((entry or {}).get("work_start_rev") or ""), (entry or {}).get("marker")
+    here = {key_of(e["marker"]) for e in live if e.get("marker") != marker and e.get("work_root") == str(roots.work)}
+    committed = set(git(roots.work, "diff", "--no-renames", "--name-only", rev, "HEAD", check=False).splitlines()) if rev else set()
+    committed -= set((entry or {}).get("dirty_at_start") or {})  # others' edits left uncommitted before the start; a later edit is in changed
+    return not any(path.startswith("(") or (path in committed and path not in changed) or (path in changed and not any(
+        holder_key(r.claim) in here and covers(r, path, roots.work) for r in rows)) for path in moved)
 
 
 def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | None,
@@ -791,25 +806,26 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
     peers = {key_of(e["marker"]): e for e in live if e.get("marker") != marker}
     unrecorded, exempt = [], {}
     for path, label in sorted(changed.items()):
-        if any(covers(row, path) for row in own):
+        day = label.split()[4] if label.startswith("in commit") else ""  # only a close on or after it excuses a commit
+        if any(covers(row, path, None if day else roots.work) for row in own):  # a file changed after a close is not its task's
             continue
-        closer = next((r for r in rows if r.doc == DONE and r.claim and holder_key(r.claim) != key_of(marker)
-                       and label.startswith("in commit") and covers(r, path)), None)
-        if closer:
-            exempt.setdefault(f"committed under {closer.id}, closed by {closer.claim}", []).append(path)
-            continue
-        holder = next((r for r in rows if holder_key(r.claim) in peers and covers(r, path)), None)
+        holder = next((r for r in rows if not (day and r.doc == DONE) and holder_key(r.claim) in peers and covers(r, path, roots.work)), None)
         if holder and peers[holder_key(holder.claim)].get("work_root") == str(roots.work):
             kind = "unverified" if peers[holder_key(holder.claim)].get("unverified") else "live"
-            exempt.setdefault(f"in {holder.id}'s scope, claimed by {kind} peer {holder.claim.split()[0]} in this checkout",
-                              []).append(path)
+            exempt.setdefault(f"in {holder.id}'s scope, {'closed' if holder.doc == DONE else 'claimed'} by {kind} peer "
+                              f"{holder.claim.split()[0]} in this checkout", []).append(path)
+            continue
+        closer = next((r for r in reversed(rows) if day and r.doc == DONE and r.claim and holder_key(r.claim) != key_of(marker)
+                       and max(re.findall(r"; closed (\d{4}-\d\d-\d\d)[T\d:+-]*;", r.evidence), default="") >= day and covers(r, path)), None)
+        if closer:
+            exempt.setdefault(f"committed under {closer.id}, closed by {closer.claim.split()[0]}", []).append(path)
             continue
         if holder:
             label = (label + "; " if label else "") + f"claimed by {holder.claim.split()[0]} in another worktree, " \
                                                       "which cannot have changed this checkout"
         unrecorded.append(f"{path} ({label})" if label else path)
-    notes = [f"not counted: {', '.join(paths)}: {why}; a shared checkout shows what changed, not who changed it."
-             for why, paths in exempt.items()]
+    notes = [f"not counted: {', '.join(paths[:3])}{f' and {len(paths) - 3} more' if len(paths) > 3 else ''}: {why}"
+             for why, paths in exempt.items()] + (["note: a shared checkout shows what changed, not who changed it."] if exempt else [])
     return unrecorded, notes, changed, note
 
 
@@ -829,15 +845,15 @@ def footprint_lines(roots: Roots, config: dict, manifest: dict) -> list[str]:
     lines = [f"SAKO installed in {home} ({footprint}). " + (f"{KIT}/ is tracked with the code; SAKO commits nothing."
              if footprint == "shared" else "Nothing tracked changed; " + ("the folder is listed in .git/info/exclude."
              if listed else f"add the line /{KIT}/ to {ex.as_posix() if roots.work != roots.main else '.git/info/exclude'}, or git status shows the folder."))]
-    if footprint == "shared":
-        return lines + [records + (", committed with the code; each branch has its own copy."
-                                   if tracked(roots.home, MANIFEST) else f". Commit them with: {SHARE}")]
-    if footprint == "repo":
-        return lines + [records + f", in their own repository ({kit}/.git). Commit them with: git -C {shlex.quote(kit)} "
-                        f"add -A && git -C {shlex.quote(kit)} commit -m \"SAKO records\""]
-    return lines + [records + ". They are not in Git yet; git clean -x deletes them.",
-                    "  Keep their history, or share them privately:  uvx sako init --repo [url]",
-                    "  Commit them with the code:                    uvx sako init --shared"]
+    if footprint == "local":
+        return lines + [records + ". They are not in Git yet; git clean -dx deletes them.",
+                        "  Keep their history, or share them privately:  uvx sako init --repo [url]",
+                        "  Commit them with the code:                    uvx sako init --shared"]
+    at, base = (f"-C {shlex.quote(kit)} ", "") if footprint == "repo" else ("", f"{kit}/")
+    stage = " ".join(shlex.quote(base + p) for p in (".gitignore", "config.json", config["tasks"], config["done"]) if (roots.kit / p).is_file())
+    commit = f'Commit them with: git {at}add -- {stage} && git {at}commit -m "SAKO records" -- {stage}'  # by name, so other files stay yours
+    where = f", in their own repository ({kit}/.git)" if at else ", committed with the code; each branch has its own copy"
+    return lines + [f"{records}{where}. {commit}" if at or tracked(roots.home, MANIFEST) else f"{records}. Commit them with: {SHARE}"]
 
 
 def hooks_line(roots: Roots, manifest: dict) -> str:
@@ -852,14 +868,14 @@ def hooks_line(roots: Roots, manifest: dict) -> str:
         elif isinstance(seen.get(agent), dict):
             parts.append(f"{CLIENTS[agent]} last ran {seen[agent].get('time')} ({seen[agent].get('event')})")
         else:
-            parts.append(f"{CLIENTS[agent]} not seen yet" + (", runs only once you trust it in Codex"
-                                                             if agent == "codex" else ""))
+            parts.append(f"{CLIENTS[agent]} not seen yet" + (", runs only once you trust it in Codex" if agent == "codex" else ""))
     return "Hooks: " + "; ".join(parts) + "."
 
 
 def stray(roots: Roots) -> list[str]:
     """Footprint findings: a stray kit folder, and the recorded footprint against Git."""
-    found = [f"stray {KIT}/ in this worktree is ignored; SAKO uses {roots.kit.as_posix()}"] if roots.home != roots.work and (roots.work / KIT).exists() else []
+    found = [f"stray {KIT}/ in this worktree is ignored; SAKO uses {roots.kit.as_posix()}, so move or delete the stray one"] \
+        if roots.home != roots.work and (roots.work / KIT).exists() else []
     footprint = str(read_json(roots.home / MANIFEST).get("footprint") or "local")
     actual = "shared" if tracked(roots.home, MANIFEST) else "repo" if (roots.kit / ".git/HEAD").is_file() else "local"
     if footprint == "shared" and not subprocess.run(["git", "-C", str(roots.home), "check-ignore", "-q", "--no-index",
@@ -873,9 +889,8 @@ def stray(roots: Roots) -> list[str]:
 
 
 def render_start(roots: Roots, config: dict, entry: dict) -> str:
-    rows = read_ledger(roots, config)
-    live = {e["marker"] for e in read_presence(roots)}
-    findings = stray(roots) + ledger_findings(rows, live)
+    rows, live = read_ledger(roots, config), {e["marker"] for e in read_presence(roots)}
+    findings = stray(roots) + sum(ledger_findings(rows, live, key_of(entry["marker"])), [])  # notes too, last as in status
     state, why = evidence_state(roots, config)
     rev, kit = entry["work_start_rev"], KIT if roots.home == roots.work else roots.kit.as_posix()
     lines = [f"sako {VERSION} · work {roots.work.as_posix()} ({entry['branch']} @ {rev[:9] if rev and rev != 'HEAD' else 'no commits yet'})",
@@ -883,18 +898,11 @@ def render_start(roots: Roots, config: dict, entry: dict) -> str:
              f"kit: {roots.kit.as_posix()}; method {kit}/SAKO.md; records {kit}/{config['tasks']} and {kit}/{config['done']}",
              f"commands: {PYTHON} {shlex.quote((roots.kit / 'sako.py').as_posix())} <verb> "
              f"--session {shlex.quote(entry['session_id'])}",
-             f"your marker: {entry['marker']}  (use claim to record task ownership)",
+             f"your marker: {entry['marker']}",
              f"session: {json.dumps(entry['session_id'])} (use this ID with --session)"]
-    peers = peer_lines(roots, rows, entry["marker"])
-    lines.append("peers: none recorded" if not peers else "live peers (disjoint: share the tree; "
-                 "overlap: wait or negotiate):")
-    lines += peers
+    lines += peer_lines(roots, rows, entry["marker"]) or ["peers: none recorded"]
     lines.append(f"evidence: {state}; {why}")
-    if findings:
-        lines.append(f"ledger: {len(findings)} finding(s)")
-        lines += [f"  {f}" for f in findings]
-    else:
-        lines.append("ledger: consistent")
+    lines += [f"ledger: {len(findings)} finding(s)" if findings else "ledger: consistent"] + [f"  {f}" for f in findings]
     lines += handoffs_line(roots, config, rows) + next_lines(rows, live, brief=True)
     return "\n".join(lines)
 
@@ -907,25 +915,25 @@ def handoff(roots: Roots, config: dict, row: Row) -> Path:
 
 
 def handoffs_line(roots: Roots, config: dict, rows: list[Row]) -> list[str]:
-    """Open tasks' handoff folders, for the session that picks the work up."""
-    folders = [(r.id, handoff(roots, config, r)) for r in rows if r.doc == "tasks"]
-    listed = [f"{i} {shlex.quote(runtime_path(roots, p))}/" for i, p in folders if p.is_dir()]
+    """Handoff folders, each once: an open task's for its next session, a closed task's marked to delete unless a tasks row names it."""
+    folders = {handoff(roots, config, r): r.id + (" (closed: delete)" if r.doc == DONE else "") for r in reversed(rows)}  # so a tasks row wins
+    listed = [f"{i} {shlex.quote(runtime_path(roots, p))}/" for p, i in reversed(folders.items()) if p.is_dir()]
     return ["handoffs: " + ", ".join(listed)] if listed else []
 
 
-def overview(roots: Roots, config: dict, session_id: str | None) -> tuple[list[Row], list[dict], list[str], dict | None, str | None]:
-    """Rows, live presence, findings, and this session's entry and marker, for every view."""
+def overview(roots: Roots, config: dict, session_id: str | None) -> tuple[list[Row], list[dict], list[str], list[str], dict | None, str | None]:
+    """Rows, live presence, findings, the notes that end them (findings only about other sessions), this session's entry and marker."""
     rows, live = read_ledger(roots, config), read_presence(roots)
     entry = my_entry(roots, session_id)
     marker = entry["marker"] if entry else (marker_for(session_id) if session_id else None)
-    mine = {marker} if marker else set()  # the asking session is alive, even after its own end
-    return rows, live, stray(roots) + ledger_findings(rows, {e["marker"] for e in live} | mine), entry, marker
+    found, notes = ledger_findings(rows, {e["marker"] for e in live}, key_of(marker))
+    return rows, live, stray(roots) + found + notes, notes, entry, marker
 
 
 def changes_line(roots: Roots, rows: list[Row], entry: dict | None, marker: str | None) -> str:
     unrecorded, notes, changed, note = recorded(roots, rows, entry, marker, read_presence(roots))
-    return (f"changed this session: {len(changed)}" + (f"; unrecorded: {', '.join(unrecorded[:8])}" if unrecorded else "")
-            + (f" ({note})" if note else ""))
+    return (f"changed this session in {roots.work.as_posix()}: {len(changed)}"
+            + (f"; unrecorded: {', '.join(unrecorded[:8])}" if unrecorded else "") + (f" ({note})" if note else ""))
 
 
 def generated(root: Path, paths: list[str]) -> str:
@@ -936,8 +944,8 @@ def generated(root: Path, paths: list[str]) -> str:
 def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
     """(exit code, message). 2 means: do not stop yet. Each problem names its rule and
     ends with its fix; notes that do not block follow."""
-    rows, live, findings, entry, marker = overview(roots, config, session_id)
-    problems = [f"Ledger: {f}" for f in findings]
+    rows, live, findings, others, entry, marker = overview(roots, config, session_id)
+    problems = [f"Ledger: {f}" for f in findings[:len(findings) - len(others)]]  # the notes about other sessions end the findings
     sako, session = f"{PYTHON} {shlex.quote(runtime_path(roots))}", shlex.quote(session_id or "ID")
     unrecorded, notes, changed, note = recorded(roots, rows, entry, marker, live)
     if unrecorded:
@@ -952,78 +960,73 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
                          "yours or stays unrecorded, say which and why in your reply."
                          + generated(roots.work, [u.split(" (")[0] for u in unrecorded])))
     mine = my_rows(rows, marker)
-    closed = [r for r in mine if r.status == DONE]
-    held = [r for r in mine if r.status == "claimed"]
+    closed, held = [r for r in mine if r.status == DONE], [r for r in mine if r.status == "claimed"]
     moved = changed_since(roots.work, (entry or {}).get("work_start_rev", ""), list(config["verify_paths"])) \
         if closed and config["verify_command"] else []
     if moved:
         state, why = evidence_state(roots, config)
-        # A claim still held explains a stale check, so a close whose receipt shows a pass stays proven.
+        # A claim still held explains a stale check, so a close whose receipt shows a pass, or records work, stays proven.
         working = any(covers(r, path) for r in held for path in moved)
-        unproven = [r.id for r in closed if not working or "; check pass " not in r.evidence]
+        exempt = state != "fresh" and any(map(records_only, closed)) and others_moved(roots, entry, moved, changed, rows, live)
+        unproven = [r.id for r in closed if not (records_only(r) and (exempt or working)) and (not working or "; check pass " not in r.evidence)]
         if state != "fresh" and unproven:
             problems.append(f"Proven: {', '.join(unproven)} closed after checked content changed since you started, "
-                            f"and the check is {state}: {why}\n    fix: {sako} verify, fix what it reports, then stop "
-                            "again.")
+                            f"and the check is {state}: {why}\n    fix: {sako} verify, fix what it reports, then stop again.")
     dirty = set(product(dirty_paths(roots.work)))
     for row in closed:
-        pending = [path for path in sorted(changed) if path in dirty and covers(row, path)
-                   and not any(covers(r, path) for r in held)]
+        pending = [path for path in sorted(changed) if path in dirty and covers(row, path, roots.work) and not any(covers(r, path) for r in held)]
         if pending:
-            quoted, message = " ".join(map(shlex.quote, pending)), shlex.quote(f"{row.id}: {row.task}")
-            problems.append(f"Committed: {row.id} is closed but its changes are not committed: {', '.join(pending[:8])}"
-                            f"\n    fix: git add -- {quoted}, then git commit -m {message} when the owner has allowed "
-                            f"commits in this session; otherwise ask, or say in your reply: {row.id} closed, commit "
-                            "awaiting approval." + generated(roots.work, pending))
+            quoted, message = " ".join(map(shlex.quote, pending)), shlex.quote(row.task)  # no task ID in product history
+            problems.append(f"Committed: {row.id} is closed but its changes are not committed: {', '.join(pending[:8])}\n    fix: "
+                            f"git add -- {quoted}, then git commit -m {message} when the owner has allowed commits in this session; "
+                            f"otherwise ask, or say in your reply: {row.id} closed, commit awaiting approval." + generated(roots.work, pending))
     footprint = str(read_json(roots.home / MANIFEST).get("footprint") or "local") if closed else "local"
     at = f"-C {shlex.quote(runtime_path(roots, roots.kit))} " if footprint == "repo" and (roots.kit / ".git/HEAD").is_file() else ""
-    done = config["done"] if at else f"{KIT}/{config['done']}"
-    records = [p for p in dirty_paths(roots.kit if at else roots.work) if p == done] if at or footprint == "shared" else []
-    if records:
-        ids = ", ".join(r.id for r in closed)
-        problems.append(f"Committed: {ids} closed, but the receipts are not committed: {records[0]}\n    fix: "
-                        f"git {at}add -A{'' if at else ' -- ' + KIT}, then git {at}commit -m {shlex.quote(ids + ' closed')} "
-                        "when the owner has allowed commits in this session; otherwise ask, or say so in your reply.")
+    base, top = ("", roots.kit) if at else (f"{KIT}/", roots.work)
+    done, kept = base + config["done"], set()
+    if (at or footprint == "shared") and done in dirty_paths(top):  # name only the receipts HEAD lacks
+        with suppress(SakoError):  # a committed done file SAKO cannot read holds no receipt
+            kept = {r.id for r in parse_rows({"done": git(top, "show", f"HEAD:{done}", check=False)})}
+        if ids := ", ".join(r.id for r in closed if r.id not in kept):
+            stage = shlex.join((base + config["tasks"], done))  # by name, so other files, in the kit folder or already staged, stay the user's
+            problems.append(f"Committed: {ids} closed, but the receipts are not committed: {done}\n    fix: "
+                            f"git {at}add -- {stage}, then git {at}commit -m {shlex.quote(ids + ' closed')} -- {stage} "
+                            "when the owner has allowed commits in this session; otherwise ask, or say so in your reply.")
     for row in mine:
         folder = handoff(roots, config, row)
         if row.status == "claimed" and not (folder / "handoff.md").is_file():
-            notes.append(f"advisory: {row.id} is claimed and unfinished; if you stop before closing it, write "
-                         f"{shlex.quote(runtime_path(roots, folder / 'handoff.md'))}: where it stands, what landed, "
-                         "what is left, the next step, and traps.")
+            notes.append(f"advisory: {row.id} is claimed and unfinished; if this session ends before closing it, the claim reads as stale "
+                         f"and another session may take it over with a reason, so write {shlex.quote(runtime_path(roots, folder / 'handoff.md'))} "
+                         "with where it stands, what landed, what is left, the next step, and traps.")
         elif row.status == DONE and folder.is_dir():
             notes.append(f"advisory: {row.id} is closed and its handoff folder remains; move lasting facts to their "
                          f"home, then delete {shlex.quote(runtime_path(roots, folder))}/.")
-    tail = notes + ([f"note: {note}."] if note and not unrecorded else [])
+    tail = notes + [f"note: {f}" for f in others] + ([f"note: {note}."] if note and not unrecorded else [])
     if not problems:
         return 0, "\n".join(tail)
     return 2, "\n".join([f"SAKO gate: {len(problems)} problem(s) before you stop:"] + [f"  {p}" for p in problems] + tail)
 
 
 def render_status(roots: Roots, config: dict, session_id: str | None) -> str:
-    rows, _, findings, entry, marker = overview(roots, config, session_id)
+    rows, _, findings, _, entry, marker = overview(roots, config, session_id)
     state, why = evidence_state(roots, config)
     manifest = installation(roots.home)
     lines = footprint_lines(roots, config, manifest) + [hooks_line(roots, manifest)]
     lines += [f"sako {VERSION} · work {roots.work.as_posix()}",
-              f"config: {CONFIG} {'present' if (roots.kit / 'config.json').exists() else 'absent (defaults)'}"
-              f" · verify_command {'set' if config['verify_command'] else 'not set'}",
+              f"config: {CONFIG} {'present' if (roots.kit / 'config.json').exists() else 'absent (defaults)'} · "
+              + (f"verify runs {shlex.join(config['verify_command'])}" if config["verify_command"] else "verify_command not set"),
               f"evidence: {state}; {why}"]
     if entry:
-        lines.append(f"you: {marker} since {entry['started']} on {entry['branch']}; "
-                     f"work started at {entry['work_start_rev'][:9]}")
+        lines.append(f"you: {marker} since {entry['started']} on {entry['branch']}; work started at {entry['work_start_rev'][:9]}")
         landed = git(roots.work, "log", "--format=%h %s", f"{entry['work_start_rev']}..HEAD",
                      check=False).splitlines() if entry.get("work_start_rev") else []
-        lines.append("landed in the repository since you started: "
-                     + (f"{len(landed)} commit(s)" if landed else "nothing"))
+        lines.append("landed in the repository since you started: " + (f"{len(landed)} commit(s)" if landed else "nothing"))
         lines += [f"  {c}" for c in landed[:12]]
     elif session_id:
-        lines.append(f"you: {marker}; no presence entry (session ended or swept); rows and Git history "
-                     "below are the durable record")
-    held = my_rows(rows, marker)
-    lines.append("your rows: " + ("; ".join(f"{r.id} ({r.status})" for r in held) if held else "none"))
+        lines.append(f"you: {marker}; no presence entry (session ended or swept); rows and Git history below are the durable record")
+    lines.append("your rows: " + ("; ".join(f"{r.id} ({r.status})" for r in my_rows(rows, marker)) or "none"))
     lines.append(changes_line(roots, rows, entry, marker))
-    peers = peer_lines(roots, rows, marker)
-    lines += ["peers:" if peers else "peers: none"] + peers
+    lines += peer_lines(roots, rows, marker) or ["peers: none"]
     lines += [f"ledger: {len(findings)} finding(s)" if findings else "ledger: consistent"] + [f"  {f}" for f in findings]
     return "\n".join(lines + handoffs_line(roots, config, rows))
 
@@ -1037,14 +1040,14 @@ METHOD = ".sako/SAKO.md"
 RUNTIME = ".sako/sako.py"
 SHARED_SKILL = ".agents/skills/sako/SKILL.md"
 CLAUDE_SKILL = ".claude/skills/sako/SKILL.md"
-ASSETS = {RUNTIME: "sako.py", METHOD: "SAKO.md", SHARED_SKILL: "skills/sako/SKILL.md",
-          CLAUDE_SKILL: "skills/sako/SKILL.md"}
+ASSETS = {RUNTIME: "sako.py", METHOD: "SAKO.md", SHARED_SKILL: "skills/sako/SKILL.md", CLAUDE_SKILL: "skills/sako/SKILL.md"}
 CLIENTS = {"claude": "Claude Code", "codex": "Codex"}
 CODEX_ROOT = "# sako: start\n[sandbox_workspace_write]\nwritable_roots = [{}]\n# sako: end\n"
-SHARE = f'git add -A -- {KIT} && git commit -m "Share SAKO records"'
+SHARE = f'git add -A -- {KIT} && git commit -m "Share SAKO records" -- {KIT}'  # the folder only, so anything else staged stays staged
 HOOK_OWNED = r"(?<![\w.])\.sako/sako\.py(?![\w.]).*\bhook {}(?![\w-])"  # SAKO's hook for a client, any Python or redirect
-DOOR = ("This project uses SAKO for task execution: before carrying out a project task, read {}/SAKO.md and follow its "
-        "daily loop. Questions and discussion need no task record; project instructions and the owner's choices come first.")
+DOOR = ("This project uses SAKO for task execution. Before a project task, read {}/SAKO.md down to its Read when needed "
+        "table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change "
+        "a file; add and claim come before that change. Project instructions and the owner's choices come first.")
 POINTER = f"{DOOR.format(KIT)} Records: {KIT}/work/TASKS.md and DONE.md. Commands: python3 {KIT}/sako.py <verb> (python on Windows)."
 
 
@@ -1054,8 +1057,7 @@ def kit_root() -> Path:
     here = Path(__file__).resolve().parent
     if (here / "templates").is_dir() and (here / "skills").is_dir():
         return here
-    raise SakoError("init needs the SAKO package or a checkout; the copy in a project cannot seed one. "
-                    "Run: uvx sako init")
+    raise SakoError("init needs the SAKO package or a checkout; the copy in a project cannot seed one. Run: uvx sako init")
 
 
 def kit_text(kit: Path, relative: str) -> str:
@@ -1092,8 +1094,7 @@ def installation(main: Path) -> dict:
         if not (isinstance(data, dict) and data["footprint"] in ("local", "repo", "shared") and isinstance(data["version"], str)
                 and isinstance(data["files"], dict) and {RUNTIME, METHOD} <= set(data["files"]) <= set(ASSETS)
                 and all(re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in data["files"].values())
-                and (data["clients"] is None or isinstance(data["clients"], list)
-                     and set(data["clients"]) <= set(CLIENTS))):
+                and (data["clients"] is None or isinstance(data["clients"], list) and set(data["clients"]) <= set(CLIENTS))):
             raise ValueError("invalid record shape")
     except (ValueError, TypeError, KeyError):
         raise SakoError(f"{MANIFEST} is invalid; restore it or reinstall the kit") from None
@@ -1105,10 +1106,11 @@ def hook_file(agent: str) -> str:
 
 
 def hook_command(agent: str) -> str:
-    """Find the main checkout's copy through Git from any folder. A missing kit exits 1,
-    which clients show without blocking; exit 2 on Stop would trap the session."""
-    return ('c="$(git rev-parse --path-format=absolute --git-common-dir)"; k="${c%/.git}/.sako/sako.py"; '
-            '[ -f "$k" ] || { echo "sako: no kit at $k; run: uvx sako init" >&2; exit 1; }; '
+    """Find the main checkout's copy through Git from the hook's folder, else from Claude Code's project folder, and
+    run it from where it was found. A missing kit exits 1, which never blocks; exit 2 on Stop would trap the session."""
+    return ('kit() { c="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && k="${c%/.git}/.sako/sako.py" '
+            '&& [ -f "$k" ]; }; kit || { cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null && kit; } || '
+            '{ echo "sako: no kit found from $PWD; cd back to the project top folder, or run: uvx sako init" >&2; exit 1; }; '
             f'exec {PYTHON} "$k" hook {agent}')
 
 
@@ -1165,8 +1167,7 @@ def exclude(roots: Roots, patterns: list[str], drop: tuple[str, ...] = ()) -> li
         data = "".join(line for line in lines if line.rstrip("\r\n") not in [f"/{p}" for p in drop]).encode("utf-8", "surrogateescape")
         atomic_write(path, data)
     present = {line.rstrip("\r\n") for line in lines}
-    missing = [f"/{p}" for p in patterns if f"/{p}" not in present]
-    if missing:
+    if missing := [f"/{p}" for p in patterns if f"/{p}" not in present]:
         block = "\n".join(([] if "# sako" in present else ["# sako"]) + missing) + "\n"
         try:
             atomic_write(path, data + (b"\n" if data and not data.endswith(b"\n") else b"")
@@ -1191,28 +1192,27 @@ def client_path(root: Path, relative: str, notes: list[str]) -> Path | None:
         return None
 
 
-def wiring(roots: Roots, checkout: Path, clients: list[str], remove: bool = False,
-           add: bool = True) -> tuple[dict[Path, str], list[str]]:
-    """The client files one checkout needs: hooks for the chosen clients, SAKO's entries gone
-    for the others, and in a linked worktree Codex's writable root for the kit folder. With
-    add off, only removals happen. A tracked file is never changed; a note says what to do."""
-    writes: dict[Path, str] = {}
-    notes = []
+def wiring(roots: Roots, checkout: Path, clients: list[str], add: bool = True) -> tuple[dict[Path, str], list[str]]:
+    """The client files one checkout needs: hooks for the chosen clients, SAKO's entries gone for the others,
+    and in a linked worktree Codex's writable root for the kit folder. With add off, no hook is added, but SAKO's
+    entries are refreshed or removed. A tracked file is never changed; a note says what to do."""
+    writes, notes = {}, []
     for agent in CLIENTS:
-        relative, want = hook_file(agent), agent in clients and not remove and (agent != "codex" or sys.platform != "win32")
+        relative, want = hook_file(agent), agent in clients and (agent != "codex" or sys.platform != "win32")
         current = read_text(checkout / relative, "hook settings") if (checkout / relative).exists() else ""
-        if want and not add or not want and not re.search(HOOK_OWNED.format(agent), current) \
+        if not (want and add) and not re.search(HOOK_OWNED.format(agent), current) \
                 or not (path := client_path(checkout, relative, notes)):
             continue
         proposed = edit_hooks(current, agent, remove=not want, where=str(path))
         if json.loads(proposed) == json.loads(current or "{}"):
             continue
-        if tracked(checkout, path.relative_to(checkout.resolve()).as_posix()):
-            notes.append(f"{CLIENTS[agent]}: {relative} is tracked, so SAKO left it unchanged. Add or remove "
-                         "its hooks there yourself, or run start, check --gate and end explicitly.")
+        if tracked(checkout, path.relative_to(checkout.resolve()).as_posix()):  # named in full from another checkout
+            notes.append(f"{CLIENTS[agent]}: {relative if checkout.resolve() == roots.work else path.as_posix()} is tracked, so SAKO left "
+                         "it unchanged; " + ("run start, check --gate and end explicitly, or give it this content yourself" if want else
+                                             "remove SAKO's hooks from it yourself; without them it reads") + f":\n{proposed.rstrip()}")
         else:
             writes[path] = proposed
-    relative, want = ".codex/config.toml", "codex" in clients and not remove
+    relative, want = ".codex/config.toml", "codex" in clients
     current = read_text(checkout / relative, "Codex settings") if (checkout / relative).exists() else ""
     if checkout.resolve() != roots.home and (want and add or not want and "# sako: start" in current) \
             and (path := client_path(checkout, relative, notes)):
@@ -1278,15 +1278,14 @@ def hooks_written(roots: Roots, clients: list[str], reason: str) -> str:
     if not clients:
         return (f"Hooks: none, {reason}. Agents read {SHARED_SKILL}; run start, check --gate and end yourself "
                 f"({PYTHON} {shlex.quote(runtime_path(roots))} start --session <id>).{change}{windows}")
-    return "Hooks written: " + listing([f"{CLIENTS[a]} ({hook_file(a)}" + (
+    return "Hooks: " + listing([f"{CLIENTS[a]} ({hook_file(a)}" + (
         ", which runs them only after you trust them in Codex" if a == "codex" else "") + ")" for a in clients]) + \
         f", chosen from {reason}. Start a session to begin.{change}{windows}"
 
 
 def init(target: Path, clients: list[str], out=print, update: bool = False, footprint: str | None = None,
          url: str | None = None) -> None:
-    kit = kit_root()
-    roots = resolve_roots(target)
+    kit, roots = kit_root(), resolve_roots(target)
     if roots.worktree:
         if clients or update or footprint:
             raise SakoError(f"in a linked worktree init only wires what the main checkout chose; "
@@ -1383,9 +1382,8 @@ def install(roots: Roots, kit: Path, config: dict, chosen: list[str], out, updat
         footprint == "shared" and tracked(roots.home, f"{KIT}/.gitignore")  # the records' repository owns it then
     if footprint != "local" and not kept_ignore:
         writes[roots.kit / ".gitignore"] = ("/sako.py\n/SAKO.md\n/install.json\n" if footprint == "repo" else "") + "/state/\n"
-    record = clients if chosen or old["clients"] is not None or clients else None
-    manifest = {"version": VERSION if update or not old["files"] else old["version"], "footprint": footprint,
-                "files": managed, "clients": record}
+    manifest = {"version": VERSION if update or not old["files"] else old["version"], "footprint": footprint, "files": managed,
+                "clients": clients if chosen or old["clients"] is not None or clients else None}
     writes[roots.main / MANIFEST] = json.dumps(manifest, indent=2) + "\n"
     for checkout in checkouts(roots):
         wired, more = wiring(roots, checkout, clients, add=checkout.resolve() == roots.main)
@@ -1455,18 +1453,17 @@ def cmd_remove(args: argparse.Namespace) -> int:
             if path.exists() and digest(read_text(path, relative)) != expected:
                 raise SakoError(f"{relative} has local changes; preserve them before removing the kit")
             deletes.append(path)
-        writes: dict[Path, str] = {}
-        for checkout in checkouts(roots):
-            writes.update(wiring(roots, checkout, [], remove=True)[0])
-        apply(writes)
-        for path in deletes + [roots.main / MANIFEST]:
+        wired = [wiring(roots, checkout, []) for checkout in checkouts(roots)]  # with no client chosen, every checkout loses SAKO's hooks
+        writes, notes = {k: v for w, _ in wired for k, v in w.items()}, notes + [n for _, said in wired for n in said]
+        for path in deletes + [roots.main / MANIFEST] + [p for p in apply(writes) if not p.exists()]:  # and settings left empty
             path.unlink(missing_ok=True)
-            with suppress(OSError):
-                path.parent.rmdir()
+            with suppress(OSError):  # then the folders left empty, such as .claude/skills/ and .claude/; a top folder keeps .git
+                for folder in path.parents[:3]:
+                    folder.rmdir()
     shutil.rmtree(roots.state, ignore_errors=True)
-    print("\n".join(notes + [f"Removed the SAKO kit and its hooks. {CONFIG} and {KIT}/work/ keep your records; "
-                              f"delete {KIT}/ to leave no trace."] + ([f"{KIT}/ is tracked: commit the removal with git add -A -- "
-        f"{KIT} && git commit, or take the records out of Git too with git rm -r --cached {KIT} && git commit."] if shared else [])))
+    print("\n".join(notes + [f"Removed the SAKO kit and its hooks. {CONFIG} and {KIT}/work/ keep your records; delete {KIT}/ and "
+                             "SAKO's lines in .git/info/exclude to leave no trace."] + ([f"{KIT}/ is tracked: commit the removal with "
+        f"git add -A -- {KIT} && git commit, or take the records out of Git too with git rm -r --cached {KIT} && git commit."] if shared else [])))
     return 0
 
 
@@ -1492,12 +1489,10 @@ def cmd_check(args: argparse.Namespace) -> int:
     roots, config = resolve(args)
     if args.gate:
         code, message = gate(roots, config, need_session(args))
-        if code:
-            print(message, file=sys.stderr)
-        else:
-            print("SAKO gate: clear" + (f"\n{message}" if message else ""))
+        clear = f"SAKO gate: clear in {roots.work.as_posix()}" + (f"\n{message}" if message else "")  # the checkout judged
+        print(message if code else clear, file=sys.stderr if code else sys.stdout)
         return code
-    rows, _, findings, entry, marker = overview(roots, config, args.session)
+    rows, _, findings, _, entry, marker = overview(roots, config, args.session)
     state, why = evidence_state(roots, config)
     print(f"evidence: {state}; {why}")
     if args.session:
@@ -1533,19 +1528,20 @@ def insert_row(text: str, cells: dict[str, str], titles: list[str]) -> tuple[str
     return "\n".join(lines).rstrip() + "\n", titles
 
 
-def receipt_part(roots: Roots, config: dict, marker: str) -> str:
-    """Who closed, when, and what the configured check said at that moment."""
-    check = "no automated check"
-    if config["verify_command"]:
+def receipt_part(roots: Roots, config: dict, claim: str, records: bool = False) -> str:
+    """The claim's marker and time, the close time, and what the check said and at which commit (none for records work)."""
+    holder = re.match(rf"{MARKER.pattern}(?: since [0-9T:+-]+)?", claim)[0]  # the claim's marker, kept after a resume on a later day
+    check = "no automated check" + (" (records only)" if records and config["verify_command"] else "")
+    if config["verify_command"] and not records:
         stamp, (state, _) = read_json(roots.local / "stamp.json"), evidence_state(roots, config)
+        check = "no passing check recorded"
         if state == "fresh":
-            check = f"check pass {stamp['time']} on {stamp['content_id']}"
+            at = (stamp["product_rev"][:12] or "no commit") + (" plus uncommitted changes" if stamp.get("uncommitted") else "")
+            check = f"check pass {stamp['time']} on {stamp['content_id']} at {at}"
         elif stamp:
             now = content_id(roots.work, list(config["verify_paths"]))
             check = f"check stale: last pass {stamp.get('time')} on {stamp.get('content_id')}, now {now}"
-        else:
-            check = "no passing check recorded"
-    return f"[{marker}; closed {time.strftime('%Y-%m-%d')}; {check}]"
+    return f"[{holder}; closed {time.strftime('%Y-%m-%dT%H:%M%z')}; {check}]"
 
 
 def add_task(rows: list[Row], active: Path, text: str, records: str, args: argparse.Namespace) -> int:
@@ -1565,13 +1561,12 @@ def add_task(rows: list[Row], active: Path, text: str, records: str, args: argpa
         if "," in touch:
             raise SakoError("a scope path cannot contain a comma in the Markdown format")
         scope(touch)
-    existing = [r for r in rows if source and r.source == source]
-    if existing:
+    if existing := [r for r in rows if source and r.source == source]:
         if len(existing) != 1:
             raise SakoError(f"source {source!r} is mapped more than once; reconcile the records before retrying")
         old = existing[0]
-        if (old.task, old.done_when, set(map(scope, old.touches)), set(old.after)) != (
-                task, done_when, set(map(scope, touches)), set(after)):
+        if (old.task, old.done_when, set(map(scope, old.touches)), set(old.after if old.doc == "tasks" else after)) != (
+                task, done_when, set(map(scope, touches)), set(after)):  # the done record keeps no After to compare
             raise SakoError(f"source {source!r} already maps to {old.id} with a different task, done when, scope or "
                             "prerequisites; reconcile that row, or use a distinct source for different work")
         if args.pri and old.doc == "tasks" and old.pri != pri:
@@ -1586,17 +1581,19 @@ def add_task(rows: list[Row], active: Path, text: str, records: str, args: argpa
     cells = {"id": f"T-{number}", "pri": pri, "task": task, "done when": done_when, "status": "open",
              "scope": ", ".join(f"`{t}`" for t in touches), "after": ", ".join(after), "source": source}
     atomic_write(active, insert_row(text, cells, list(COLUMNS["tasks"]))[0])
-    print(f"T-{number}: open; recorded locally, not committed")
+    new = Row(f"T-{number}", "tasks", 0, [], {}, touches=touches)
+    held = [f"{o.id} ({o.claim.split()[0]})" for o in rows if o.status == "claimed" and scopes_overlap(new, o)]
+    print(f"T-{number}: open; recorded locally, not committed" + (f"; its scope overlaps claimed {', '.join(held)}, so a claim of it "
+          f"by another session is refused until {'that closes' if len(held) == 1 else 'those close'} or a scope narrows" if held else ""))
     return 0
 
 
 def cmd_task(args: argparse.Namespace) -> int:
     roots, config = resolve(args)
     rows = read_ledger(roots, config)
-    active = roots.kit / str(config["tasks"])
+    active, closed = roots.kit / str(config["tasks"]), roots.kit / str(config["done"])
     text = read_text(active, "tasks")
     if args.command == "add":
-        closed = roots.kit / str(config["done"])
         return add_task(rows, active, text, text + (read_text(closed, "done") if closed.exists() else ""), args)
     session, present = need_session(args), read_presence(roots)
     live = {key_of(e["marker"]) for e in present}
@@ -1608,20 +1605,18 @@ def cmd_task(args: argparse.Namespace) -> int:
     mine, done = key_of(entry["marker"]), {r.id for r in rows if r.doc == DONE}
     matches = [r for r in rows if r.id == args.task_id and r.doc == "tasks"]
     if len(matches) != 1:
-        raise SakoError(f"{args.task_id} needs exactly one row in {KIT}/{config['tasks']}")
+        raise SakoError(f"{args.task_id} needs exactly one row in {runtime_path(roots, active)}")
     row = matches[0]
-    faults = row_faults(row, {r.id for r in rows})
-    if faults:
+    if faults := row_faults(row, {r.id for r in rows}):
         raise SakoError(faults[0])
-    waiting = [d for d in row.after if d not in done]
-    if waiting:
+    if waiting := [d for d in row.after if d not in done]:
         raise SakoError(f"{row.id} waits for {', '.join(waiting)}; finish those first")
     owner, lines = holder_key(row.claim), text.splitlines()
     if args.command == "claim":
         if not row.touches:
             raise SakoError(f"{row.id} needs a Scope before claiming")
         if row.status == "parked":
-            raise SakoError(f"{row.id} is parked; set its status to open once the reason is resolved")
+            raise SakoError(f"{row.id} is parked; once its reason is resolved, set its Status to open in {runtime_path(roots, active)}")
         if row.status == "claimed" and owner != mine:
             if owner in seen:
                 raise SakoError(f"{row.id} is held by a live session; choose another task")
@@ -1629,27 +1624,36 @@ def cmd_task(args: argparse.Namespace) -> int:
                 raise SakoError(f"{row.id} is held by {row.claim.split()[0]}, " + ("which SAKO cannot verify from here (a sandbox, "
                                 "or Windows, hides its process); if it stopped," if owner in live else "a stale claim;")
                                 + " inspect its handoff and use --takeover <reason>")
-        for other in rows:
-            if other.id != row.id and other.status == "claimed" and holder_key(other.claim) != mine \
-                    and scopes_overlap(row, other):
-                raise SakoError(f"{row.id}'s scope overlaps claimed {other.id}; wait or narrow the scopes")
+        replaced = owner if owner != mine else None  # past the checks above, any other owner is not seen running and is taken over
+        for other in rows:  # a takeover also passes the replaced holder's other claims, so it can move them one by one
+            peer = holder_key(other.claim)
+            if other.id != row.id and other.status == "claimed" and peer not in (mine, replaced) and scopes_overlap(row, other):
+                wait = "wait for it to close, or " if peer in live else ""  # a live holder, seen or unverified from here
+                fix = (wait if peer in seen else f"neither claim can be taken over while they overlap, so {wait}" if replaced
+                       else f"{wait}if it stopped, inspect its handoff and take it over first (claim {other.id} --takeover REASON), or ")
+                raise SakoError(f"{row.id}'s scope overlaps {other.id} ({', '.join(other.touches)}), claimed by "
+                                f"{other.claim.split()[0]}; {fix}narrow a Scope in {runtime_path(roots, active)}")
+        moving = [o.id for o in rows if o.status == "claimed" and o.id != row.id and holder_key(o.claim) == replaced and scopes_overlap(row, o)]
         unverified = ", unverified" if owner != mine and owner in live - seen else ""  # its process was hidden from here
         if owner != mine:
             note = f" (took over from {row.claim.split()[0]}{unverified}: {cell(args.takeover, '--takeover')})" if args.takeover and row.claim else ""
-            lines[row.line - 1] = row_line(row.titles, dict(row.cells, status=entry["marker"] + note))
+            lines[row.line - 1] = row_line(row.titles, dict(row.cells, status=entry["marker"] + time.strftime(" since %Y-%m-%dT%H:%M%z") + note))
             atomic_write(active, "\n".join(lines).rstrip() + "\n")
         print(f"{row.id}: claimed" + ("; its previous holder could not be verified from here" if unverified else "") + "; recorded "
-              f"locally, not committed. If it pauses or needs working notes, keep them in {shlex.quote(runtime_path(roots, handoff(roots, config, row)))}/ "
-              "(handoff.md for where it stands).")
+              f"locally, not committed. Working notes go in {shlex.quote(runtime_path(roots, handoff(roots, config, row)))}/. If this "
+              "session ends before closing it, the claim reads as stale and another session may take it over with a reason, so "
+              "write handoff.md there first, with where it stands." + (f" Its previous holder also holds overlapping {', '.join(moving)}; "
+              f"take {'it' if len(moving) == 1 else 'them'} over too before you stop." if moving else ""))
         return 0
     if row.status != "claimed" or owner != mine:
         raise SakoError(f"{row.id} must be claimed by this session before closing")
-    if config["verify_command"] and changed_since(roots.work, entry["work_start_rev"], list(config["verify_paths"])):
+    moved = changed_since(roots.work, entry["work_start_rev"], list(config["verify_paths"])) if config["verify_command"] else []
+    records = records_only(row) and (not moved or others_moved(roots, entry, moved, session_changes(roots, entry)[0], rows, present))
+    if moved and not records:
         state, why = evidence_state(roots, config)
         if state != "fresh":
             raise SakoError(f"evidence is {state}: {why}; verify before closing")
-    receipt = f"{cell(args.evidence, '--evidence')} {receipt_part(roots, config, entry['marker'])}"
-    closed = roots.kit / str(config["done"])
+    receipt = f"{cell(args.evidence, '--evidence')} {receipt_part(roots, config, row.claim, records)}"
     previous = [r for r in rows if r.id == row.id and r.doc == DONE]
     if previous and holder_key(previous[0].claim) != mine:
         raise SakoError(f"{row.id} already has a done row from another session; reconcile it before closing")
@@ -1660,10 +1664,8 @@ def cmd_task(args: argparse.Namespace) -> int:
         history = read_text(closed, "done") if closed.exists() else "# Done\n"
         done_text, titles = insert_row(history, dict(row.cells, receipt=receipt), titles)
         kept = set(map(column, titles))
-        dropped = [f"{t}={row.cells[column(t)]}" for t in row.titles if column(t) not in own | kept
-                   and row.cells[column(t)] not in EMPTY_CELL]
-        # Append first, then remove: an interrupted close leaves both rows, and
-        # repeating the same command finishes it without losing the record.
+        dropped = [f"{t}={row.cells[column(t)]}" for t in row.titles if column(t) not in own | kept and row.cells[column(t)] not in EMPTY_CELL]
+        # Append before removing, so an interrupted close leaves both rows and repeating the command finishes it without losing the record.
         atomic_write(closed, done_text)
     del lines[row.line - 1]
     atomic_write(active, "\n".join(lines).rstrip() + "\n")
@@ -1673,10 +1675,9 @@ def cmd_task(args: argparse.Namespace) -> int:
 
 
 def cmd_hook(args: argparse.Namespace) -> int:
-    try:
+    payload = {}
+    with suppress(ValueError):
         payload = json.loads("" if sys.stdin.isatty() else sys.stdin.read())
-    except ValueError:
-        payload = {}
     payload = payload if isinstance(payload, dict) else {}
     event = str(payload.get("hook_event_name") or args.event or "")
     session_id = str(payload.get("session_id") or args.session or "")
@@ -1684,7 +1685,9 @@ def cmd_hook(args: argparse.Namespace) -> int:
         print("sako: hook input carries no session_id; nothing recorded", file=sys.stderr)
         return 0
     try:
-        roots, config = resolve(args)
+        roots = args.resolved[0] if hasattr(args, "resolved") else resolve_roots(Path.cwd())
+        if event == "SessionEnd":  # first, even before the config is read, since a client may cut its end hook short
+            remove_presence(roots, session_id)
         if args.client:
             note_hook(roots, args.client, event)
         with ledger_lock(roots):
@@ -1694,13 +1697,11 @@ def cmd_hook(args: argparse.Namespace) -> int:
                 except SakoError as error:
                     print(f"sako: {error}; peers will not see this session")
                     entry = presence_entry(roots, session_id)
-                print(render_start(roots, config, entry))
-            elif event == "SessionEnd":
-                remove_presence(roots, session_id)
+                print(render_start(roots, load_config(roots.kit), entry))
             elif event == "Stop":
                 if payload.get("stop_hook_active"):
                     return 0
-                code, message = gate(roots, config, session_id)
+                code, message = gate(roots, load_config(roots.kit), session_id)
                 if code:
                     print(message, file=sys.stderr)
                 return code
@@ -1720,21 +1721,21 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdin, sys.stdout, sys.stderr):  # UTF-8 everywhere: Windows pipes default to cp1252
         with suppress(AttributeError, ValueError):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(prog="sako.py", description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(prog="sako.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"sako {VERSION}")
     parser.set_defaults(session=None, gate=False, event=None, client=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add(name: str, handler, **kwargs) -> argparse.ArgumentParser:
-        p = sub.add_parser(name, **kwargs)  # every verb takes --session, so the printed command line works for all
+        p = sub.add_parser(name, description=kwargs["help"], **kwargs)  # every verb takes --session, so the printed command line works for all
         p.add_argument("--session", help="your session identifier (the marker is derived from it)")
         p.set_defaults(handler=handler)
         return p
 
     add("start", lambda a: print(render_start(*resolve(a), write_presence(resolve(a)[0], need_session(a)))),
         help="record presence and print the session context")
-    add("end", lambda a: remove_presence(resolve(a)[0], need_session(a)), help="remove your presence entry")
+    add("end", lambda a: print("sako: presence ended" if remove_presence(resolve(a)[0], need_session(a)) else
+                               "sako: no presence entry for this session ID; nothing ended"), help="remove your presence entry")
     p = add("check", cmd_check, help="ledger, claims, scopes and evidence")
     p.add_argument("--gate", action="store_true", help="exit 2 when the session should not stop yet")
     add("verify", lambda a: verify(*resolve(a)), help="run the project's check command and stamp the content")
@@ -1744,7 +1745,7 @@ def main(argv: list[str] | None = None) -> int:
     p = add("add", cmd_task, help="allocate and append one task under the ledger lock")
     p.add_argument("task")
     p.add_argument("--done-when", required=True, help="the observable completion condition")
-    p.add_argument("--scope", action="append", required=True, help="a path prefix the task may change; repeat")
+    p.add_argument("--scope", action="extend", nargs="+", required=True, help="path prefixes the task may change; list or repeat")
     p.add_argument("--pri", help="P1, P2 (default) or P3; on repeat intake it updates the priority")
     p.add_argument("--source", help="stable source item reference; matching intake reuses its task, done ones included")
     p.add_argument("--after", action="append", help="existing prerequisite task ID; repeat for multiple dependencies")
@@ -1756,7 +1757,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("client", nargs="?", choices=sorted(CLIENTS), help="the client whose hook this is")
     p.add_argument("--event", help="event name when the input carries none")
     add("remove", cmd_remove, help="remove unmodified kit assets and its integration entries; preserve project records")
-    p = sub.add_parser("init", help="install the kit in this repository, or wire this worktree; no flags needed")
+    p = sub.add_parser("init", help=(about := "install the kit in this repository, or wire this worktree; no flags needed"), description=about)
     p.add_argument("--client", action="append", choices=["claude", "codex", "none"], help="wire this client "
                    "instead of the detected ones; repeat for both; none means no hooks. The choice is kept")
     p.add_argument("--update", action="store_true", help="replace unmodified kit files with this release's; records stay")

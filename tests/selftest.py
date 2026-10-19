@@ -535,6 +535,8 @@ def scenario_worktrees_share_presence(ws: Path) -> None:
     code, out, err = cli(ws / "repo-b", "verify")
     expect(code == 0 and (repo / ".sako/state/worktrees/repo-b/stamp.json").exists()
            and not (repo / ".sako/state/stamp.json").exists(), f"each worktree keeps its own stamp: {out + err}")
+    expect((repo / ".sako/state/worktrees/repo-b/verify.log").exists() and not (repo / ".sako/state/verify.log").exists(),
+           f"the check's output stays beside that worktree's stamp: {out}")
     expect(not (ws / "repo-b/.sako").exists(), "no command creates a kit folder in a linked worktree")
 
 
@@ -577,6 +579,28 @@ def installed(root: Path, *args: str, session: str | None = None, pid: int | Non
 def succeeds(result: subprocess.CompletedProcess) -> str:
     expect(result.returncode == 0, result.stdout + result.stderr)
     return result.stdout
+
+
+def reading() -> tuple[dict[str, int], str]:
+    """The reading for a normal task, as the budget counts it on the lone-session fixture: the words of the skill, the
+    task template's preamble, a start context and the method down to its Read when needed table; and that context."""
+    method = (HERE.parent / "SAKO.md").read_text(encoding="utf-8")
+    parts = re.split(r"(?m)^(?=## )", method)  # the first part is the title and introduction
+    required = parts[:[part.splitlines()[0][3:] for part in parts[1:]].index("Read when needed") + 2]
+    with tempfile.TemporaryDirectory(prefix="sako-budget-") as workspace:
+        root = make_repo(Path(workspace) / "project")
+        succeeds(seed(root))
+        write(root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": ["src"]})})
+        succeeds(installed(root, "verify"))
+        agent = fake_agent()
+        try:
+            context = succeeds(installed(root, "start", session="budget-session", pid=agent))
+        finally:
+            kill(agent)
+    texts = {"skill": (HERE.parent / "skills/sako/SKILL.md").read_text(encoding="utf-8"),
+             "template": (HERE.parent / "templates/TASKS.md").read_text(encoding="utf-8").split("| ID |")[0],
+             "start context": context, "method": "".join(required)}
+    return {name: len(text.split()) for name, text in texts.items()}, context
 
 
 def scenario_neutral_package_and_shared_host_sessions(ws: Path) -> None:
@@ -981,7 +1005,7 @@ class Discovery(unittest.TestCase):
     succeeds(installed(repo, *second))
     expect(all((repo / path).read_bytes() == data for path, data in current.items()), "repeat after completion changes no records")
     pickup = succeeds(installed(repo, "start", session="intake-pickup", pid=fake_agent()))
-    expect("PLAN.md" in pickup and "next: T-2 (P2, the only ready task): Print names" in pickup,
+    expect("PLAN.md" in pickup and "next, if no task was named for you: T-2 (P2, the only ready task): Print names" in pickup,
            f"pickup exposes the source and next action: {pickup}")
     succeeds(installed(repo, "claim", "T-2", session="intake-pickup"))
     guidance = succeeds(installed(repo, "next"))

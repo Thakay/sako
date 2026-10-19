@@ -68,23 +68,61 @@ class Presence(unittest.TestCase):
             self.assertEqual(sorted(p.stem for p in live.glob("*.json")), ["expired", "hidden", "init", "mine", "no-host"],
                              "only an entry judged by a visible process, or an unreadable one, is removed")
 
-    def test_a_start_with_no_visible_host_keeps_the_hooks_pid_and_refreshes_its_lease(self):
+    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
+    def test_an_entry_from_before_a_restart_has_ended_and_keeps_its_file(self):
+        with tempfile.TemporaryDirectory(prefix="sako-presence-") as folder:
+            base = Path(folder)
+            roots = sako.Roots(base, base, "", base)
+            live = sako.presence_dir(roots)
+            live.mkdir(parents=True)
+            now, gone, reused = int(time.time()), 2 ** 22, os.getpid()  # after a restart a PID may name another process
+            entries = {"restarted": {"pid": reused, "ns": "pid:[1]@1 boot earlier"},
+                       "restarted-sandbox": {"pid": gone, "ns": "pid:[2]@1 boot earlier"},
+                       "restarted-gone": {"pid": gone, "ns": "pid:[1]@1 boot earlier"},
+                       "sandbox": {"pid": gone, "ns": "pid:[2]@1 boot this"}, "mine": {"pid": reused, "ns": "pid:[1]@1 boot this"},
+                       "sandbox-expired": {"pid": gone, "ns": "pid:[2]@1 boot this", "seen": now - sako.LEASE - 1},
+                       "older": {"pid": reused, "ns": "pid:[1]@1"}, "older-gone": {"pid": gone, "ns": "pid:[1]@1"},
+                       "older-sandbox": {"pid": gone, "ns": "pid:[2]@1"}}  # written before entries recorded their boot
+            for name, entry in entries.items():
+                (live / f"{name}.json").write_text(json.dumps(dict({"seen": now}, **entry, marker=f"sk-0101-{name}")))
+            with patch.object(sako, "PID_NS", "pid:[1]@1 boot this"), patch.object(sako, "BOOT", "this"):
+                found = {e["marker"][8:]: e.get("unverified", False) for e in sako.read_presence(roots)}
+            self.assertEqual(found, {"sandbox": True, "mine": False, "older": False, "older-sandbox": True},
+                             "a sandbox entry from this boot counts by its lease, and no longer once the lease ends")
+            self.assertEqual(sorted(p.stem for p in live.glob("*.json")), sorted(set(entries) - {"older-gone"}),
+                             "an entry from before a restart, or past its lease, stays on disk, so a resume keeps its starting facts")
+            with patch.object(sako, "PID_NS", "pid:[1]@1"), patch.object(sako, "BOOT", ""):  # no boot ID here
+                found = {e["marker"][8:]: e.get("unverified", False) for e in sako.read_presence(roots)}
+            self.assertEqual(found, {"restarted": True, "restarted-sandbox": True, "restarted-gone": True, "sandbox": True,
+                                     "mine": True, "older": False, "older-sandbox": True},
+                             "with no boot ID to compare, an entry that records one counts by its lease")
+
+    def test_a_start_with_no_visible_host_keeps_the_hooks_pid_from_this_boot_and_refreshes_its_lease(self):
         with tempfile.TemporaryDirectory(prefix="sako-presence-") as folder:
             roots = sako.resolve_roots(fixture.make_repo(Path(folder) / "project"))
             hook = {"marker": "sk-0101-aaaaaaaaaaaa", "pid": 4242, "ns": "pid:[host]", "seen": 1, "started_at": 1,
                     "started": "2026-01-01T00:00:00+0000", "work_start_rev": "abc", "dirty_at_start": {}}
             for host in (0, 2 ** 22):  # none visible, or one this namespace cannot see (SAKO_AGENT_PID inherited)
-                with patch.object(sako, "agent_pid", return_value=host), patch.object(sako, "PID_NS", "pid:[sandbox]"):
+                with patch.object(sako, "agent_pid", return_value=host), patch.object(sako, "BOOT", "this"), \
+                        patch.object(sako, "PID_NS", "pid:[sandbox] boot this"):
                     entry, fresh = sako.presence_entry(roots, "thread", hook), sako.presence_entry(roots, "other")
-                self.assertEqual((entry["pid"], entry["ns"], entry["started_at"]), (4242, "pid:[host]", 1))
+                    same, earlier = (sako.presence_entry(roots, "thread", dict(hook, ns=f"pid:[host] boot {boot}"))
+                                     for boot in ("this", "earlier"))
+                self.assertEqual((entry["pid"], entry["ns"], entry["started_at"]), (4242, "pid:[host]", 1),
+                                 "an entry written before entries recorded their boot keeps the hook's host")
+                self.assertEqual((same["pid"], same["ns"]), (4242, "pid:[host] boot this"))
+                self.assertEqual((earlier["pid"], earlier["ns"], earlier["started_at"]), (0, "pid:[sandbox] boot this", 1),
+                                 "a restart ended the hook's host, and the starting facts stay")
                 self.assertGreater(entry["seen"], 1, "a start refreshes the lease")
-                self.assertEqual((fresh["pid"], fresh["ns"]), (0, ""), "with no host and no earlier entry, no PID")
+                self.assertEqual((fresh["pid"], fresh["ns"]), (0, "pid:[sandbox] boot this"),
+                                 "with no host and no earlier entry, no PID, and the boot a restart ends")
 
     def test_on_windows_presence_is_the_lease_and_no_process_is_signalled(self):
         with tempfile.TemporaryDirectory(prefix="sako-presence-") as folder:
             roots = sako.resolve_roots(fixture.make_repo(Path(folder) / "project"))
             with patch.object(sako.sys, "platform", "win32"), patch.dict(os.environ, {"SAKO_AGENT_PID": str(os.getpid())}), \
-                    patch.object(os, "kill", side_effect=AssertionError("on Windows os.kill(pid, 0) sends Ctrl+C")):
+                    patch.object(os, "kill", side_effect=AssertionError("on Windows os.kill(pid, 0) sends Ctrl+C")), \
+                    patch.object(sako, "PID_NS", ""), patch.object(sako, "BOOT", ""):  # Windows has no /proc to read
                 self.assertEqual(sako.agent_pid(), 0, "SAKO_AGENT_PID is inert there")
                 self.assertFalse(sako.alive(os.getpid()))
                 entry = sako.presence_entry(roots, "windows-session")
@@ -189,28 +227,115 @@ class Budgets(unittest.TestCase):
             self.assertTrue(first.startswith("Read this when"), title)
             self.assertIn(title, required[-1], f"the router names {title}")
             self.assertNotIn(title, "".join(required[:-1]), f"only the router may send the agent to {title}")
-        with tempfile.TemporaryDirectory(prefix="sako-budget-") as workspace:
-            root = fixture.make_repo(Path(workspace) / "project")
-            fixture.succeeds(fixture.seed(root))
-            fixture.write(root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"],
-                                                                  "verify_paths": ["src"]})})
-            fixture.succeeds(fixture.installed(root, "verify"))
-            agent = fixture.fake_agent()
-            try:
-                context = fixture.succeeds(fixture.installed(root, "start", session="budget-session", pid=agent))
-            finally:
-                fixture.kill(agent)
+        counts, context = fixture.reading()  # tests/measure.py prints the same counts
+        for door in (context, sako.POINTER):  # the start context, and the line init gives for project instructions
+            self.assertIn("read .sako/SAKO.md down to its Read when needed table, later sections only when they apply", door)
+            self.assertIn("Questions need no task record until they change a file; add and claim come before that change.", door)
         skill = (fixture.SAKO.parent / "skills/sako/SKILL.md").read_text()
-        template = (fixture.SAKO.parent / "templates/TASKS.md").read_text().split("| ID |")[0]
-        counts = {name: len(text.split()) for name, text in
-                  (("skill", skill), ("template", template), ("start context", context), ("method", "".join(required)))}
+        self.assertEqual(counts["method"], len("".join(required).split()), "the helper counts the same required part")
         self.assertLessEqual(sum(counts.values()), 1500, counts)
+        stops, guide = " ".join("".join(required).split()), " ".join(skill.split())  # folded, so a rewrap never breaks a pin
+        self.assertIn("Read this file down to its **Read when needed** table.", stops)
+        self.assertIn("Stop here; open a section below only when its situation applies:", stops)
+        self.assertIn("down to its **Read when needed** table and follow its daily loop; open a later section only when its "
+                      "situation applies.", guide)
+        for text in (stops, guide):
+            self.assertIn("need no task record until they change a file; `add` and `claim` come before that change.", text)
+        self.assertIn("If `.sako/` is absent and the owner asks to adopt SAKO, run `uvx sako init`", guide)
 
     def test_the_loop_keeps_end_for_sessions_that_ran_start(self):
         """With hooks, an agent that ran end itself left its own Stop gate without a start record."""
         loop = (fixture.SAKO.parent / "SAKO.md").read_text().split("## Daily loop")[1].split("\n## ")[0]
         self.assertIn("If you ran `start` yourself, run\n   `end --session <id>` last.", loop)
         self.assertIn("With hooks, the client ends the session; do not run\n   `end`", loop)
+
+
+class Words(unittest.TestCase):
+    """Sentences the documents must keep, compared with whitespace folded so a rewrap never breaks a pin."""
+
+    ROOT = fixture.SAKO.parent
+
+    def text(self, name):
+        return " ".join((self.ROOT / name).read_text(encoding="utf-8").split())
+
+    def section(self, title):
+        """One section of SAKO.md, from its heading to the next one."""
+        return self.text("SAKO.md").split(f"## {title} ")[1].split(" ## ")[0]
+
+    def test_the_gate_documents_claim_only_what_it_reads(self):
+        done = self.section("Done means")
+        for words in ("every file changed in this checkout since the session started, outside `.sako/`, belongs to a task it "
+                      "claimed or closed", "in the repo and shared footprints, its receipt too",
+                      "A duplicate ID, a source mapped twice, a faulty row, an overlap with your own claim and a footprint "
+                      "finding also block", "notes, such as another session's stale claim, never block"):
+            self.assertIn(words, done)
+        detail = self.section("The gate and checks in detail")
+        self.assertIn("It counts no file under `.sako/`, so a scope there only locks paths against other claims", detail)
+        self.assertIn("The first line of `check --gate` is its verdict, and its exit code decides", detail)
+        limits = self.text("docs/limits.md")
+        for words in ("The gate judges only the checkout it runs in", "In a shared checkout the gate sees what changed, not who "
+                      "changed it.", "Closing a task scoped `.` makes the Committed fix stage every uncommitted change made "
+                      "here between your start and its close, a peer's included", "Recorded cannot tell who made a commit",
+                      "A closed task still covers edits made in the minute it closed, so read `git diff` before following a "
+                      "Committed fix."):
+            self.assertIn(words, limits)
+        self.assertIn("and against faults in the records. It refuses a stop once and names the fix; findings about other "
+                      "sessions are only notes", self.text("docs/glossary.md"))
+        validation = self.text("docs/validation.md")
+        self.assertIn("| Who made a change, which Git does not show |", validation)
+        for words in ("apply to the session's own changes", "a hook's own error"):
+            self.assertNotIn(words, validation)
+        self.assertIn("and checks the ledger for faults", self.text("README.md"))
+
+    def test_receipts_are_described_by_their_times_and_the_records_only_form(self):
+        for name in ("SAKO.md", "docs/glossary.md", "docs/validation.md"):
+            self.assertIn("the claim's marker and time, the close time", self.text(name))
+        for name in ("SAKO.md", "docs/validation.md"):
+            self.assertIn("(records only)", self.text(name))
+        self.assertNotIn("the closing session, the date", self.text("docs/validation.md"))
+
+    def test_security_names_every_environment_variable_a_hook_or_init_reads(self):
+        source = (self.ROOT / "sako.py").read_text(encoding="utf-8")
+        names = set(re.findall(r'os\.environ\.get\("(\w+)"\)', source)) | set(re.findall(r"\$\{([A-Z_]+)",
+                                                                                          sako.hook_command("claude")))
+        names |= set(re.findall(r'\("(?:claude|codex)", "([A-Z_]+)"\)', source))  # the session signals init's detect reads
+        self.assertIn("CLAUDECODE", names)
+        self.assertIn("CLAUDE_PROJECT_DIR", names)
+        security = self.text("SECURITY.md")
+        for name in sorted(names):
+            self.assertIn(f"`{name}`", security)
+
+    def test_a_subagent_carries_its_parents_session_id(self):
+        beside = self.section("Working beside other sessions")
+        for words in ("a subagent's shell carries its parent's session ID, so a command there without `--session` acts as "
+                      "the parent", "uses the parent's ID as the same holder and never runs `end`",
+                      "the parent's close evidence names it with its commits",
+                      "An agent holding its own claim gets its own ID in its brief and passes `--session` on every command, "
+                      "`end` included", "a worktree only they use needs no `init`"):
+            self.assertIn(words, beside)
+        self.assertIn("a subagent's shell carries its parent's session ID, so a command there without `--session` acts as the "
+                      "parent, and its `end` ends the parent's presence", self.text("docs/compatibility.md"))
+        self.assertIn("A helper on its parent's ID is the parent, so the ledger shows no separate holder for it.",
+                      self.text("docs/limits.md"))
+        for page in Links().pages():  # no page may say the opposite again
+            self.assertNotIn("carries its own", " ".join(page.read_text(encoding="utf-8").split()), page)
+
+    def test_a_claim_left_on_purpose_reads_as_stale_until_taken_over(self):
+        self.assertIn("A claim left on purpose for another session reads as stale to every other session until it is taken "
+                      "over. Two rows avoid that,", self.section("Pause, handoff and takeover"))
+        self.assertIn("A claim left on purpose for another session reads as stale to every other session until it is taken "
+                      "over; close your part and leave the rest as a second row.", self.text("docs/limits.md"))
+
+    def test_a_claim_is_kept_only_for_work_an_agent_will_resume(self):
+        loop = self.section("Daily loop")
+        self.assertIn("Keep a claim only for work an agent will resume", loop)
+        self.assertIn("A session that keeps a claim to resume it does not run `end`", loop)
+        pause = self.section("Pause, handoff and takeover")
+        for words in ("A background subagent that a message can resume is paused",
+                      "When the next step is the owner's, close what you finished.",
+                      "The owner's act, or deferred work, is its own row, parked by hand with its reason; whoever finishes "
+                      "what it waits for sets it to `open`, then claims and closes it."):
+            self.assertIn(words, pause)
 
 
 class Demo(unittest.TestCase):
