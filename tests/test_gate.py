@@ -266,6 +266,17 @@ class Gate(unittest.TestCase):
         fixture.git(self.root, "merge", "-q", "--ff-only", "side")
         self.assertEqual(self.stop("s1")[0], 0, "a pulled commit made before the session is not this session's change")
 
+    def test_a_commit_that_a_clock_stepping_back_dates_before_the_start_still_counts(self):
+        self.start("s1")
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        started = sako.my_entry(sako.resolve_roots(self.root), "s1")["started_at"]
+        stepped = f"@{started - 2} +0000"  # the date a commit gets from a clock that stepped back two seconds
+        env = dict(fixture.ENV, GIT_COMMITTER_DATE=stepped, GIT_AUTHOR_DATE=stepped)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qam", "just after the start"], env=env, check=True)
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertRegex(err, r'src/app\.py \(in commit [0-9a-f]+ of [\d-]+ "just after the start"\)')
+
     def test_renames_and_deletions_name_both_sides(self):
         fixture.succeeds(fixture.installed_copy(self.root, "add", "Move the app", "--done-when", "Runs", "--scope", "src/main.py"))
         self.start("s1")
@@ -299,7 +310,14 @@ class Gate(unittest.TestCase):
         fixture.write(linked, {"notes/y.md": "notes\n"})
         code, _, err = self.stop("s2", where=linked)
         self.assertEqual(code, 2, err)
-        self.assertIn("in another worktree, which cannot have changed this checkout", err)
+        held = f"claimed by {sako.marker_for('peer2')} in another worktree, whose work counts here once merged"
+        self.assertIn(f"notes/y.md ({held})", err)
+        fixture.write(self.root, {"notes/z.md": "the peer's notes\n"})
+        fixture.commit_all(self.root, "peer notes")
+        fixture.git(linked, "merge", "-q", "main")
+        code, _, err = self.stop("s2", where=linked)
+        self.assertEqual(code, 2, err)
+        self.assertRegex(err, rf'notes/z\.md \(in commit [0-9a-f]+ of [\d-]+ "peer notes"; {held}\)', "the peer's work, merged in")
 
     def test_not_counted_notes_name_three_paths_then_how_many_more_under_the_verdict_with_one_caveat_after_them(self):
         self.start("s1")
@@ -424,7 +442,6 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         self.assertIn("not counted: src/app.py: committed under T-1, closed by sk-", out, "a live closer, the same day")
 
-    @unittest.skipIf(sys.platform == "win32", "the zone is set with a POSIX TZ value")
     def test_a_commits_day_is_read_in_the_local_zone_that_dates_a_receipt(self):
         fixture.write(self.root, {".sako/work/DONE.md": fixture.done_file(
             fixture.row("T-5", "Broad import", status="done", claim="sk-0101-aaaaaaaaaaaa", touches="`src/`"))})
@@ -432,7 +449,7 @@ class Gate(unittest.TestCase):
         fixture.write(self.root, {"src/app.py": "print(5)\n"})
         env = dict(fixture.ENV, GIT_AUTHOR_DATE="2026-01-02T01:00:00+0000")  # 17:00 on January 1, eight hours west
         subprocess.run(["git", "-C", str(self.root), "commit", "-qam", "evening work"], env=env, check=True)
-        with patch.dict(fixture.ENV, TZ="UTC0"):
+        with patch.dict(fixture.ENV, TZ="UTC0"):  # POSIX zone values without a daylight rule, which Windows reads too
             code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 2, "January 2 in this zone, a day after the close\n" + out + err)
         with patch.dict(fixture.ENV, TZ="PST8"):

@@ -227,6 +227,19 @@ class Footprint(KitCase):
         fixture.succeeds(fixture.installed(self.root, "remove"))
         self.assertFalse((loose / ".codex/config.toml").exists(), "removal clears the worktree's wiring")
 
+    def test_remove_names_a_linked_worktrees_tracked_codex_settings_in_full(self):
+        self.install("--client", "codex")
+        linked = self.worktree("linked")
+        fixture.succeeds(fixture.seed(linked))
+        settings = linked / ".codex/config.toml"
+        fixture.git(linked, "add", "-f", ".codex/config.toml")  # SAKO's block, committed on that branch
+        fixture.git(linked, "commit", "-qm", "Codex settings")
+        wired = settings.read_text()
+        printout = fixture.succeeds(fixture.installed(self.root, "remove"))
+        self.assertIn(f"Codex: {settings.resolve().as_posix()} is tracked or has its own sandbox settings, so remove SAKO's "
+                      "block from it yourself.\n", printout, "another checkout's file is named in full, as the hooks note does")
+        self.assertEqual(settings.read_text(), wired, "a tracked file never changes")
+
     def test_hooks_exit_1_never_2_when_the_kit_is_gone(self):
         self.install("--client", "claude")
         (self.root / ".sako/sako.py").unlink()

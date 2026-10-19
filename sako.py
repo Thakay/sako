@@ -950,9 +950,11 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
             changed[path] = "edited after start; already dirty at start"
     rev = str(entry.get("work_start_rev") or "")
     known = rev and git(roots.work, "rev-parse", "-q", "--verify", f"{rev}^{{commit}}", check=False)
+    # a minute early, since a commit made just after the start reads as older than the start when
+    # the wall clock steps back, as WSL's can by a second or two
     log = git(roots.work, "log", "--no-renames", "--name-only", "--format=%x00%h %ad %s",
               "--date=short-local",
-              f"--since=@{since}", f"{rev}..HEAD" if known else "HEAD", check=False)
+              f"--since=@{since - 60}", f"{rev}..HEAD" if known else "HEAD", check=False)
     for block in log.split("\0")[1:]:
         subject, *paths = block.strip("\n").split("\n")
         # the author's day, local like a receipt's; a rebase keeps it
@@ -1014,7 +1016,7 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
         if holder:
             label = (label + "; " if label else "") \
                 + f"claimed by {holder.claim.split()[0]} in another worktree, " \
-                  "which cannot have changed this checkout"
+                  "whose work counts here once merged"
         unrecorded.append(f"{path} ({label})" if label else path)
     notes = [f"not counted: {', '.join(paths[:3])}"
              f"{f' and {len(paths) - 3} more' if len(paths) > 3 else ''}: {why}"
@@ -1531,10 +1533,11 @@ def wiring(roots: Roots, checkout: Path, clients: list[str],
         if proposed != current and (tracked(checkout, relative) or want and re.search(
                 r"^\s*(\[\s*sandbox_workspace_write\s*\]|sandbox_workspace_write\s*[.=])",
                 rest, re.M)):
-            notes.append(f"Codex: {relative} is tracked or has its own sandbox settings, so " + (
+            name = relative if checkout.resolve() == roots.work else path.as_posix()
+            notes.append(f"Codex: {name} is tracked or has its own sandbox settings, so " + (
                 f"make {roots.kit.as_posix()} writable yourself with writable_roots there, "
                 f"or start Codex with --add-dir {shlex.quote(roots.kit.as_posix())}" if want
-                else "remove SAKO's block from it yourself"))
+                else "remove SAKO's block from it yourself."))
         elif proposed != current:
             writes[path] = proposed
     return writes, notes

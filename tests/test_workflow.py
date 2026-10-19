@@ -218,6 +218,24 @@ class Workflow(unittest.TestCase):
         self.assertIn("reused source", self.assert_ok(self.run_cli(*base, "--pri", "p1")))
         self.assertEqual(self.run_cli(*base, "--pri", "urgent")[0], 3)
 
+    def test_every_successful_add_prints_the_task_id_first(self):
+        self.start("session-a")
+        self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
+        planned = ("add", "Planned work", "--source", "PLAN.md#a", "--scope", "docs/")
+        printed = [self.assert_ok(self.run_cli(*args)) for args in (
+            ("add", "Plain work", "--scope", "notes/"), ("add", "Beside a claim", "--scope", "src/lib/"),
+            planned, planned, (*planned, "--pri", "P1"))]  # new, overlapping a claim, sourced, reused, reprioritized
+        self.assert_ok(self.run_cli("claim", "T-12", session="session-a"))
+        printed.append(self.assert_ok(self.run_cli(*planned)))
+        self.assert_ok(self.run_cli("close", "T-12", "--evidence", "Planned", session="session-a"))
+        printed.append(self.assert_ok(self.run_cli(*planned)))
+        for out in printed:
+            self.assertRegex(out, r"\AT-\d+: [^\n]+\n\Z", "one line, the task ID first")
+        self.assertEqual([out.split(":")[0] for out in printed], ["T-10", "T-11"] + ["T-12"] * 5,
+                         "so a script takes the ID with cut -d: -f1")
+        self.assertEqual([out.split(": ", 1)[1].split(";")[0] for out in printed],
+                         ["open", "open", "open", "open", "priority P2 -> P1", "claimed", "done"])
+
     def test_receipts_say_what_the_check_said_at_close(self):
         cases = ((None, None, "no automated check"), ([sys.executable, "-c", "pass"], None, "no passing check recorded"),
                  ([sys.executable, "-c", "pass"], "committed", "check pass "),
@@ -831,6 +849,21 @@ class Workflow(unittest.TestCase):
         self.assertIn("evidence: fresh", self.run_cli("check")[1], "Git tracks only the owner's bit, so the others' are no content")
         os.chmod(self.root / "src/app.py", 0o755)
         self.assertIn("evidence: stale", self.run_cli("check")[1])
+
+    @unittest.skipIf(fixture.WINDOWS, "file modes do not bind on Windows")
+    def test_two_clones_under_umask_022_and_077_give_the_same_fingerprint(self):
+        fixture.write(self.root, {"src/run.sh": "echo run\n"})
+        os.chmod(self.root / "src/run.sh", 0o755)
+        fixture.commit_all(self.root, "A script")
+        names, masks = ("src/app.py", "src/run.sh"), (0o022, 0o077)
+        clones = [Path(self.workspace.name) / f"clone-{mask:03o}" for mask in masks]
+        for clone, mask in zip(clones, masks):
+            subprocess.run(["git", "clone", "-q", str(self.root), str(clone)], env=fixture.ENV, umask=mask, check=True)
+        self.assertEqual([[(clone / name).stat().st_mode & 0o777 for name in names] for clone in clones],
+                         [[0o644, 0o755], [0o600, 0o700]], "the umask sets the group and other bits")
+        self.assertEqual(*[sako.content_id(clone, []) for clone in clones],
+                         "the stamp counts only the owner's executable bit, as Git does")
+        self.assertEqual(*[[sako.fingerprint(clone, name) for name in names] for clone in clones], "so does the start record")
 
     def test_a_running_verify_keeps_the_last_pass_until_the_run_fails_or_moves(self):
         seen, stamp = Path(self.workspace.name) / "seen.txt", self.root / ".sako/state/stamp.json"
