@@ -375,15 +375,15 @@ def scopes_overlap(first: Row, second: Row) -> bool:
 
 def covers(row: Row, path: str, root: Path | None = None) -> bool:
     """Given the checkout, a done row no longer covers a file changed in a later minute than its
-    receipt's close, in that zone."""
+    receipt's close, in that zone. The scope comes first, so a file out of scope is never read."""
     try:
-        late = root and os.path.lexists(root / path) and any(
-            time.strftime("%Y-%m-%dT%H:%M", time.gmtime(os.lstat(root / path).st_mtime
-                                                        + int(h) * 3600 + int(h[0] + m) * 60)) > c
-            for c, h, m in re.findall(r"; closed ([\dT:-]{16})([+-]\d\d)(\d\d)", row.evidence)[-1:])
-        return not late and any(overlaps(tuple(Path(path).parts), scope(t)) for t in row.touches)
+        inside = any(overlaps(tuple(Path(path).parts), scope(t)) for t in row.touches)
     except SakoError:
         return False
+    return inside and not (root and os.path.lexists(root / path) and any(
+        time.strftime("%Y-%m-%dT%H:%M", time.gmtime(os.lstat(root / path).st_mtime
+                                                    + int(h) * 3600 + int(h[0] + m) * 60)) > c
+        for c, h, m in re.findall(r"; closed ([\dT:-]{16})([+-]\d\d)(\d\d)", row.evidence)[-1:]))
 
 
 def within(touch: str, row: Row) -> bool:
@@ -1022,12 +1022,17 @@ def others_moved(roots: Roots, entry: dict | None, moved: list[str], changed: di
 
 
 def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | None,
-             live: list[dict]) -> tuple[list[str], list[str], dict[str, str], str]:
-    """The Recorded rule: (unrecorded, not-counted notes, changed, start note)."""
+             live: list[dict]) -> tuple[list[str], list[str], dict[str, str], str, dict[str, Row]]:
+    """The Recorded rule: (unrecorded, not-counted notes, changed, start note, late). Late maps
+    each unrecorded, uncommitted file changed after you or a live peer here closed its task to
+    that task."""
     changed, note = session_changes(roots, entry)
     own = [r for r in my_rows(rows, marker)]
     peers = {key_of(e["marker"]): e for e in live if e.get("marker") != marker}
-    unrecorded, exempt = [], {}
+    here = {key for key, e in peers.items() if e.get("work_root") == str(roots.work)}
+    # the closes a rewrite can follow: yours, and those of a live peer here
+    closes = [r for r in rows if r.doc == DONE and (r in own or holder_key(r.claim) in here)]
+    unrecorded, exempt, late = [], {}, {}
     for path, label in sorted(changed.items()):
         # only a close on or after it excuses a commit
         day = label.split()[4] if label.startswith("in commit") else ""
@@ -1036,7 +1041,7 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
             continue
         holder = next((r for r in rows if not (day and r.doc == DONE)
                        and holder_key(r.claim) in peers and covers(r, path, roots.work)), None)
-        if holder and peers[holder_key(holder.claim)].get("work_root") == str(roots.work):
+        if holder and holder_key(holder.claim) in here:
             kind = "unverified" if peers[holder_key(holder.claim)].get("unverified") else "live"
             exempt.setdefault(f"in {holder.id}'s scope, "
                               f"{'closed' if holder.doc == DONE else 'claimed'} by {kind} peer "
@@ -1054,12 +1059,17 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
             label = (label + "; " if label else "") \
                 + f"claimed by {holder.claim.split()[0]} in another worktree, " \
                   "whose work counts here once merged"
+        # a stash, a Git hook, a formatter or an editor save can rewrite closed work later
+        elif not day and (after := next((r for r in reversed(closes) if covers(r, path)), None)):
+            late[path] = after
+            who = "you" if after in own else f"peer {after.claim.split()[0]}"
+            label = (label + "; " if label else "") + f"changed after {who} closed {after.id}"
         unrecorded.append(f"{path} ({label})" if label else path)
     notes = [f"not counted: {', '.join(paths[:3])}"
              f"{f' and {len(paths) - 3} more' if len(paths) > 3 else ''}: {why}"
              for why, paths in exempt.items()] \
         + (["note: a shared checkout shows what changed, not who changed it."] if exempt else [])
-    return unrecorded, notes, changed, note
+    return unrecorded, notes, changed, note, late
 
 
 def runtime_path(roots: Roots, path: Path | None = None) -> str:
@@ -1198,7 +1208,7 @@ def overview(roots: Roots, config: dict, session_id: str | None) -> tuple[
 
 
 def changes_line(roots: Roots, rows: list[Row], entry: dict | None, marker: str | None) -> str:
-    unrecorded, notes, changed, note = recorded(roots, rows, entry, marker, read_presence(roots))
+    unrecorded, _, changed, note, _ = recorded(roots, rows, entry, marker, read_presence(roots))
     return (f"changed this session in {roots.work.as_posix()}: {len(changed)}"
             + (f"; unrecorded: {', '.join(unrecorded[:8])}" if unrecorded else "")
             + (f" ({note})" if note else ""))
@@ -1218,7 +1228,7 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
     # the notes about other sessions end the findings
     problems = [f"Ledger: {f}" for f in findings[:len(findings) - len(others)]]
     sako, session = f"{PYTHON} {shlex.quote(runtime_path(roots))}", shlex.quote(session_id or "ID")
-    unrecorded, notes, changed, note = recorded(roots, rows, entry, marker, live)
+    unrecorded, notes, changed, note, late = recorded(roots, rows, entry, marker, live)
     if unrecorded:
         first = unrecorded[0].split(" (")[0]
         task = next((r for r in rows if r.doc == "tasks" and r.status == "open"
@@ -1229,6 +1239,15 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
         fix = (f"if this change is {task.id} ({task.task}), claim it: "
                f"{sako} claim {task.id} --session {session}; "
                f"otherwise record it: {fix}") if task else fix
+        if late:
+            # a new task would file the closed task's work under a new title
+            after = next(iter(late.values()))
+            files = " ".join(shlex.quote(path) for path, row in late.items() if row is after)
+            fix = (f"if the content is still {after.id}'s work, only rewritten after its close, "
+                   "as by a stash, a Git hook, a formatter or an editor save, commit it under that "
+                   f"task's title: git add -- {files}, then git commit -m "
+                   f"{shlex.quote(after.task)} when the owner has allowed commits in this "
+                   f"session; for new work: {fix}")
         problems.append(("Recorded: " + (f"{note}: uncommitted and" if note else
                                          "changed this session but") +
                          " covered by no task you claimed or closed: " + ", ".join(unrecorded[:8]) +

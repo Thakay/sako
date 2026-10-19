@@ -585,7 +585,8 @@ class Gate(unittest.TestCase):
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
         self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/wip.py "
-                      "(edited after start; already dirty at start)", err, "an edit after the close is not the closed task's")
+                      "(edited after start; already dirty at start; changed after you closed T-1)", err,
+                      "an edit after the close is not the closed task's")
         self.assertNotIn("Committed:", err)
 
     def test_a_live_peers_closed_task_excuses_no_edit_made_after_it_closed(self):
@@ -599,14 +600,17 @@ class Gate(unittest.TestCase):
         self.backdate("T-1")
         self.start("s2")
         fixture.write(self.root, {"src/app.py": "print(3)\n"})  # with no task, in the scope of T-1, which s1 closed earlier
-        unrecorded = "Recorded: changed this session but covered by no task you claimed or closed: src/app.py\n"
+        unrecorded = "Recorded: changed this session but covered by no task you claimed or closed: src/app.py "
         code, _, err = self.stop("s2")
         self.assertEqual(code, 2, err)
-        self.assertIn(unrecorded, err, "a live peer's closed task no longer excuses a later edit")
+        self.assertIn(f"{unrecorded}(changed after peer {sako.marker_for('s1')} closed T-1)\n", err,
+                      "a live peer's closed task no longer excuses a later edit")
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
-        self.assertIn(unrecorded, err, "the closer sees what changed, not who changed it")
-        self.assertNotIn("Committed:", err, "and is not told to commit the edit under its closed task's title")
+        self.assertIn(f"{unrecorded}(changed after you closed T-1)\n", err, "the closer sees what changed, not who changed it")
+        self.assertNotIn("Committed:", err, "and is asked to commit the edit under its closed task's title only if it is "
+                                            "still that task's work")
+        self.assertIn("    fix: if the content is still T-1's work, only rewritten after its close", err)
         fixture.succeeds(fixture.installed_copy(self.root, "add", "Plan", "--done-when", "Written", "--scope", ".sako/work/plan.md"))
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s2"))
         refusal = fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Planned", "--session", "s2")
@@ -635,6 +639,11 @@ class Gate(unittest.TestCase):
         self.assertIn("SAKO gate: 1 problem(s) before you stop:\n  Committed: T-10 is closed but its changes are not committed: "
                       "src/app.py\n    fix: git add -- src/app.py, then git commit -m 'Print three'", err)
         self.assertNotIn("T-1 ", err, "T-1's work is in its commit; the change came after it closed")
+        self.backdate("T-10")
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})  # an editor saves it again
+        err = self.stop("s1")[2]
+        self.assertIn("src/app.py (changed after you closed T-10)", err, "of two closes, the later holds what the file has")
+        self.assertIn("git commit -m 'Print three' when the owner", err)
 
     def test_the_close_minute_is_read_in_the_receipts_zone_wherever_the_gate_runs(self):
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
@@ -658,6 +667,71 @@ class Gate(unittest.TestCase):
                 err = self.run_in(self.root, "check", "--gate", session="s1")[2]
             self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/app.py", err, zone)
             self.assertNotIn("Committed:", err, f"an edit after the close is new work, judged in {zone}")
+
+    def test_closed_work_rewritten_in_a_later_minute_is_named_with_a_commit_under_its_tasks_title(self):
+        """A stash, an autostash, a pre-commit hook, a formatter or an editor save can rewrite a closed task's uncommitted
+        files after its close; the gate cannot tell that from new work, so the fix asks which it is."""
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n", "src/lib.py": "x = 2\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Prints 2", "--session", "s1"))
+        self.backdate("T-1")
+        fixture.git(self.root, "stash", "-q", "-u")  # the work set aside and put back, as a pre-commit hook does
+        fixture.git(self.root, "stash", "pop", "-q")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/app.py (changed "
+                      "after you closed T-1), src/lib.py (changed after you closed T-1)\n    fix: if the content is still "
+                      "T-1's work, only rewritten after its close, as by a stash, a Git hook, a formatter or an editor save, "
+                      "commit it under that task's title: git add -- src/app.py src/lib.py, then git commit -m 'Invented "
+                      f"task' when the owner has allowed commits in this session; for new work: {sako.PYTHON} .sako/sako.py "
+                      'add "WHAT CHANGED" --done-when "HOW TO CHECK IT" --scope src/app.py, then claim it; for a change that '
+                      "is not yours or stays unrecorded, say which and why in your reply.", err)
+        self.assertNotIn("Committed:", err)
+        self.assertNotIn("Proven:", err, "the same bytes keep the check fresh")
+        fixture.git(self.root, "add", "--", "src/app.py", "src/lib.py")
+        fixture.git(self.root, "commit", "-qm", "Invented task")
+        self.assertEqual(self.stop("s1")[:2], (0, ""), "following the fix lands the closed work under its own title")
+
+    def test_a_live_peers_closed_file_rewritten_later_is_named_for_the_bystander_as_for_the_closer(self):
+        self.start("s1")
+        self.start("s2")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s2"))
+        fixture.write(self.root, {"docs/x.md": "notes\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Wrote notes", "--session", "s2"))
+        self.backdate("T-2")
+        fixture.write(self.root, {"docs/x.md": "notes\n"})  # an editor saves the same bytes in a later minute
+        fix = ("    fix: if the content is still T-2's work, only rewritten after its close, as by a stash, a Git hook, a "
+               "formatter or an editor save, commit it under that task's title: git add -- docs/x.md, then git commit -m "
+               "'Invented task' when the owner has allowed commits in this session; for new work: ")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"covered by no task you claimed or closed: docs/x.md (changed after peer {sako.marker_for('s2')} closed "
+                      f"T-2)\n{fix}", err, "the bystander learns whose file it is, to name it in its reply")
+        self.assertIn("; for a change that is not yours or stays unrecorded, say which and why in your reply.", err)
+        code, _, err = self.stop("s2")
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"covered by no task you claimed or closed: docs/x.md (changed after you closed T-2)\n{fix}", err)
+        self.assertNotIn("Committed:", err)
+        fixture.git(self.root, "add", "--", "docs/x.md")
+        fixture.git(self.root, "commit", "-qm", "Invented task")
+        self.assertEqual(self.stop("s2")[:2], (0, ""), "the closer's commit under its task's title clears its gate")
+
+    def test_covers_reads_a_files_time_only_for_a_path_in_the_scope(self):
+        """Every closed row of this session and of its live peers is asked about every changed path, so the cheap test runs
+        first."""
+        fixture.write(self.root, {"docs/x.md": "notes\n"})
+        row = sako.parse_rows({"done": fixture.done_file("| T-5 | Notes | Written | Wrote it [sk-0101-aaaaaaaaaaaa; closed "
+                                                         "2026-01-01T09:00+0000; no automated check] | `docs/` | - |")})[0]
+        with patch.object(sako.os, "lstat", wraps=os.lstat) as lstat:
+            self.assertFalse(sako.covers(row, "src/app.py", self.root))
+            self.assertFalse(sako.covers(row, "docs/x.md", self.root), "a file changed after the close")
+        read = [call.args[0] for call in lstat.call_args_list if call.args]
+        self.assertNotIn(self.root / "src/app.py", read, "a path out of scope is never read")
+        self.assertIn(self.root / "docs/x.md", read)
+        self.assertTrue(sako.covers(row, "docs/x.md"), "without the checkout, the scope alone decides")
 
     def test_work_under_a_new_claim_does_not_reopen_earlier_closes(self):
         self.start("s1")
