@@ -741,12 +741,12 @@ def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
 
 
 def fingerprint(root: Path, relative: str) -> str:
-    """What a path holds now: file bytes, a symlink's target, a submodule's commit, or absent."""
+    """What a path holds now: a file's bytes and executable bit, a symlink's target, a submodule's commit, or absent."""
     path = root / relative
     if path.is_symlink():
         data = b"link:" + os.readlink(path).encode("utf-8", "surrogateescape")
     elif path.is_file():
-        data = path.read_bytes()
+        data = path.read_bytes() + (b"\0exec" if path.stat().st_mode & 0o111 else b"")  # the stamp counts the bit too
     elif path.is_dir():
         data = b"commit:" + git(path, "rev-parse", "HEAD", check=False).encode()
     else:
@@ -821,8 +821,8 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
             label = (label + "; " if label else "") + f"claimed by {holder.claim.split()[0]} in another worktree, " \
                                                       "which cannot have changed this checkout"
         unrecorded.append(f"{path} ({label})" if label else path)
-    notes = [f"not counted: {', '.join(paths[:3])}{f' and {len(paths) - 3} more' if len(paths) > 3 else ''}: {why}; "
-             "a shared checkout shows what changed, not who changed it." for why, paths in exempt.items()]
+    notes = [f"not counted: {', '.join(paths[:3])}{f' and {len(paths) - 3} more' if len(paths) > 3 else ''}: {why}"
+             for why, paths in exempt.items()] + (["note: a shared checkout shows what changed, not who changed it."] if exempt else [])
     return unrecorded, notes, changed, note
 
 

@@ -272,7 +272,7 @@ class Gate(unittest.TestCase):
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out + err)
         self.assertIn("not counted: docs/x.md: in T-2's scope, claimed by live peer", out)
-        self.assertIn("a shared checkout shows what changed, not who changed it", out)
+        self.assertTrue(out.endswith(" in this checkout\nnote: a shared checkout shows what changed, not who changed it.\n"), out)
         os.kill(peer, 15)
         for process in self.processes:
             if process.pid == peer:
@@ -289,21 +289,24 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 2, err)
         self.assertIn("in another worktree, which cannot have changed this checkout", err)
 
-    def test_a_not_counted_note_names_three_paths_then_how_many_more_under_the_verdict(self):
+    def test_not_counted_notes_name_three_paths_then_how_many_more_under_the_verdict_with_one_caveat_after_them(self):
         self.start("s1")
         self.start("peer")
-        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "peer"))
-        fixture.write(self.root, {f"docs/{name}.md": "notes\n" for name in "abcde"})
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Peer notes", "--done-when", "Written", "--scope", "notes/"))
+        for task in ("T-2", "T-10"):
+            fixture.succeeds(fixture.installed_copy(self.root, "claim", task, "--session", "peer"))
+        fixture.write(self.root, {f"docs/{name}.md": "notes\n" for name in "abcde"} | {"notes/x.md": "notes\n"})
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out + err)
-        note = "not counted: docs/a.md, docs/b.md, docs/c.md and 2 more: in T-2's scope"
-        self.assertTrue(out.startswith(f"SAKO gate: clear in {self.root.resolve().as_posix()}\n{note}"), out)
-        self.assertNotIn("docs/d.md", out)
+        peer = f"claimed by {'unverified' if fixture.WINDOWS else 'live'} peer {sako.marker_for('peer')} in this checkout"
+        notes = (f"not counted: docs/a.md, docs/b.md, docs/c.md and 2 more: in T-2's scope, {peer}\n"
+                 f"not counted: notes/x.md: in T-10's scope, {peer}\nnote: a shared checkout shows what changed, not who changed it.\n")
+        self.assertEqual(out, f"SAKO gate: clear in {self.root.resolve().as_posix()}\n{notes}", "the caveat once, after the last note")
         fixture.write(self.root, {"src/app.py": "print(2)\n"})
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
         self.assertTrue(err.startswith("SAKO gate: 1 problem(s) before you stop:\n  Recorded:"), "the verdict comes first")
-        self.assertIn(f"\n{note}", err)
+        self.assertTrue(err.endswith(f"\n{notes}"), err)
 
     def test_a_worktree_nested_in_the_checkout_is_another_checkout_not_a_change(self):
         self.start("s1")
@@ -634,6 +637,28 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 2, err)
         self.assertIn("Proven: T-10, T-11, T-12 closed after checked content changed since you started", err,
                       "an edit since the start is this session's, on a path that was dirty at start too")
+
+    @unittest.skipIf(fixture.WINDOWS, "Windows keeps no executable bit")
+    def test_a_committed_change_to_only_the_executable_bit_of_a_file_dirty_at_start_is_this_sessions(self):
+        fixture.write(self.root, {"src/app.py": "print('a draft from before this session')\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        for number in (1, 2):
+            fixture.succeeds(fixture.installed_copy(self.root, "add", f"Plan step {number}", "--done-when", "Written",
+                                                    "--scope", f".sako/work/plan-{number}.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Written", "--session", "s1"))
+        os.chmod(self.root / "src/app.py", 0o755)
+        fixture.commit_all(self.root, "Make the app executable")
+        self.assertIn("evidence: stale", self.run_in(self.root, "check")[1], "the stamp counts the executable bit")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("covered by no task you claimed or closed: src/app.py (edited after start; already dirty at start)", err)
+        self.assertIn("Proven: T-10 closed after checked content changed since you started", err)
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
+        refusal = fixture.installed_copy(self.root, "close", "T-11", "--evidence", "Written", "--session", "s1")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("evidence is stale", refusal.stderr, "so the session's own mode change needs the check")
 
     def test_a_records_only_task_needs_the_check_once_this_session_moved_checked_content(self):
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
