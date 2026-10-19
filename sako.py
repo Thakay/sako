@@ -810,7 +810,7 @@ def verify(roots: Roots, config: dict, out=print, name: str = "") -> int:
     run = [shutil.which(command[0]) or command[0], *command[1:]] if sys.platform == "win32" \
         else list(command)
     listed, before, started = covered_files(roots.work, paths), \
-        content_id(roots.work, paths), time.time()
+        content_id(roots.work, paths), time.monotonic()  # a wall clock can step back mid-run
     path.parent.mkdir(parents=True, exist_ok=True)
     # written as the check runs; a process the check leaves behind never holds verify
     with log.open("wb") as kept:
@@ -827,7 +827,8 @@ def verify(roots: Roots, config: dict, out=print, name: str = "") -> int:
         # kept until the next failure; verify.log holds the last run
         retried(lambda: shutil.copyfile(log, failed))
         out(f"{shown()}check: FAILED (exit {result.returncode}) "
-            f"after {time.time() - started:.0f}s; no stamp written; output in {failed.as_posix()}")
+            f"after {time.monotonic() - started:.0f}s; no stamp written; "
+            f"output in {failed.as_posix()}")
         return 1
     # taken past the failing branch, so a refusal here cannot keep the last pass after a failing run
     after = content_id(roots.work, paths)
@@ -848,8 +849,9 @@ def verify(roots: Roots, config: dict, out=print, name: str = "") -> int:
              "product_rev": git(roots.work, "rev-parse", "-q", "--verify", "HEAD", check=False),
              "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "sako": VERSION}
     atomic_write(path, json.dumps(stamp, indent=1) + "\n")
-    out(f"{shown()}check: PASS in {time.time() - started:.0f}s; covered {len(listed)} file(s); "
-        f"stamp {after} -> {path.as_posix()}; output in {log.as_posix()}")
+    out(f"{shown()}check: PASS in {time.monotonic() - started:.0f}s; "
+        f"covered {len(listed)} file(s); stamp {after} -> {path.as_posix()}; "
+        f"output in {log.as_posix()}")
     return 0
 
 

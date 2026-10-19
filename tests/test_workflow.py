@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 import argparse
 import io
+import itertools
 import json
 import os
 import re
@@ -1184,6 +1185,15 @@ class Workflow(unittest.TestCase):
                 self.assertFalse(roots.state.exists(), "a read takes no lock, since Windows locks are exclusive")
             with sako.ledger_lock(roots, write=True):
                 self.assertEqual(calls, [(2, 1), (2, 1)], "a held lock is retried")
+
+    def test_verify_times_its_run_by_a_clock_that_never_steps_back(self):
+        """A wall clock that steps back during a run, as WSL's does, never makes the time negative."""
+        config = dict(sako.DEFAULTS, verify_command=[sys.executable, "-c", "pass"], verify_paths=["src"])
+        fixture.write(self.root, {".sako/config.json": json.dumps(config)})
+        wall, lines = itertools.count(2_000_000_000.0, -5.0), []
+        with patch.object(sako.time, "time", side_effect=lambda: next(wall)):
+            self.assertEqual(sako.verify(sako.resolve_roots(self.root), config, out=lines.append), 0)
+        self.assertRegex("\n".join(lines), r"check: PASS in 0s;")
 
     def test_on_windows_verify_looks_a_bare_command_up_on_the_path(self):
         """Windows' own search tries System32 before PATH, where a bare bash is WSL's launcher, not Git Bash's bash."""
