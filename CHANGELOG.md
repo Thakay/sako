@@ -5,7 +5,7 @@ Notable changes to SAKO, one entry per release. The format follows
 [Semantic Versioning](https://semver.org/). SAKO is alpha software, so commands and
 file formats can change in any 0.x release.
 
-## [0.6.0] - 2026-10-18
+## [0.6.0] - 2026-10-19
 
 Sessions that share a checkout hold each other up less, and the records say more.
 Another session's stale claim or overlap no longer blocks a stop as a ledger finding,
@@ -211,6 +211,14 @@ To update from 0.5.1, follow these steps:
   even from Git Bash.
 - The local footprint's records line says `git clean -dx`, which deletes `.sako/`,
   instead of `git clean -x`, which keeps the folder.
+
+### Known issues
+
+- When a stash, an autostash, a pre-commit hook, a formatter or an editor save
+  rewrites a closed task's uncommitted file in a later minute than the close, even
+  with the same content, the gate lists the file under Recorded and suggests a new
+  task. If the content is still the closed task's work, commit it under that
+  task's title, which clears the finding.
 
 ### Validation
 
