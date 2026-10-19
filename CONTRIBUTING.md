@@ -27,14 +27,16 @@ any compatibility limits. Follow the writing and commit rules in
 
 ## Design budgets
 
-Tests hold these limits. Over one, remove something before adding.
+Tests hold these limits. Over a word budget or the ledger's column budget, remove
+something before adding. At the runtime cap, revisit the architecture with the
+maintainer.
 
 | Budget | Limit |
 |---|---|
 | Install | One command, no required flags |
 | Reading for a normal task | About 1,500 words: the skill, the task template's preamble, a start context and the method's required part |
 | Required ledger columns | 8 at most |
-| Runtime | One standard-library file of at most 4,000 lines, counted with `wc -l sako.py` |
+| Runtime | One standard-library file of at most 4,000 lines, counted with `wc -l sako.py`, none over 100 columns |
 
 ## Work from a checkout
 

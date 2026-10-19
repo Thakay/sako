@@ -20,9 +20,9 @@ evidence (validation).
 ## Laws
 
 - One runtime file. `sako.py` stays standard-library Python 3.10 or newer, in one
-  file within the runtime budget in CONTRIBUTING.md. Count before adding (`wc -l
-  sako.py`). Over the budget, remove something or reopen the question of a heavier
-  tool; never add a second script.
+  file within the runtime cap in CONTRIBUTING.md. Count before adding (`wc -l
+  sako.py`). At the cap, revisit the architecture with the maintainer, who may choose
+  modules or another design; never add a second script without that ruling.
 - The principles, the guarantees and the maintainer's direction govern changes to
   project conventions.
 - Machinery only after an observed need. A new check, command or hook shows first
