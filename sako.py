@@ -1292,7 +1292,9 @@ def render_status(roots: Roots, config: dict, session_id: str | None) -> str:
         # the records' own repository, where every session commits rows and receipts
         if manifest["footprint"] == "repo" and (roots.kit / ".git/HEAD").is_file() \
                 and isinstance(entry.get("started_at"), int):
-            kept = git(roots.kit, "log", "--format=%h %s", f"--since=@{entry['started_at']}",
+            # five seconds early for a wall clock that steps back; with no start revision to
+            # bound this log, a longer margin would list the previous session's last records
+            kept = git(roots.kit, "log", "--format=%h %s", f"--since=@{entry['started_at'] - 5}",
                        check=False).splitlines()
             lines += [f"records committed since you started: {len(kept)}"] \
                 + [f"  {c}" for c in kept[:12]]
