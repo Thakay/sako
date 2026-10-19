@@ -33,7 +33,7 @@ The owner opens the agent in their coding tool. Its hook registers the existing 
 
 ```text
 $ # Claude Code's SessionStart hook (demo-agent)
-sako 0.6.0 · work /work/greeting (main @ 689762746)
+sako 0.6.0 · work /work/greeting (main, started at 689762746)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-agent
@@ -142,7 +142,7 @@ The owner opens a new conversation in the coding tool. Its hook checks it in wit
 
 ```text
 $ # Claude Code's SessionStart hook (demo-next)
-sako 0.6.0 · work /work/greeting (main @ 7500e251e)
+sako 0.6.0 · work /work/greeting (main, started at 7500e251e)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next

@@ -45,7 +45,7 @@ In the already open code session, run `start` to register with SAKO and get cont
 
 ```text
 $ python3 .sako/sako.py start --session demo-code
-sako 0.6.0 · work /work/greeting (main @ 53a59d8b5)
+sako 0.6.0 · work /work/greeting (main, started at 53a59d8b5)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-code
@@ -69,14 +69,14 @@ The already open docs session checks in while the code session is still active. 
 
 ```text
 $ python3 .sako/sako.py start --session demo-docs
-sako 0.6.0 · work /work/greeting (main @ 53a59d8b5)
+sako 0.6.0 · work /work/greeting (main, started at 53a59d8b5)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-docs
 your marker: sk-0115-0d70912d790f
 session: "demo-docs" (use this ID with --session)
 live peers (disjoint: share the tree; overlap: wait or negotiate; no claim: ask before touching shared paths):
-  peer sk-0115-3c0f5f721a4a (session ID ends emo-code) on main since 2026-01-15T09:30:00+0000 -> T-1 (claimed) touches greeting.py  [from the claim column]
+  peer sk-0115-3c0f5f721a4a (session ID ends emo-code) on main since 2026-01-15T09:30:00+0000; in this checkout: 0 commit(s) since its start, 0 uncommitted path(s) -> T-1 (claimed) touches greeting.py  [from the claim column]
 evidence: none; no passing check recorded; run sako.py verify, which runs python3 check.py
 ledger: consistent
 next, if no task was named for you: T-2 (P2, the only ready task): Show how to use the greeting
@@ -161,7 +161,7 @@ A fresh agent session is opened in the coding tool. It runs `start` to check in 
 
 ```text
 $ python3 .sako/sako.py start --session demo-next
-sako 0.6.0 · work /work/greeting (main @ 3e00c7d5c)
+sako 0.6.0 · work /work/greeting (main, started at 3e00c7d5c)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next

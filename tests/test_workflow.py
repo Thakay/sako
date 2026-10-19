@@ -289,7 +289,8 @@ class Workflow(unittest.TestCase):
                 self.assertRegex(done.evidence, rf"^Observed \[{marker}; closed {MINUTE}; no automated check\]$",
                                  "a claim written before claim times, or a hand edit after the marker, leaves the marker alone")
                 self.assertEqual(done.claim, marker, "the done row keeps its closer")
-        self.assertIn("your rows: T-1 (done); T-2 (done); T-3 (done)", self.assert_ok(self.run_cli("status", session="upgraded")))
+        self.assertIn("your rows: T-1 (done) touches src/T-1/; T-2 (done) touches src/T-2/; T-3 (done) touches src/T-3/\n",
+                      self.assert_ok(self.run_cli("status", session="upgraded")))
 
     def test_ready_and_the_id_preview_are_gone(self):
         self.assertEqual(self.run_cli("ready")[0], 2)
@@ -647,6 +648,73 @@ class Workflow(unittest.TestCase):
                 line = next(line for line in out.splitlines() if sako.marker_for(idle) in line)
                 self.assertTrue(line.startswith(f"  peer {sako.marker_for(idle)} (session ID ends 0000c3d4) on main"), line)
                 self.assertTrue(line.endswith(" -> no claim"), line)
+
+    def test_start_resume_and_compact_contexts_name_the_claims_the_session_holds_with_their_handoffs(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1"), fixture.row("T-2", touches="`docs/`"))})
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        header = f"sako {sako.VERSION} · work {self.root.as_posix()} (main, started at "
+        first = fixture.git(self.root, "rev-parse", "HEAD")[:9]
+        context = self.assert_ok(fixture.cli(self.root, "start", session="holder", pid=agent.pid))
+        self.assertTrue(context.startswith(f"{header}{first})\n"), context)
+        self.assertNotIn("your rows", context, "a session that holds no rows prints nothing new")
+        for task in ("T-1", "T-2"):
+            self.assert_ok(self.run_cli("claim", task, session="holder"))
+        fixture.write(self.root, {".sako/work/T-1-invented-task/handoff.md": "Where it stands: started\n", "src/app.py": "print(2)\n"})
+        fixture.commit_all(self.root, "half the work")
+        held = "\nyour rows: T-1 (claimed, handoff written) touches src/; T-2 (claimed, no handoff) touches docs/\n"
+        status = self.assert_ok(self.run_cli("status", session="holder"))
+        self.assertIn(held, status)
+        self.assertNotIn("records committed", status, "the local footprint has no records history")
+        for source in ("start", "compact", "resume"):
+            with self.subTest(source=source):
+                payload = json.dumps({"session_id": "holder", "hook_event_name": "SessionStart", "source": source})
+                if source == "resume":  # the client ended the session, then resumed it, with a new start record
+                    self.assertEqual(fixture.hook(self.root, "SessionEnd", "holder")[0], 0)
+                context = self.assert_ok(fixture.cli(self.root, "start", session="holder", pid=agent.pid) if source == "start"
+                                         else fixture.cli(self.root, "hook", "claude", pid=agent.pid, stdin=payload))
+                self.assertIn(f'\nsession: "holder" (use this ID with --session){held}', context)
+                since = fixture.git(self.root, "rev-parse", "HEAD")[:9] if source == "resume" else first
+                self.assertTrue(context.startswith(f"{header}{since})\n"), "the start revision, which a resume before end keeps")
+
+    def test_a_peer_line_shows_its_commits_and_uncommitted_paths_in_its_own_checkout_even_once_removed(self):
+        side = Path(self.workspace.name) / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        far = subprocess.Popen(["sleep", "60"])
+        self.agents.append(far)
+        self.assert_ok(fixture.cli(side, "start", session="peer-side", pid=far.pid))
+        fixture.write(side, {"lib/one.py": "one\n"})
+        fixture.commit_all(side, "Side work")
+        fixture.write(side, {f"lib/{name}.py": "draft\n" for name in "abcd"})
+        self.start("peer-here")
+        fixture.write(self.root, {"notes.txt": "draft\n"})
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        context = self.assert_ok(fixture.cli(self.root, "start", session="reader", pid=agent.pid))
+        for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
+            with self.subTest(view=view):
+                self.assertIn(f"; in {side.as_posix()}: 1 commit(s) since its start, 4 uncommitted path(s) "
+                              "(lib/a.py, lib/b.py, lib/c.py and 1 more) -> no claim\n", out)
+                self.assertIn("; in this checkout: 0 commit(s) since its start, 1 uncommitted path(s) (notes.txt) -> no claim\n", out)
+        shutil.rmtree(side)  # its registration stays behind until git worktree prune
+        for view in ("start", "status"):
+            with self.subTest(view=view, removed=True):
+                code, out, err = fixture.cli(self.root, view, session="reader", pid=agent.pid)
+                self.assertEqual((code, err), (0, ""), out)
+                self.assertIn(f"; in {side.as_posix()}: the checkout is gone -> no claim\n", out)
+
+    def test_reading_the_peers_checkouts_stops_after_two_seconds_and_a_slow_one_says_so(self):
+        self.start("slow-peer")
+        roots, waits = sako.resolve_roots(self.root), []
+
+        def slow(root, timeout=None):
+            waits.append(timeout)
+            raise subprocess.TimeoutExpired("git status", timeout)
+
+        with patch.object(sako, "dirty_paths", slow):
+            lines = sako.peer_lines(roots, sako.read_ledger(roots, sako.load_config(roots.kit)), None)
+        self.assertTrue(lines[1].endswith("; in this checkout: not read in time -> no claim"), lines)
+        self.assertTrue(0 < waits[0] <= 2, waits)
 
     def test_one_scope_flag_takes_several_paths_and_a_task_text_after_them_fails(self):
         active = self.root / ".sako/work/TASKS.md"

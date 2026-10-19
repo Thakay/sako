@@ -121,7 +121,7 @@ class Gate(unittest.TestCase):
         out = fixture.hook(self.root, "SessionStart", "s1", pid=self.host())[1]
         self.assertIn(f"your marker: {today}", out, "the resume starts a new start record under a new marker day")
         out = self.run_in(self.root, "status", session="s1")[1]
-        self.assertIn("your rows: T-1 (claimed)", out, "the claim outlives the session")
+        self.assertIn("your rows: T-1 (claimed, no handoff) touches src/\n", out, "the claim outlives the session")
         self.assertIn(f"changed this session in {self.root.resolve().as_posix()}: 0", out,
                       "the start window begins again at the resume")
         fixture.write(self.root, {"src/app.py": "print(3)\n"})
@@ -144,7 +144,7 @@ class Gate(unittest.TestCase):
         self.assertIn(f"T-1 is claimed by {marker}, which is not a live session", self.run_in(self.root, "check")[1],
                       "while the session is gone, its claim reads as stale to everyone")
         self.assertIn(f"your marker: {marker}\n", fixture.hook(self.root, "SessionStart", "s1", pid=self.host())[1])
-        self.assertIn("your rows: T-1 (claimed)", self.run_in(self.root, "status", session="s1")[1])
+        self.assertIn("your rows: T-1 (claimed, no handoff) touches src/\n", self.run_in(self.root, "status", session="s1")[1])
         self.assertIn("ledger: consistent", self.run_in(self.root, "check")[1], "the same ID brings its claim back to life")
 
     def test_a_session_that_changed_nothing_passes(self):

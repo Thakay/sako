@@ -247,7 +247,7 @@ class Footprint(KitCase):
                 session = f"moved-{folder.name}"
                 context = fixture.succeeds(self.hook(self.root, "claude", "SessionStart", session, self.host(),
                                                      cwd=folder, project=self.root))
-                self.assertIn(f"work {self.root.resolve().as_posix()} (main @", context)
+                self.assertIn(f"work {self.root.resolve().as_posix()} (main, started at ", context)
                 self.assertIn("your marker", context)
                 self.assertTrue((live / f"{sako.session_key(session)}.json").exists())
                 fixture.write(self.root, {"src/app.py": f"print('{session}')\n"})
@@ -569,6 +569,22 @@ class RepoFootprint(KitCase):
         mask.rmdir()
         self.install("--client", "none", "--repo")
         self.assertNotIn("footprint:", self.status())
+
+    def test_status_lists_the_records_committed_since_the_session_started(self):
+        self.install("--client", "none", "--repo")
+        earlier = dict(fixture.ENV, GIT_AUTHOR_DATE="2001-01-01T09:00:00+0000", GIT_COMMITTER_DATE="2001-01-01T09:00:00+0000")
+        subprocess.run(["sh", "-c", 'git -C .sako add -A && git -C .sako commit -qm "Records before the start"'],
+                       cwd=self.root, env=earlier, check=True, capture_output=True)
+        pid = self.host()
+        fixture.succeeds(fixture.installed(self.root, "start", session="reader", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "add", "Change app", "--scope", "src/"))
+        sh(self.root, 'git -C .sako commit -qm "A peer adds T-1" -- work/TASKS.md')
+        fixture.write(self.root, {".sako/work/plan.md": "the plan\n"})
+        sh(self.root, 'git -C .sako add -- work/plan.md && git -C .sako commit -qm "A peer writes the plan"')
+        out = fixture.succeeds(fixture.installed(self.root, "status", session="reader", pid=pid))
+        kept = "".join(f"  {line}\n" for line in fixture.git(self.root / ".sako", "log", "--format=%h %s", "-2").splitlines())
+        self.assertIn("\nlanded in the code since you started: nothing\nrecords committed since you started: 2\n" + kept, out)
+        self.assertNotIn("Records before the start", out)
 
 
 class SharedFootprint(KitCase):

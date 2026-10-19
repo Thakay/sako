@@ -137,12 +137,12 @@ class Roots:
         return self.state / "worktrees" / self.worktree if self.home != self.work else self.state
 
 
-def git(root: Path, *args: str, check: bool = True) -> str:
+def git(root: Path, *args: str, check: bool = True, timeout: float | None = None) -> str:
     # paths come back as UTF-8, unquoted, whatever the locale
     env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
     result = subprocess.run(["git", "-c", "core.quotePath=false", "-C", str(root), *args],
                             capture_output=True, encoding="utf-8", errors="surrogateescape",
-                            env=env)
+                            env=env, timeout=timeout)
     if check and result.returncode:
         raise SakoError(f"git {' '.join(args)} in {root}: {result.stderr.strip() or 'failed'}")
     return result.stdout.strip()
@@ -828,12 +828,13 @@ def changed_since(root: Path, start_rev: str, paths: list[str]) -> list[str]:
 # views
 
 
-def dirty_paths(root: Path) -> list[str]:
+def dirty_paths(root: Path, timeout: float | None = None) -> list[str]:
     """Uncommitted paths (modified, added, deleted or untracked) in a worktree. Without rename
     detection a rename shows as its old and new path: it changes both scopes."""
     result = subprocess.run(["git", "-C", str(root), "status", "--porcelain=v1", "-z",
                              "--no-renames", "--untracked-files=all"],
-                            capture_output=True, env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"))
+                            capture_output=True, env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"),
+                            timeout=timeout)
     if result.returncode:
         raise SakoError("cannot inspect uncommitted work: "
                         + result.stderr.decode("utf-8", "replace").strip())
@@ -847,8 +848,48 @@ def my_rows(rows: list[Row], marker: str | None) -> list[Row]:
     return [r for r in rows if key and r.claim and holder_key(r.claim) == key]
 
 
+def own_line(roots: Roots, config: dict, rows: list[Row]) -> str:
+    """Your rows with their scopes; a claimed one says whether its handoff is written."""
+    parts = []
+    for row in rows:
+        state = row.status if row.status != "claimed" else "claimed, " + (
+            "handoff written" if (handoff(roots, config, row) / "handoff.md").is_file()
+            else "no handoff")
+        parts.append(f"{row.id} ({state}) touches {', '.join(row.touches) or '?'}")
+    return "your rows: " + ("; ".join(parts) or "none")
+
+
+def progress(roots: Roots, entry: dict, seen: dict, deadline: float) -> str:
+    """A peer's commits since its start revision and the uncommitted paths in its own checkout,
+    read with Git, which writes nothing there. Each checkout is read once, all by the deadline."""
+    if "work_root" not in entry:  # a hand-made entry
+        return ""
+    root, rev = Path(str(entry["work_root"])), str(entry.get("work_start_rev") or "")
+    where = "in this checkout" if root == roots.work else f"in {root.as_posix()}"
+    left = lambda: max(deadline - time.monotonic(), 0)  # seconds; at 0 Git times out at once
+    try:
+        # a removed checkout; without its .git, Git would read the repository around the folder
+        if not (root / ".git").exists():
+            return f"; {where}: the checkout is gone"
+        if root not in seen:
+            seen[root] = [p for p in product(dirty_paths(root, left())) if not p.endswith("/")]
+        # a start before the first commit recorded HEAD
+        count = git(root, "rev-list", "--count", "HEAD" if rev == "HEAD" else f"{rev}..HEAD",
+                    check=False, timeout=left()) or "0"
+    except subprocess.TimeoutExpired:
+        return f"; {where}: not read in time"
+    except SakoError:
+        return f"; {where}: the checkout cannot be read"
+    paths = seen[root]
+    named = ", ".join(paths[:3]) + (f" and {len(paths) - 3} more" if len(paths) > 3 else "")
+    return (f"; {where}: {count} commit(s) since its start, {len(paths)} uncommitted path(s)"
+            + (f" ({named})" if paths else ""))
+
+
 def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
-    lines = []
+    """Each live peer with its claims and its progress; a start hook prints these, so reading
+    the peers' checkouts stops after 2 seconds in all."""
+    lines, seen, deadline = [], {}, time.monotonic() + 2
     for entry in read_presence(roots):
         if entry.get("marker") == me:
             continue
@@ -863,7 +904,7 @@ def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
                      f"(session ID ends {str(entry.get('session_id', '?'))[-8:]}) on "
                      f"{entry.get('branch')} since {entry.get('started')}"
                      + (f", unverified from here (counts as live until {until})" if until else "")
-                     + f" -> {where}")
+                     + progress(roots, entry, seen, deadline) + f" -> {where}")
     return ["live peers (disjoint: share the tree; overlap: wait or negotiate; "
             "no claim: ask before touching shared paths):"] + lines if lines else []
 
@@ -1067,8 +1108,9 @@ def render_start(roots: Roots, config: dict, entry: dict) -> str:
     findings = stray(roots) + sum(ledger_findings(rows, live, key_of(entry["marker"])), [])
     state, why = evidence_state(roots, config)
     rev, kit = entry["work_start_rev"], KIT if roots.home == roots.work else roots.kit.as_posix()
-    lines = [f"sako {VERSION} · work {roots.work.as_posix()} "
-             f"({entry['branch']} @ {rev[:9] if rev and rev != 'HEAD' else 'no commits yet'})",
+    # the start revision, which a resume before end keeps; HEAD may have moved since
+    lines = [f"sako {VERSION} · work {roots.work.as_posix()} ({entry['branch']}, started "
+             + (f"at {rev[:9]})" if rev and rev != "HEAD" else "before the first commit)"),
              DOOR.format(kit),
              f"kit: {roots.kit.as_posix()}; method {kit}/SAKO.md; "
              f"records {kit}/{config['tasks']} and {kit}/{config['done']}",
@@ -1076,6 +1118,9 @@ def render_start(roots: Roots, config: dict, entry: dict) -> str:
              f"--session {shlex.quote(entry['session_id'])}",
              f"your marker: {entry['marker']}",
              f"session: {json.dumps(entry['session_id'])} (use this ID with --session)"]
+    # what a resumed or compacted session holds; nothing for one that holds no claim
+    held = [r for r in my_rows(rows, entry["marker"]) if r.status == "claimed"]
+    lines += [own_line(roots, config, held)] if held else []
     lines += peer_lines(roots, rows, entry["marker"]) or ["peers: none recorded"]
     lines.append(f"evidence: {state}; {why}")
     lines += [f"ledger: {len(findings)} finding(s)" if findings else "ledger: consistent"] \
@@ -1239,14 +1284,20 @@ def render_status(roots: Roots, config: dict, session_id: str | None) -> str:
                      f"work started at {entry['work_start_rev'][:9]}")
         landed = git(roots.work, "log", "--format=%h %s", f"{entry['work_start_rev']}..HEAD",
                      check=False).splitlines() if entry.get("work_start_rev") else []
-        lines.append("landed in the repository since you started: "
+        lines.append("landed in the code since you started: "
                      + (f"{len(landed)} commit(s)" if landed else "nothing"))
         lines += [f"  {c}" for c in landed[:12]]
+        # the records' own repository, where every session commits rows and receipts
+        if manifest["footprint"] == "repo" and (roots.kit / ".git/HEAD").is_file() \
+                and isinstance(entry.get("started_at"), int):
+            kept = git(roots.kit, "log", "--format=%h %s", f"--since=@{entry['started_at']}",
+                       check=False).splitlines()
+            lines += [f"records committed since you started: {len(kept)}"] \
+                + [f"  {c}" for c in kept[:12]]
     elif session_id:
         lines.append(f"you: {marker}; no presence entry (session ended or swept); "
                      "rows and Git history below are the durable record")
-    lines.append("your rows: "
-                 + ("; ".join(f"{r.id} ({r.status})" for r in my_rows(rows, marker)) or "none"))
+    lines.append(own_line(roots, config, my_rows(rows, marker)))
     lines.append(changes_line(roots, rows, entry, marker))
     lines += peer_lines(roots, rows, marker) or ["peers: none"]
     lines += [f"ledger: {len(findings)} finding(s)" if findings else "ledger: consistent"] \

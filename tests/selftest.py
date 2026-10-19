@@ -462,7 +462,7 @@ def scenario_interruption_recovery(ws: Path) -> None:
     commit_all(repo, "half the work landed")
     shutil.rmtree(repo / ".sako/state/live")
     code, out, _ = cli(repo, "status", session="s1")
-    expect("no presence entry" in out and "your rows: T-1 (claimed)" in out, out)
+    expect("no presence entry" in out and "your rows: T-1 (claimed, no handoff) touches src/\n" in out, out)
     close(repo, "T-1", "s1")
     code, _, err = hook(repo, "Stop", "s1")
     expect(code == 2 and "Proven: T-1 closed after checked content changed" in err and "the check is none" in err, err)
