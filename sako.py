@@ -377,6 +377,14 @@ def covers(row: Row, path: str, root: Path | None = None) -> bool:
         return False
 
 
+def within(touch: str, row: Row) -> bool:
+    """Whether a scope entry lies inside one of the row's; a scope that escapes its root holds
+    nothing."""
+    with suppress(SakoError):
+        return any(scope(touch)[:len(scope(t))] == scope(t) for t in row.touches)
+    return False
+
+
 def records_only(row: Row) -> bool:
     """True when every scope entry lies in the kit folder, which the project's check never covers.
     Close and the Proven rule ask no check of such records work while only others moved checked
@@ -1863,24 +1871,67 @@ def receipt_part(roots: Roots, config: dict, claim: str, records: bool = False) 
     return f"[{holder}; closed {time.strftime('%Y-%m-%dT%H:%M%z')}; {check}]"
 
 
+def scope_paths(values: list[str], flag: str = "--scope") -> list[str]:
+    """Scope entries from the command line: each on one line, without a comma, in its root."""
+    touches = [cell(t, flag) for t in values]
+    for touch in touches:
+        if "," in touch:
+            raise SakoError("a scope path cannot contain a comma in the Markdown format")
+        scope(touch)
+    return touches
+
+
+def prerequisites(rows: list[Row], values: list[str]) -> list[str]:
+    """--after's task IDs, each once and each an existing task, done ones included."""
+    after = sorted(set(values))
+    for dependency in after:
+        if dependency not in {r.id for r in rows}:
+            raise SakoError(f"--after {dependency} needs an existing task, done ones included")
+    return after
+
+
+def overlap_note(rows: list[Row], row: Row) -> str:
+    """The claimed rows whose scopes overlap this row's, with their holders, for the line add and
+    edit print."""
+    held = [f"{o.id} ({o.claim.split()[0]})" for o in rows
+            if o.id != row.id and o.status == "claimed" and scopes_overlap(row, o)]
+    those = "that closes" if len(held) == 1 else "those close"
+    return (f"; its scope overlaps claimed {', '.join(held)}, so a claim of it by another "
+            f"session is refused until {those} or a scope narrows") if held else ""
+
+
+def overlapping_claim(rows: list[Row], row: Row, mine: str, replaced: str | None,
+                      live: set[str], seen: set[str]) -> str:
+    """Claim's overlap rule: the first row another session claimed whose scope overlaps this
+    row's, with its scope, its holder and the way past it, or "". The claimant's own rows pass,
+    and so do those of a holder a takeover replaces, so it can move them one by one."""
+    for other in rows:
+        peer = holder_key(other.claim)
+        if other.id != row.id and other.status == "claimed" \
+                and peer not in (mine, replaced) and scopes_overlap(row, other):
+            # a live holder, seen or unverified from here
+            wait = "wait for it to close, or " if peer in live else ""
+            return (f"{other.id} ({', '.join(other.touches)}), claimed by "
+                    f"{other.claim.split()[0]}; "
+                    + (wait if peer in seen
+                       else f"neither claim can be taken over while they overlap, so {wait}"
+                       if replaced
+                       else f"{wait}if it stopped, inspect its handoff and take it over first "
+                            f"(claim {other.id} --takeover REASON), or "))
+    return ""
+
+
 def add_task(rows: list[Row], active: Path, text: str, records: str,
              args: argparse.Namespace) -> int:
     source = cell(args.source, "--source") if args.source is not None else ""
     if args.source is not None and source in EMPTY_CELL:
         raise SakoError("--source needs a stable reference, not a dash")
-    after = sorted(set(args.after or []))
-    for dependency in after:
-        if dependency not in {r.id for r in rows}:
-            raise SakoError(f"--after {dependency} needs an existing task, done ones included")
+    after = prerequisites(rows, args.after or [])
     pri = (args.pri or "P2").upper()
     if pri not in PRIORITIES:
         raise SakoError("--pri takes P1, P2 or P3")
     task, done_when = cell(args.task, "the task"), cell(args.done_when, "--done-when")
-    touches = [cell(t, "--scope") for t in args.scope]
-    for touch in touches:
-        if "," in touch:
-            raise SakoError("a scope path cannot contain a comma in the Markdown format")
-        scope(touch)
+    touches = scope_paths(args.scope)
     if existing := [r for r in rows if source and r.source == source]:
         if len(existing) != 1:
             raise SakoError(f"source {source!r} is mapped more than once; "
@@ -1906,13 +1957,75 @@ def add_task(rows: list[Row], active: Path, text: str, records: str,
              "status": "open", "scope": ", ".join(f"`{t}`" for t in touches),
              "after": ", ".join(after), "source": source}
     atomic_write(active, insert_row(text, cells, list(COLUMNS["tasks"]))[0])
-    new = Row(f"T-{number}", "tasks", 0, [], {}, touches=touches)
-    held = [f"{o.id} ({o.claim.split()[0]})" for o in rows
-            if o.status == "claimed" and scopes_overlap(new, o)]
-    print(f"T-{number}: open; recorded locally, not committed" + (
-        f"; its scope overlaps claimed {', '.join(held)}, so a claim of it "
-        f"by another session is refused until {'that closes' if len(held) == 1 else 'those close'} "
-        "or a scope narrows" if held else ""))
+    print(f"T-{number}: open; recorded locally, not committed"
+          + overlap_note(rows, Row(f"T-{number}", "tasks", 0, [], {}, touches=touches)))
+    return 0
+
+
+def edit_task(rows: list[Row], row: Row, active: Path, text: str, args: argparse.Namespace,
+              mine: str, live: set[str], seen: set[str]) -> int:
+    """Change a row's Scope, After, Done when or Status in place; Task and Pri stay hand edits.
+    Only its holder edits a claimed row, and nothing is written unless the edited row passes the
+    row checks, waits for no task that waits for it and, while it stays claimed, passes claim's
+    overlap rule for each path new to its scope."""
+    if (args.scope, args.widen, args.after, args.done_when, args.park, args.open) \
+            == (None, None, None, None, None, False):
+        raise SakoError("edit needs --scope, --widen, --after, --done-when, --park or --open")
+    owner = holder_key(row.claim) if row.status == "claimed" else None
+    if owner and owner != mine:
+        raise SakoError(f"{row.id} is claimed by {row.claim.split()[0]}; its holder edits it"
+                        + ("" if owner in seen else ", or if it stopped, inspect its handoff and "
+                           f"take it over first (claim {row.id} --takeover REASON)"))
+    cells = dict(row.cells)
+    if args.scope or args.widen:
+        touches = [] if args.scope else list(row.touches)
+        for touch in scope_paths(args.scope or []) + scope_paths(args.widen or [], "--widen"):
+            if scope(touch) not in map(scope, touches):
+                touches.append(touch)
+        if touches != row.touches:
+            cells["scope"] = ", ".join(f"`{t}`" for t in touches)
+    if args.after is not None:  # it replaces the list, and a dash clears it
+        after = prerequisites(rows, [a for a in args.after if a not in EMPTY_CELL])
+        if after != row.after:
+            cells["after"] = ", ".join(after)
+    if args.done_when is not None:
+        cells["done when"] = cell(args.done_when, "--done-when")
+    if args.park is not None:
+        cells["status"] = f"parked: {cell(args.park, '--park')}"
+    elif args.open and row.status != "open":
+        cells["status"] = "open"
+    if cells == row.cells:
+        print(f"{row.id}: {row.status}; records unchanged")
+        return 0
+    lines = text.splitlines()
+    lines[row.line - 1] = row_line(row.titles, cells)
+    # read back as every later command will read it
+    edited = next(r for r in parse_rows({"tasks": "\n".join(lines)}) if r.line == row.line)
+    if faults := row_faults(edited, {r.id for r in rows}):
+        raise SakoError(faults[0])
+    if cells["after"] != row.cells["after"]:
+        # the tasks that wait for this row, directly or through others: as its prerequisites,
+        # they would leave both waiting for good
+        waits, more = {row.id}, True
+        while more:
+            more = {r.id for r in rows if r.doc == "tasks" and waits & set(r.after)} - waits
+            waits |= more
+        if loop := sorted(waits & set(edited.after)):
+            raise SakoError(f"{loop[0]} already waits for {row.id}, so {row.id} cannot wait for "
+                            "it; leave it out of --after")
+    if edited.status == "claimed":
+        for touch in [t for t in edited.touches if not within(t, row)]:
+            new = Row(row.id, "tasks", 0, [], {}, touches=[touch])
+            if clash := overlapping_claim(rows, new, mine, None, live, seen):
+                raise SakoError(f"{row.id}'s new path {touch} overlaps {clash}edit without {touch}")
+    atomic_write(active, "\n".join(lines).rstrip() + "\n")
+    said = [f"{key} {value}" for key, value in (("scope", ", ".join(edited.touches)),
+            ("after", ", ".join(edited.after) or "none"), ("done when", "replaced"))
+            if cells[key] != row.cells[key]]
+    print(f"{row.id}: {edited.status}"
+          + (", your claim released" if owner and edited.status != "claimed" else "")
+          + "".join(f"; {s}" for s in said) + "; recorded locally, not committed"
+          + (overlap_note(rows, edited) if edited.status == "open" else ""))
     return 0
 
 
@@ -1935,10 +2048,15 @@ def cmd_task(args: argparse.Namespace) -> int:
                         "or run start first (presence SAKO cannot verify, as in a sandbox, "
                         "lasts 24 hours after a start)")
     mine, done = key_of(entry["marker"]), {r.id for r in rows if r.doc == DONE}
+    if args.command == "edit" and args.task_id in done:
+        raise SakoError(f"{args.task_id} is done, and its done row stays as history; "
+                        "record new work as a new task")
     matches = [r for r in rows if r.id == args.task_id and r.doc == "tasks"]
     if len(matches) != 1:
         raise SakoError(f"{args.task_id} needs exactly one row in {runtime_path(roots, active)}")
     row = matches[0]
+    if args.command == "edit":
+        return edit_task(rows, row, active, text, args, mine, live, seen)
     if faults := row_faults(row, {r.id for r in rows}):
         raise SakoError(faults[0])
     if waiting := [d for d in row.after if d not in done]:
@@ -1961,22 +2079,9 @@ def cmd_task(args: argparse.Namespace) -> int:
                                 + " inspect its handoff and use --takeover <reason>")
         # past the checks above, any other owner is not seen running and is taken over
         replaced = owner if owner != mine else None
-        # a takeover also passes the replaced holder's other claims, so it can move them one by one
-        for other in rows:
-            peer = holder_key(other.claim)
-            if other.id != row.id and other.status == "claimed" \
-                    and peer not in (mine, replaced) and scopes_overlap(row, other):
-                # a live holder, seen or unverified from here
-                wait = "wait for it to close, or " if peer in live else ""
-                fix = (wait if peer in seen
-                       else f"neither claim can be taken over while they overlap, so {wait}"
-                       if replaced
-                       else f"{wait}if it stopped, inspect its handoff and take it over first "
-                            f"(claim {other.id} --takeover REASON), or ")
-                raise SakoError(f"{row.id}'s scope overlaps {other.id} "
-                                f"({', '.join(other.touches)}), claimed by "
-                                f"{other.claim.split()[0]}; {fix}"
-                                f"narrow a Scope in {runtime_path(roots, active)}")
+        if clash := overlapping_claim(rows, row, mine, replaced, live, seen):
+            raise SakoError(f"{row.id}'s scope overlaps {clash}"
+                            f"narrow a Scope in {runtime_path(roots, active)}")
         moving = [o.id for o in rows if o.status == "claimed" and o.id != row.id
                   and holder_key(o.claim) == replaced and scopes_overlap(row, o)]
         # its process was hidden from here
@@ -2129,6 +2234,25 @@ def main(argv: list[str] | None = None) -> int:
         p = add(name, cmd_task, help=f"{name} a task under the local ledger lock")
         p.add_argument("task_id")
         p.add_argument("--takeover" if name == "claim" else "--evidence", required=name == "close")
+    p = add("edit", cmd_task,
+            help="change a task's scope, prerequisites, done-when or status under the ledger lock",
+            epilog="A claimed task is edited by its holder only, and a path new to its scope "
+                   "must not overlap another session's claim. Task and Pri stay hand edits, and "
+                   "a done task stays as history.")
+    p.add_argument("task_id")
+    p.add_argument("--scope", action="extend", nargs="+",
+                   help="path prefixes that replace the scope; list or repeat")
+    p.add_argument("--widen", action="extend", nargs="+",
+                   help="path prefixes to add to the scope; list or repeat")
+    p.add_argument("--after", action="append",
+                   help="prerequisite task ID; repeat for several. It replaces the list, and - "
+                        "clears it")
+    p.add_argument("--done-when", help="the new observable completion condition")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--park", metavar="REASON",
+                   help="park the task with this reason; on your claim, this releases it")
+    g.add_argument("--open", action="store_true",
+                   help="open a parked task; on your claim, this releases it")
     p = add("hook", cmd_hook, help="adapter entry reading hook JSON on stdin")
     p.add_argument("client", nargs="?", choices=sorted(CLIENTS),
                    help="the client whose hook this is")
@@ -2160,10 +2284,11 @@ def main(argv: list[str] | None = None) -> int:
     args.session = args.session or os.environ.get("SAKO_SESSION") \
         or (clients[0] if len(clients) == 1 else None)  # nested: neither
     try:
-        if args.command in ("start", "end", "check", "status", "next", "add", "claim", "close",
-                            "verify"):
+        if args.command in ("start", "end", "check", "status", "next", "add", "claim", "edit",
+                            "close", "verify"):
             args.resolved = resolve(args)
-            with ledger_lock(args.resolved[0], args.command in ("add", "claim", "close", "verify"),
+            with ledger_lock(args.resolved[0],
+                             args.command in ("add", "claim", "edit", "close", "verify"),
                              "verify" if args.command == "verify" else "ledger"):
                 return int(args.handler(args) or 0)
         return int(args.handler(args) or 0)

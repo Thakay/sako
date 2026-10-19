@@ -202,6 +202,9 @@ class Workflow(unittest.TestCase):
         self.assert_ok(self.run_cli("claim", "T-1", session="columns"))
         self.assertRegex(active.read_text(), rf"\| T-1 \| ui \| P2 \| Theme \| Survives reload \| {sako.marker_for('columns')} "
                          rf"since {MINUTE} \| `src/` \| - \| - \| 2d \|")
+        self.assert_ok(self.run_cli("edit", "T-1", "--widen", "docs/theme/", session="columns"))
+        self.assertRegex(active.read_text(), rf"\| T-1 \| ui \| P2 \| Theme \| Survives reload \| {sako.marker_for('columns')} "
+                         rf"since {MINUTE} \| `src/`, `docs/theme/` \| - \| - \| 2d \|")
         output = self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Kept after reload", session="columns"))
         self.assertIn("not carried, the done file has no such column: Estimate=2d", output)
         row = sako.parse_rows({"done": done.read_text()})[0]
@@ -297,7 +300,7 @@ class Workflow(unittest.TestCase):
         self.start("session-a")
         line = ("--session", "session-a")  # before the task text too, as an agent copies it
         for args in (("add", *line, "Printed line", "--scope", "docs/"), ("next", *line), ("verify", *line),
-                     ("claim", "T-10", *line), ("status", *line), ("check", *line),
+                     ("claim", "T-10", *line), ("edit", "T-10", *line, "--widen", "notes/"), ("status", *line), ("check", *line),
                      ("close", "T-10", "--evidence", "Recorded", *line), ("end", *line)):
             with self.subTest(verb=args[0]):
                 self.assert_ok(self.run_cli(*args))
@@ -311,8 +314,8 @@ class Workflow(unittest.TestCase):
                                                    capture_output=True, text=True))
 
         verbs = dict(re.findall(r"(?m)^    (\w+) {2,}(\S.*)$", shown("--help")))
-        self.assertEqual(set(verbs), {"start", "end", "check", "verify", "status", "next", "add", "claim", "close", "hook",
-                                      "remove", "init"})
+        self.assertEqual(set(verbs), {"start", "end", "check", "verify", "status", "next", "add", "claim", "edit", "close",
+                                      "hook", "remove", "init"})
         for verb, description in verbs.items():
             with self.subTest(verb=verb):
                 self.assertIn(f"\n\n{description}\n\n", shown(verb, "--help"), "the listing's line is the verb's description")
@@ -426,6 +429,140 @@ class Workflow(unittest.TestCase):
         ledger = (self.root.resolve() / ".sako/work/TASKS.md").as_posix()
         self.assertIn(f"set its Status to open in {ledger}", err)
         self.assertIn(f"T-99 needs exactly one row in {ledger}", fixture.cli(linked, "claim", "T-99", session="session-a")[2])
+
+    def test_a_narrowed_claim_frees_a_second_sessions_claim_and_a_widening_onto_a_claim_is_refused(self):
+        self.start("session-a")
+        self.start("session-b")
+        active, holder = self.root / ".sako/work/TASKS.md", fixture.marker("session-b")
+        self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
+        self.assert_ok(self.run_cli("add", "Nested work", "--scope", "src/nested/"))
+        self.assertEqual(self.run_cli("claim", "T-10", session="session-b")[0], 3, "T-1's src/ overlaps it")
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--scope", "src/app.py", "tests/", session="session-a")),
+                         "T-1: claimed; scope src/app.py, tests/; recorded locally, not committed\n")
+        row = next(r for r in sako.parse_rows({"tasks": active.read_text()}) if r.id == "T-1")
+        self.assertEqual((row.touches, row.claim.split()[0]), (["src/app.py", "tests/"], fixture.marker("session-a")),
+                         "the claim stays with its holder")
+        self.assert_ok(self.run_cli("claim", "T-10", session="session-b"))
+        before = active.read_bytes()
+        code, _, err = self.run_cli("edit", "T-1", "--widen", "docs/", "src/", session="session-a")
+        self.assertEqual(code, 3, err)
+        advice = "wait for it to close, or " + ("if it stopped, inspect its handoff and take it over first (claim T-10 --takeover "
+                                                "REASON), or " if fixture.WINDOWS else "")  # Windows sees no process
+        self.assertIn(f"T-1's new path src/ overlaps T-10 (src/nested/), claimed by {holder}; {advice}edit without src/", err)
+        self.assertEqual(active.read_bytes(), before, "nothing is written, docs/ included")
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--widen", "src/app.py", "src/lib/", session="session-a")),
+                         "T-1: claimed; scope src/app.py, tests/, src/lib/; recorded locally, not committed\n",
+                         "a path already in the scope is kept once, and a new one clear of other claims is added")
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-10", "--scope", "src/nested/", session="session-b")),
+                         "T-10: claimed; records unchanged\n")
+        self.assert_ok(self.run_cli("add", "Docs", "--scope", "docs/"))
+        out = self.assert_ok(self.run_cli("edit", "T-11", "--widen", "src/nested/deep/", session="session-a"))
+        self.assertEqual(out, f"T-11: open; scope docs/, src/nested/deep/; recorded locally, not committed; its scope overlaps "
+                              f"claimed T-10 ({holder}), so a claim of it by another session is refused until that closes or a "
+                              "scope narrows\n", "an open row may overlap a claim, and the line says so as add's does")
+
+    def test_a_narrowing_inside_the_old_scope_never_faces_the_overlap_rule(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(  # an overlap a hand edit left between two claims
+            fixture.row("T-1", status="claimed", claim=fixture.marker("session-a")),
+            fixture.row("T-2", status="claimed", claim=fixture.marker("session-b"), touches="`src/lib/`"))})
+        self.start("session-a")
+        self.start("session-b")
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--scope", "src/lib/a.py", "src/app.py", session="session-a")),
+                         "T-1: claimed; scope src/lib/a.py, src/app.py; recorded locally, not committed\n",
+                         "both paths lie inside the old scope, so the overlap with T-2 only shrinks")
+
+    def test_only_its_holder_edits_a_claimed_row(self):
+        holder = self.start("session-a")
+        self.start("session-b")
+        active, marker = self.root / ".sako/work/TASKS.md", fixture.marker("session-a")
+        self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
+        before = active.read_bytes()
+        takeover = ", or if it stopped, inspect its handoff and take it over first (claim T-1 --takeover REASON)"
+        code, _, err = self.run_cli("edit", "T-1", "--scope", "docs/", session="session-b")
+        self.assertEqual((code, err), (3, f"sako: T-1 is claimed by {marker}; its holder edits it"
+                                          f"{takeover if fixture.WINDOWS else ''}\n"), "a live holder's claim")
+        holder.terminate()
+        holder.wait()
+        for args in (("--open",), ("--park", "its session ended"), ("--done-when", "Something else")):
+            with self.subTest(args=args):
+                code, _, err = self.run_cli("edit", "T-1", *args, session="session-b")
+                self.assertEqual((code, err), (3, f"sako: T-1 is claimed by {marker}; its holder edits it{takeover}\n"),
+                                 "a stale claim too")
+        self.assertEqual(active.read_bytes(), before)
+        code, _, err = self.run_cli("edit", "T-1", "--open", session="never-started")
+        self.assertEqual(code, 3, err)
+        self.assertIn("session 'never-started' has not started here", err, "edit needs a started session, as claim and close do")
+        self.assert_ok(self.run_cli("claim", "T-1", "--takeover", "its session ended; inspected its work", session="session-b"))
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--done-when", "The sample prints 2", session="session-b")),
+                         "T-1: claimed; done when replaced; recorded locally, not committed\n", "the new holder edits it")
+        self.assertIn("| The sample prints 2 |", active.read_text())
+
+    def test_park_or_open_on_ones_own_claim_releases_it_and_open_reopens_a_parked_row(self):
+        self.start("session-a")
+        self.start("session-b")
+        active = self.root / ".sako/work/TASKS.md"
+        self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--park", "the owner tries it first", session="session-a")),
+                         "T-1: parked, your claim released; recorded locally, not committed\n")
+        row = sako.parse_rows({"tasks": active.read_text()})[0]
+        self.assertEqual((row.id, row.status, row.cells["status"], row.claim),
+                         ("T-1", "parked", "parked: the owner tries it first", ""))
+        self.assertIn("\n  T-1  parked: the owner tries it first\n", self.assert_ok(self.run_cli("next")))
+        self.assertIn("T-1 is parked", self.run_cli("claim", "T-1", session="session-b")[2])
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--open", session="session-b")),
+                         "T-1: open; recorded locally, not committed\n", "any session reopens a parked row")
+        self.assert_ok(self.run_cli("claim", "T-1", session="session-b"))
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--open", session="session-b")),
+                         "T-1: open, your claim released; recorded locally, not committed\n")
+        self.assertIn("next: T-1 (P2, the only ready task)", self.assert_ok(self.run_cli("next")))
+        before = active.read_bytes()
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--open", session="session-b")),
+                         "T-1: open; records unchanged\n")
+        code, _, err = self.run_cli("edit", "T-1", "--park", "later", "--open", session="session-b")
+        self.assertEqual(code, 2, err)
+        self.assertIn("argument --open: not allowed with argument --park", err)
+        self.assertEqual(active.read_bytes(), before)
+
+    def test_an_edit_the_row_checks_refuse_writes_nothing(self):
+        self.start("session-a")
+        active = self.root / ".sako/work/TASKS.md"
+        self.assert_ok(self.run_cli("add", "Second step", "--scope", "docs/", "--after", "T-1"))
+        self.assert_ok(self.run_cli("add", "Third step", "--scope", "docs/guide/", "--after", "T-10"))
+        before = active.read_bytes()
+        for args, refusal in ((("T-1", "--after", "T-999"), "--after T-999 needs an existing task, done ones included"),
+                              (("T-1", "--after", "T-1"), "T-1 names T-1 in After, which is no other recorded task"),
+                              (("T-1", "--after", "T-11"), "T-11 already waits for T-1, so T-1 cannot wait for it; leave it "
+                                                           "out of --after"),
+                              (("T-1", "--scope", "../outside/"), "scope '../outside/' escapes its root"),
+                              (("T-1", "--widen", "a,b"), "a scope path cannot contain a comma in the Markdown format"),
+                              (("T-1", "--done-when", "two|cells"), "--done-when must be non-empty and on one line, without |"),
+                              (("T-1", "--park", " "), "--park must be non-empty and on one line, without |"),
+                              (("T-1",), "edit needs --scope, --widen, --after, --done-when, --park or --open"),
+                              (("T-99", "--open"), "T-99 needs exactly one row in .sako/work/TASKS.md")):
+            with self.subTest(args=args):
+                code, _, err = self.run_cli("edit", *args, session="session-a")
+                self.assertEqual(code, 3, err)
+                self.assertIn(refusal, err)
+                self.assertEqual(active.read_bytes(), before)
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-11", "--after", "T-10", "--after", "T-1", session="session-a")),
+                         "T-11: open; after T-1, T-10; recorded locally, not committed\n", "After is replaced, each ID once")
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-11", "--after", "-", session="session-a")),
+                         "T-11: open; after none; recorded locally, not committed\n", "and a dash clears it")
+        self.assertIn("| T-11 | P2 | Third step | The result is observed | open | `docs/guide/` | - | - |", active.read_text())
+        self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
+        self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Recorded", session="session-a"))
+        code, _, err = self.run_cli("edit", "T-1", "--scope", "src/", session="session-a")
+        self.assertEqual(code, 3, err)
+        self.assertIn("T-1 is done, and its done row stays as history; record new work as a new task", err)
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(  # rows a hand edit left faulty
+            fixture.row("T-20", pri="P5"), fixture.row("T-21", status="blocked", touches="`docs/`"))})
+        before = active.read_bytes()
+        code, _, err = self.run_cli("edit", "T-20", "--scope", "src/app.py", session="session-a")
+        self.assertEqual(code, 3, err)
+        self.assertIn('T-20 has Pri "P5"; use P1, P2 or P3', err, "Pri stays a hand edit, so the row still fails its checks")
+        self.assertEqual(active.read_bytes(), before)
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-21", "--open", session="session-a")),
+                         "T-21: open; recorded locally, not committed\n", "a status the verb owns is mended")
 
     def test_handoff_folders_are_found_by_id_listed_and_never_checked(self):
         fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": []})})
