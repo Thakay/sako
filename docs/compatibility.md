@@ -18,17 +18,15 @@ as the method says.
 | `init` detects it from | Its session running `init`, `.claude/`, `CLAUDE.md` or `AGENTS.md` | Its session running `init`, `.codex/` or `AGENTS.md` | Not detected; use `init --client none` |
 | Hooks | `.claude/settings.local.json`, untracked | `.codex/hooks.json`, untracked; Codex runs them only after you trust them in Codex and skips untrusted ones silently | None; the agent runs the commands |
 | How the agent finds SAKO | The start context, and the `sako` skill in `.claude/skills/` | The start context, and the `sako` skill in `.agents/skills/` | Point its instructions at `.sako/SAKO.md`; a client that reads `.agents/skills/` finds the skill |
-| A command without `--session` | Uses `CLAUDE_CODE_SESSION_ID`, the ID its hooks use | Uses `CODEX_SESSION_ID`, the ID its hooks use, in a subagent too; before Codex 0.148, `CODEX_THREAD_ID` | Pass `--session`, or set `SAKO_SESSION` |
+| A command without `--session` | Uses `CLAUDE_CODE_SESSION_ID`, the ID its hooks use, in a subagent too | Uses `CODEX_SESSION_ID`, the ID its hooks use, in a subagent too; before Codex 0.148, `CODEX_THREAD_ID` | Pass `--session`, or set `SAKO_SESSION` |
 | Where agent commands run | On the host; Claude Code's own sandbox is optional and unchecked | In Codex's sandbox (checked in its workspace-write mode): their own process namespace, writes only in the checkout and the roots you add | Where the client runs them |
 
 `init` prints which clients it wired and why; `--client claude`, `--client codex`
 or `--client none` replaces the choice, and `status` says when each client's hook
-last ran, or "not seen yet". A client settings file the project tracks is left
-unchanged, with a note: add the hooks there yourself or run the commands. A new
-linked worktree needs `init` there for its own hook settings; for Codex it also adds
-the main checkout's `.sako/` as a writable root, because Codex's sandbox lets agent
-commands write only their own checkout. Codex reads that setting only once it trusts
-the project, so its first run in a new repository may lack it.
+last ran, or "not seen yet". A tracked client settings file is left unchanged, with
+a note to add the hooks there yourself or run the commands. A new linked worktree
+needs `init` there for its own hook settings and, for Codex, a writable root for the
+main checkout's `.sako/`.
 
 ## Checked live
 
@@ -38,7 +36,7 @@ versions in the table above. The Codex sessions passed
 
 | Check | Claude Code | Codex |
 |---|---|---|
-| Hooks load from local-only settings | Yes | Yes, with hook trust bypassed for each run |
+| Hooks load from local-only settings | Yes | Yes |
 | The start context reaches the agent | Yes | Yes |
 | Stop blocks unrecorded work | Yes; a second stop passes | Yes; a second stop passes |
 | SessionEnd clears presence | Yes | Yes |
@@ -52,7 +50,7 @@ through the start context.
 ## Client behavior worth knowing
 
 - Claude Code shows the hook's whole shell command before the gate's message and
-  posts "Stop hook error occurred" for a block: exit 2 is how a Stop hook blocks.
+  posts "Stop hook error occurred" for a block, since exit 2 is how a Stop hook blocks.
 - `codex exec --json` shows no hook events; its plain output does, such as
   `hook: Stop Blocked`.
 - Codex escapes `<`, `>` and `&` in the Stop feedback it hands the agent, so gate
@@ -68,20 +66,23 @@ through the start context.
   there needs an approval to leave the sandbox, because the main checkout's `.git/`,
   which holds the worktree's Git data, is read-only in it.
 - Claude Code's worktree isolation for subagents puts their worktrees under
-  `.claude/worktrees/` inside the repository. The gate treats a linked worktree
-  nested in the checkout as another checkout and counts its work once it is merged.
-  Claude Code's [worktree guide](https://code.claude.com/docs/en/worktrees) suggests
-  adding `.claude/worktrees/` to `.gitignore`, which keeps the folders out of
-  `git status`.
+  `.claude/worktrees/` inside the repository, and the gate counts their work once
+  it is merged. Claude Code's [worktree guide](https://code.claude.com/docs/en/worktrees)
+  suggests adding `.claude/worktrees/` to `.gitignore`, which keeps the folders out
+  of `git status`.
 - `codex exec` records each new checkout it runs in as trusted in your
   `~/.codex/config.toml`.
+- In a Claude Code background session, `/exit` detaches and the session keeps
+  running, so SAKO lists it as a live peer until `/stop` ends it. A resume keeps the
+  session ID, and SAKO takes a new start record if the session had ended. Seen in
+  use with Claude Code 2.1.296 to 2.1.302 on WSL2, 2026-10-11 to 2026-10-14.
 
 ## Not verified
 
 - Codex hooks trusted the normal way, in Codex, instead of bypassed per run.
 - Claude Code with its own sandbox turned on.
 - The shared footprint in Claude Code and the repo footprint in Codex.
-- Interactive sessions, resume, and a hook that fails.
+- `/clear`, `/exit` in a foreground session, and a hook that fails.
 - An agent's turn under the hooks on Windows, and Codex for Windows.
 - Cursor or any other client.
 
@@ -91,7 +92,7 @@ Claude Code on Windows runs hooks through Git Bash, which Git for Windows includ
 so SAKO writes the same hook command as on Linux, with `python`. Codex on Windows
 runs hooks in the session's shell, PowerShell by default, so `init` there writes no
 Codex hooks and says so; its agent runs `start`, `check --gate` and `end` itself.
-Hook files belong to one clone on one machine: a clone used from both WSL and
+Hook files belong to one clone on one machine. A clone used from both WSL and
 Windows needs `init` on the side you switch to.
 
 Last checked on 2026-09-23 with Claude Code 2.1.220: SessionStart and SessionEnd ran
@@ -102,12 +103,17 @@ the repeated stop; the printed commands ran as printed in Git Bash and PowerShel
 ## Sessions without hooks
 
 Follow the [daily loop](../SAKO.md#daily-loop) with explicit commands, `start`
-first and `end` last. In Claude Code and Codex, a command without `--session` uses
-the client's own session ID; when both clients' IDs are set, as when one client runs
-inside the other, neither is used, so pass `--session`. `SAKO_SESSION` takes
-precedence over both. In Claude Code, a subagent's shell carries its own ID, so it
-passes the parent's `--session` explicitly; in Codex, `CODEX_SESSION_ID` names the
-parent session, as its hooks do.
+first and `end` last. When both clients' IDs are set, as when one client runs inside
+the other, a command without `--session` uses neither, so pass `--session`.
+`SAKO_SESSION` takes precedence over both.
+
+In Claude Code, as in Codex, a subagent's shell carries its parent's session ID, so a
+command there without `--session` acts as the parent, and its `end` ends the parent's
+presence. A [helper](../SAKO.md#working-beside-other-sessions) that holds its own
+claim passes its own `--session` on every command, `end` included. Claude Code sends
+a subagent's stop to SubagentStop, which SAKO does not wire; in use, subagents ran no
+session hooks, so a worktree only they use needs no `init`. Seen in use with Claude
+Code 2.1.280 to 2.1.302 on WSL2, last on 2026-10-18.
 
 ## Try it in your client
 
@@ -117,14 +123,13 @@ the result.
 1. Install and open a new conversation. Confirm that the start context appears, or
    run `start`, and that the agent finds the method. Complete one task with
    evidence, a commit and a clear gate.
-2. Make an unrecorded change and try to stop: the gate refuses once and names the
+2. Make an unrecorded change and try to stop. The gate refuses once and names the
    fix.
 3. Open a second conversation with its own ID. Confirm that each sees the other in
    `status` and that a live claim cannot be taken over; use disjoint scopes. From
    inside Codex's sandbox a peer shows as unverified, and its claim can be taken
    over only with a reason.
-4. End one conversation and confirm that only its presence disappears. `status`
-   also says when each client's hook last ran.
+4. End one conversation and confirm that only its presence disappears.
 
 Record a failure against discovery, the lifecycle or a command, so a fix targets
 the boundary that failed. Passing the automated tests does not replace this trial.

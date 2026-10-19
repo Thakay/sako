@@ -15,7 +15,7 @@ platform:
   ([compatibility](compatibility.md)).
 - **Windows:** both test suites natively from Git Bash, with tests whose premise
   Windows lacks skipped by name ([validation](validation.md#native-windows)). In Git
-  Bash, `python --version` must show 3.10 or newer: the python.org installer leaves
+  Bash, `python --version` must show 3.10 or newer. The python.org installer leaves
   Python off the path unless you tick that box, and the Microsoft Store's
   placeholder only prints a message. A failed `init --repo URL` there can leave
   read-only Git files in `.sako/`; delete the folder before trying again. How Claude
@@ -29,11 +29,10 @@ SAKO's hooks and printed commands use `python3`, or `python` on Windows. Parent
 discovery reads `/proc` and falls back to `ps`, including when the shell is `fish`.
 Liveness uses a zero-signal process check, treats permission denial as alive, and
 applies only in the process namespace that recorded the process, which `/proc`
-names. On Windows SAKO reads no process: presence there is the 24-hour lease the
-method describes, and `SAKO_AGENT_PID` has no effect. A task can use any language
-whose check command is available in that environment.
+names. On Windows SAKO reads no process, so presence there is the 24-hour lease the
+method describes, and `SAKO_AGENT_PID` has no effect.
 
-Commands run from any folder of the repository or its linked worktrees: Git finds
+Commands run from any folder of the repository or its linked worktrees. Git finds
 the main checkout, whose `.sako/` holds the kit. Bare repositories, a Git folder kept
 apart from its checkout, and submodules are refused. `init` can seed an unborn Git
 repository; establish an initial commit before daily work so revision comparisons
@@ -42,7 +41,7 @@ have a meaningful baseline.
 SAKO writes client files only inside the repository, judged by their real paths; a
 client file whose folder leads outside it is skipped with a note. Record paths stay
 inside `.sako/`, outside `state/`, including through symlinks. In the local
-footprint `.sako/` is listed in `.git/info/exclude`: the records are not in Git, and
+footprint the records are not in Git; `.sako/` is listed in `.git/info/exclude`, so
 `git clean -x` deletes them.
 
 ## Local coordination
@@ -51,38 +50,50 @@ footprint `.sako/` is listed in `.git/info/exclude`: the records are not in Git,
 every worktree of the repository uses. This prevents duplicate allocations and
 competing successful claims among cooperating SAKO commands. Complete file
 replacements avoid partial rows. A busy lock refuses after two seconds so the
-caller can retry. Windows locks are exclusive only, so there only writes take the
-lock: reads see whole files, and a read or replacement that Windows refuses for a
-moment, while a scanner, a reader or a writer holds the file, is retried. A read
-during another session's `close` there can show the task in both records for a
-moment; check again before merging anything. SAKO keeps no state under `.git/`,
-which a client's sandbox can make read-only for agent commands.
+caller can retry. On Windows, whose locks are exclusive, only writes take the lock;
+reads see whole files, and a read or replacement refused while another process holds
+the file is retried. A read during another session's `close` there can show the task
+in both records for a moment; check again before merging anything. SAKO keeps no
+state under `.git/`, which a client's sandbox can make read-only for agent commands.
 
 It does not isolate code edits, arbitrary record edits, commits, the staging area,
 or other clones. A Git push is not a task lock. Keep one writer for shared files,
 avoid overlapping scopes, and serialize shared Git operations. Use separate
 worktrees when that isolation is more useful; SAKO does not create them. Claims
-across worktrees are as strict as in one checkout: overlapping scopes refuse.
+across worktrees are as strict as in one checkout; overlapping scopes refuse.
 
 Worktrees share one ledger, one numbering, one lock and one presence roster; each
-keeps its own check stamp. Other machines share no live roster. How Codex's sandbox
-treats linked worktrees is in [compatibility](compatibility.md#client-behavior-worth-knowing).
+keeps its own check stamp. The gate judges only the checkout it runs in; work in
+another worktree counts once merged, or when `check --gate --session <id>` runs
+there. Other machines share no live roster. How Codex's sandbox treats linked
+worktrees is in [compatibility](compatibility.md#client-behavior-worth-knowing).
+
+In a shared checkout the gate sees what changed, not who changed it. Closing a task
+scoped `.` makes the Committed fix stage every uncommitted change made here since
+your start, a peer's included; check `git status` first, or narrow the scope.
+Recorded cannot tell who made a commit either, so another session's closed task can
+excuse your commit, while a peer's commit of its closed work on a later day, even
+just after midnight or in another time zone, counts against you. A peer's edits to
+checked content also make your check stale.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
-different branches keep separate ledgers: they can allocate the same task ID and
+different branches keep separate ledgers. They can allocate the same task ID and
 cannot see each other's claims, and merging branches can conflict in the records
 like any tracked file. In the repo and shared footprints, clones and colleagues
-share records through Git, one writer at a time: numbering and claims are judged
+share records through Git, one writer at a time. Numbering and claims are judged
 locally, so two machines writing at once collide on numbers and see each other's
 claims as stale. A team that needs more moves to a tracker; see
 [move the task authority to a tracker](move-to-a-tracker.md).
 
 Presence only estimates liveness; the method explains
-[how it works](../SAKO.md#pause-handoff-and-takeover), inside a sandbox too. Process
-IDs count only where the process is visible. PID reuse, containers and unexpected
-wrappers, such as a `timeout` around the command, can misrepresent it, and a session
-without an end event can appear live until its host exits or its 24 hours pass. Do
-not give concurrent workers the same session ID.
+[how it works](../SAKO.md#pause-handoff-and-takeover), inside a sandbox too. PID
+reuse, containers and unexpected wrappers, such as a `timeout` around the command,
+can misrepresent it, and a session without an end event can appear live until its
+host exits or its 24 hours pass. On Linux and WSL a restart ends presence. A claim
+left on purpose for another session reads as stale to every other session until it
+is taken over; close your part and leave the rest as a second row.
+Do not give concurrent workers the same session ID. A helper on its parent's ID is
+the parent, so the ledger shows no separate holder for it.
 
 ## Records and evidence
 
@@ -92,16 +103,15 @@ detects task-like malformed IDs and shapes; it cannot recognize arbitrary prose
 as a lost task. Literal cell pipes and multiline cells are unsupported. Task
 cells can contain references; they are not a full issue schema.
 
-The fingerprint includes tracked and untracked unignored files in selected paths,
-file bytes, symlink text, and the owner's executable bit, the one Git tracks.
-Ignored artifacts, submodule internals, symlink target content outside the covered
-files, services, secrets, environment, and dependencies not represented there are
-not evidence-covered. Include relevant tests, manifests, and lockfiles; independently
-check external behavior when needed.
-A check that writes files where the fingerprint looks, such as Python's `__pycache__`
-or a build folder, changes the content it checks: `verify` names those files, and
-the gate says to delete or ignore generated ones. List them in `.gitignore`, or keep
-the check from writing them (`python3 -B -m unittest`).
+Of a file's mode, the [fingerprint](../SAKO.md#the-gate-and-checks-in-detail)
+counts only the owner's executable bit, the one Git tracks. It leaves out ignored
+artifacts, submodule internals, symlink target content outside the covered files,
+services, secrets, environment, and dependencies not represented there. Include
+relevant tests, manifests, and lockfiles; independently check external behavior when
+needed. A check that writes files where the fingerprint looks, such as Python's
+`__pycache__` or a build folder, changes the content it checks. `verify` names those
+files, and the gate says to delete or ignore generated ones. List them in
+`.gitignore`, or keep the check from writing them (`python3 -B -m unittest`).
 
 The gate and `close` read a session's changes from Git, and from the start record for
 files already uncommitted when the session started. With `core.fileMode` set to false,
@@ -117,23 +127,35 @@ no large-repository benchmark has been established.
 
 `check` can be consistent while evidence is absent or stale. It checks the
 ledger's structure and reports automated evidence separately. Its exit status does
-not require a passing baseline, or prove that the project's notes define a good
-direction or that task text has a useful acceptance condition. Planning and those
-judgments belong to the agent and owner. The finish gate checks only
-recorded ownership, scoped changes, and its evidence conditions. It cannot prove
-the requested behavior, honest task wording, complete scope declarations, test
-quality, deployment health, or that another process will not edit after the check.
+not require a passing baseline or judge the project's direction or a task's
+acceptance condition; planning and those judgments belong to the agent and owner.
+The finish gate checks only recorded ownership, scoped changes, and its evidence
+conditions, judging ownership at the stop, not at each write, so a late claim covers
+earlier edits. It cannot prove the requested behavior, honest task wording, complete
+scope declarations, test quality, deployment health, or that another process will
+not edit after the check.
+
+The Committed fix for receipts stages only the two ledger files, whole, so it can
+carry another session's pending rows and leaves other files you keep in `.sako/` to
+you.
 
 ## Hooks
 
 Hooks are feedback, not a security boundary. The gate refuses a stop once and names
-the fix; a session can still stop after saying why. SAKO's hook handler also lets a
-session go on a repeated stop callback and on its own errors, such as a missing
-session identity or an unexpected bug. Hook failures and timeouts are the client's
-to handle, and project policy can turn hooks off.
+the fix, and a session can still stop after saying why; a missing session identity or
+a bug in the handler also lets it go. Hook failures and timeouts are the client's to
+handle, and project policy can turn hooks off.
 
-Written hook settings do not prove that hooks run: `status` says when each
-client's hook last ran, or "not seen yet". Each client's hook reference
+A hook that finds no kit from its folder, as in a nested repository such as the repo
+footprint's `.sako/`, falls back to `$CLAUDE_PROJECT_DIR`, where the Claude Code
+session started, and judges that checkout. A Codex hook there exits 1 instead,
+naming the folder it searched, and that stop goes ungated, as does any hook in a
+linked worktree of the shared footprint while the main checkout's branch has no
+`.sako/`.
+
+Written hook settings do not prove that hooks run, so `status` says when each
+client's hook last ran, or "not seen yet"; a recent time does not prove every stop
+was gated. Each client's hook reference
 ([Codex](https://learn.chatgpt.com/docs/hooks),
 [Claude Code](https://code.claude.com/docs/en/hooks)) has its current configuration
 rules; [compatibility](compatibility.md) says what each client needs.
@@ -141,21 +163,19 @@ rules; [compatibility](compatibility.md) says what each client needs.
 ## Why a Python file in your project
 
 Each project gets its own pinned, readable runtime, `.sako/sako.py`, with no package
-installed in the project and no service to run: daily commands and hooks use that
+installed in the project and no service to run. Daily commands and hooks use that
 copy, offline. The cost is an explicit update step and one folder in the project.
 Python's standard library handles the structured records, atomic writes, locks and
 fingerprints in one file; your application can use any language, and its check can
 be any command. The [principles](../README.md#why-it-stays-small) give the reasoning.
 
-That copy cannot install SAKO into another project: installing and updating need
-the package or a checkout. The package's wheel carries the runtime, the method, the
-task template and the skill, built from this checkout. SAKO has no update service:
-review what you install, and update on purpose
-([update and removal](update-and-remove.md)).
+That copy cannot install SAKO into another project; installing and updating need
+the package or a checkout. SAKO has no update service; review what you install, and
+update on purpose ([update and removal](update-and-remove.md)).
 
 ## What SAKO does not do
 
-Beyond [how SAKO works](../README.md#how-it-works): SAKO does not start,
+Beyond [how SAKO works](../README.md#how-it-works), SAKO does not start,
 direct or message subagents, merge their edits, fetch issues, sync trackers, create
 applications, or make branches, worktrees, commits, pushes or deployments. The gate
 names the commit a finished task needs, and you or your agent make it.

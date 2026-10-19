@@ -263,7 +263,7 @@ class Budgets(unittest.TestCase):
 
 
 class Words(unittest.TestCase):
-    """Sentences the method must keep, compared with whitespace folded so a rewrap never breaks a pin."""
+    """Sentences the documents must keep, compared with whitespace folded so a rewrap never breaks a pin."""
 
     ROOT = fixture.SAKO.parent
 
@@ -283,6 +283,13 @@ class Words(unittest.TestCase):
             self.assertIn(words, done)
         self.assertIn("It counts no file under `.sako/`, so a scope there only locks paths against other claims",
                       self.section("The gate and checks in detail"))
+        limits = self.text("docs/limits.md")
+        for words in ("The gate judges only the checkout it runs in", "In a shared checkout the gate sees what changed, not who "
+                      "changed it.", "Closing a task scoped `.` makes the Committed fix stage every uncommitted change made "
+                      "here since your start, a peer's included", "Recorded cannot tell who made a commit"):
+            self.assertIn(words, limits)
+        self.assertIn("and against faults in the records. It refuses a stop once and names the fix; findings about other "
+                      "sessions are only notes", self.text("docs/glossary.md"))
 
     def test_a_subagent_carries_its_parents_session_id(self):
         beside = self.section("Working beside other sessions")
@@ -292,12 +299,18 @@ class Words(unittest.TestCase):
                       "An agent holding its own claim gets its own ID in its brief and passes `--session` on every command, "
                       "`end` included", "a worktree only they use needs no `init`"):
             self.assertIn(words, beside)
-        for name in ("SAKO.md", "skills/sako/SKILL.md"):
-            self.assertNotIn("carries its own", self.text(name), name)
+        self.assertIn("a subagent's shell carries its parent's session ID, so a command there without `--session` acts as the "
+                      "parent, and its `end` ends the parent's presence", self.text("docs/compatibility.md"))
+        self.assertIn("A helper on its parent's ID is the parent, so the ledger shows no separate holder for it.",
+                      self.text("docs/limits.md"))
+        for page in Links().pages():  # no page may say the opposite again
+            self.assertNotIn("carries its own", " ".join(page.read_text(encoding="utf-8").split()), page)
 
     def test_a_claim_left_on_purpose_reads_as_stale_until_taken_over(self):
         self.assertIn("A claim left on purpose for another session reads as stale to every other session until it is taken "
                       "over. Two rows avoid that,", self.section("Pause, handoff and takeover"))
+        self.assertIn("A claim left on purpose for another session reads as stale to every other session until it is taken "
+                      "over; close your part and leave the rest as a second row.", self.text("docs/limits.md"))
 
     def test_a_claim_is_kept_only_for_work_an_agent_will_resume(self):
         loop = self.section("Daily loop")
