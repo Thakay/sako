@@ -313,6 +313,63 @@ class Workflow(unittest.TestCase):
                       "a pass of another command or paths is no pass either")
         self.assertIn("evidence: stale; the check command or paths changed since the last pass", self.run_cli("check")[1])
 
+    def test_a_named_check_keeps_its_own_stamp_and_output_and_status_shows_each_one(self):
+        checks = {"browser": [sys.executable, "browser.py"], "seed": [sys.executable, "-c", "pass"]}
+        fixture.write(self.root, {"control": "pass\n", "browser.py": (  # outside the checked paths, like the file that steers it
+            "import pathlib, sys\nmode = pathlib.Path('control').read_text().strip()\n"
+            "print(f'browser suite in mode {mode}', flush=True)\nsys.exit(mode == 'fail')\n"),
+            ".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": ["src"],
+                                             "checks": checks})})
+        state = self.root.resolve() / ".sako/state"
+        named = state / "checks/browser"
+        out = self.assert_ok(self.run_cli("verify", "browser"))
+        browser = json.loads((named / "stamp.json").read_text())
+        self.assertIn(f"stamp {browser['content_id']} -> {(named / 'stamp.json').as_posix()}; "
+                      f"output in {(named / 'verify.log').as_posix()}", out)
+        self.assertFalse((state / "stamp.json").exists() or (state / "verify.log").exists(), "the gate's check keeps its paths")
+        out = self.assert_ok(self.run_cli("status"))
+        self.assertIn("\nevidence: none; no passing check recorded; run sako.py verify, which runs", out)
+        self.assertIn(f"\ncheck browser: fresh; last pass {browser['time']} on content {browser['content_id']}\n", out)
+        self.assertIn(f"\ncheck seed: none; no passing check recorded; run sako.py verify seed, which runs "
+                      f"{shlex.join(checks['seed'])}\n", out)
+        self.start("named")
+        self.assert_ok(self.run_cli("claim", "T-1", session="named"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        self.assertIn("\ncheck browser: stale; checked content moved since the last pass", self.run_cli("status")[1])
+        for args in (("verify",), ("verify", "seed"), ("close", "T-1", "--evidence", "Prints 2")):
+            self.assert_ok(self.run_cli(*args, session="named"))
+        seed = json.loads((state / "checks/seed/stamp.json").read_text())
+        receipt = sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})[0].evidence
+        self.assertRegex(receipt, rf"; check pass [^;]+; seed pass {re.escape(seed['time'])}\]$",
+                         "a close adds each fresh named check, and leaves out the stale browser check")
+        fixture.write(self.root, {"control": "fail\n"})
+        code, out, _ = self.run_cli("verify", "browser")
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"no stamp written; output in {(named / 'verify-failed.log').as_posix()}", out)
+        self.assertEqual((named / "verify-failed.log").read_text(), "browser suite in mode fail\n")
+        self.assertFalse((named / "stamp.json").exists())
+        self.assertTrue((state / "stamp.json").exists() and (state / "checks/seed/stamp.json").exists(),
+                        "a failing named check takes no other check's stamp")
+        self.assertFalse((state / "verify-failed.log").exists(), "nor writes another check's output")
+        self.assertEqual(self.run_cli("verify", "nope")[0::2], (3, "sako: .sako/config.json has no checks.nope; nothing to run\n"))
+
+    def test_a_named_checks_pass_in_another_worktree_counts_on_identical_content(self):
+        fixture.write(self.root, {".sako/config.json": json.dumps({"verify_paths": ["src"],
+                                                                   "checks": {"browser": [sys.executable, "-c", "pass"]}})})
+        linked = Path(self.workspace.name) / "linked"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(linked))
+        self.assert_ok(fixture.cli(linked, "verify", "browser"))
+        there = json.loads((self.root / ".sako/state/worktrees/linked/checks/browser/stamp.json").read_text())
+        self.assertIn(f"\ncheck browser: fresh; last pass {there['time']} on content {there['content_id']} in worktree linked\n",
+                      self.assert_ok(self.run_cli("status")))
+        self.start("named")
+        for args in (("claim", "T-1"), ("close", "T-1", "--evidence", "Observed")):
+            self.assert_ok(self.run_cli(*args, session="named"))
+        self.assertIn(f"; no automated check; browser pass {there['time']} in worktree linked]",
+                      (self.root / ".sako/work/DONE.md").read_text(), "a named check needs no verify_command")
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        self.assertIn("\ncheck browser: none; no passing check recorded; run sako.py verify browser", self.run_cli("status")[1])
+
     def test_a_check_before_the_first_commit_names_no_commit(self):
         root = Path(self.workspace.name) / "fresh"
         root.mkdir()

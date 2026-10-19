@@ -207,6 +207,9 @@ class Configuration(unittest.TestCase):
         config = self.load('{"verify_command": ["true"], "verify_paths": ["src"]}')
         self.assertEqual(config["verify_command"], ["true"])
         self.assertNotIn("product_dir", config)
+        self.assertEqual(config["checks"], {}, "no named checks unless the project names some")
+        named = self.load('{"checks": {"browser": ["sh", "scripts/browser-suite.sh"], "seed-proof_2": ["true"]}}')
+        self.assertEqual(list(named["checks"]), ["browser", "seed-proof_2"])
 
     def test_refusals(self) -> None:
         for text, fragment in (('{"nope": 1}', "unknown keys"), ('[]', "JSON object"),
@@ -220,6 +223,13 @@ class Configuration(unittest.TestCase):
                                ('{"tasks": "work/X.md", "done": "work/x.md"}', "distinct"),
                                ('{"tasks": "work/X.md", "done": "work/X.md"}', "distinct"),
                                ('{"verify_paths": ["../x"]}', "stay inside"),
+                               ('{"checks": []}', "checks must map"),
+                               ('{"checks": {"e2e": []}}', "checks must map"),
+                               ('{"checks": {"e2e": "sh e2e.sh"}}', "checks must map"),
+                               ('{"checks": {"e2e": ["sh", ""]}}', "checks must map"),
+                               ('{"checks": {"Browser": ["true"]}}', "checks must map"),  # one folder on any disk
+                               ('{"checks": {"../up": ["true"]}}', "checks must map"),
+                               ('{"checks": {"-x": ["true"]}}', "checks must map"),  # never read as an option
                                ('{"deploy_paths": []}', "unknown keys"),
                                ('{"product_dir": "."}', "unknown keys"),
                                ('{"decisions": "docs/DECISIONS.md"}', "unknown keys")):

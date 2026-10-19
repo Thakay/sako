@@ -426,6 +426,28 @@ class Gate(unittest.TestCase):
         self.assertRegex((self.root / ".sako/work/DONE.md").read_text(), r"; check pass [^;]+ in worktree linked\]")
         self.assertEqual(self.stop("s1"), (0, "", ""), "the merged content is the content checked there")
 
+    def test_named_checks_are_evidence_and_never_a_gate_rule(self):
+        checks = {"check": [sys.executable, "-c", "pass"], "browser": [sys.executable, "-c", "raise SystemExit(1)"]}
+        fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"],
+                                                                   "verify_paths": ["src"], "checks": checks})})
+        self.start("s1")
+        for args in (("claim", "T-2"), ("verify", "check"), ("close", "T-2", "--evidence", "Wrote notes"), ("claim", "T-1")):
+            fixture.succeeds(fixture.installed_copy(self.root, *args, "--session", "s1"))
+        self.assertIn("; no passing check recorded; check pass ", (self.root / ".sako/work/DONE.md").read_text())
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Proven: T-2 closed after checked content changed since you started, and the check is none", err,
+                      "a named check's pass in a receipt never stands in for the gate's check, even one named check")
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.assertEqual(fixture.installed_copy(self.root, "verify", "browser").returncode, 1)
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Prints 2", "--session", "s1"))
+        fixture.commit_all(self.root, "Invented task")
+        status = self.run_in(self.root, "status")[1]
+        self.assertIn("\ncheck check: stale; checked content moved since the last pass", status)
+        self.assertIn("\ncheck browser: none; no passing check recorded", status)
+        self.assertEqual(self.stop("s1"), (0, "", ""), "a stale, failing or missing named check never blocks a stop")
+
     def test_a_commit_recorded_under_another_sessions_closed_task_is_not_this_sessions(self):
         self.start("s1")
         self.start("s2")
