@@ -33,27 +33,27 @@ They also run inside discovery, so the counts overlap. The skill meets the Agent
 Skills format. No independent agent or outside user has validated adoption
 judgment.
 
-Last local run on 2026-09-29, on WSL2 (Linux 6.18) with Git 2.43.0:
-both suites pass on Python 3.10.20 and 3.12.3, with 180 tests and 22 scenarios.
+Last local run on 2026-10-18, on WSL2 (Linux 6.18) with Git 2.43.0:
+both suites pass on Python 3.10.20 and 3.12.3, with 242 tests and 22 scenarios.
 
 ## Native Windows
 
 Both suites run natively on Windows from Git Bash, which puts Git's POSIX tools such
-as `sleep` on the path. Last run on 2026-09-23 with Python 3.14.4 and Git for
+as `sleep` on the path. Last run on 2026-10-18 with Python 3.14.4 and Git for
 Windows 2.52.0:
 
 | Suite | Result |
 |---|---|
-| Unit and integration discovery | 180 run: 143 passed, 37 skipped, none failed, in 112 s |
-| Standalone scenario suite | 17 passed, 5 skipped, none failed, in 27 s |
+| Unit and integration discovery | 242 run: 196 passed, 46 skipped, none failed, in 193 s |
+| Standalone scenario suite | 17 passed, 5 skipped, none failed, in 32 s |
 
-Each skip names why its premise does not hold there: Codex gets no hooks on Windows
-(12 tests), presence is the 24-hour lease there, since SAKO reads no Windows process
-(9), creating symlinks needs a privilege that host did not grant (9), file modes do
-not bind (3), and one each for the executable bit, a file name that is not Unicode,
-the published demo, which is a Linux run, and the bubblewrap sandbox. No runtime
-behavior needed a skip: locking, writes under parallel adds, UTF-8 output and paths
-passed.
+Each skip names why its premise fails there: Codex gets no hooks (12 tests), presence
+is the 24-hour lease (11), symlinks need a privilege that host did not grant (9),
+file modes do not bind (3), Windows keeps no executable bit (3), no kernel names each
+boot (2), and one each for a POSIX time zone, folder permissions, an interrupt sent
+to one process, a non-Unicode file name, the published Linux demo and the bubblewrap
+sandbox. No runtime behavior needed a skip; locking, writes under parallel adds,
+UTF-8 output and paths passed.
 
 ## What each file covers
 
@@ -75,36 +75,36 @@ patched.
 
 ## Measured fixture overhead
 
-Measured on 2026-09-23 with Python 3.10.20 on the WSL2 host, separately from the
+Measured on 2026-10-18 with Python 3.10.20 on the WSL2 host, separately from the
 test suites. The numbers include process startup and local Git commands, and vary
 with the machine, filesystem, repository, cache and check command.
 
 | Measure | Observed |
 |---|---|
-| No client signal: kit and shared skill, no hooks | 6 files, 122,707 bytes |
-| Codex | 7 files, 123,924 bytes |
-| Claude Code, with its own skill copy | 8 files, 125,014 bytes |
-| Both clients | 9 files, 126,231 bytes |
-| Installed method, one document | 3,241 whitespace-separated words |
-| Reading for a normal task | 1,341 words: skill 164, template preamble 46, start context 110, the method's required part 1,021 |
-| Runtime source | 1,799 lines, one standard-library Python file, within the 1,800-line cap |
-| Initial install with no client signal, one sample | 67.9 ms |
+| No client signal: kit and shared skill, no hooks | 6 files, 133,341 bytes |
+| Codex | 7 files, 134,975 bytes |
+| Claude Code, with its own skill copy | 8 files, 135,827 bytes |
+| Both clients | 9 files, 137,461 bytes |
+| Installed method, one document | 3,760 whitespace-separated words |
+| Reading for a normal task, lone-session fixture | 1,366 words: skill 128, template preamble 46, start context 125, the method's required part 1,067 |
+| Runtime source | 1,796 lines, one standard-library Python file, within the 1,800-line cap |
+| Initial install with no client signal, one sample | 58.4 ms |
 | Fingerprint fixture | 101 covered files, 409,609 bytes |
 | Trials per command | 7, median reported in the next rows |
-| `start` | 52.9 ms |
-| `check` | 46.9 ms |
-| `next` | 45.8 ms |
-| `verify`, including a small source-content assertion | 71.7 ms |
-| `check --gate`, no completed rows | 56.6 ms |
+| `start` | 44.2 ms |
+| `check` | 40.3 ms |
+| `next` | 39.4 ms |
+| `verify`, including a small source-content assertion | 78.5 ms |
+| `check --gate`, no completed rows | 47.2 ms |
 
 `start` is sampled before verification has established evidence, and the gate
 fixture has no closed rows, so completed-work fingerprinting is not timed. These are
 byte, word and execution measurements, not model token counts, onboarding time, or
 proof of low overwhelm.
 
-`uv build` makes a wheel of about 43 KB holding `sako/__init__.py`, the method, the
-task template and the skill, with a `sako` command, and `twine check` passes for the
-wheel and the source archive. With an empty home folder and uv cache, and
-`--offline`, `uvx --from` that wheel ran `init` with no flags in a fresh repository
-holding a `CLAUDE.md`: it wired Claude Code's hooks, and their SessionStart, Stop and
-SessionEnd commands ran from that repository.
+`uv build` makes a wheel of about 47 KB holding `sako/__init__.py`, the method, the
+task template and the skill, with a `sako` command, and `twine check` passes for it
+and the source archive. With an empty home folder and uv cache,
+`uvx --offline --from` that wheel ran `init` with no flags in a fresh repository
+holding a `CLAUDE.md`. It wired Claude Code's hooks, and their SessionStart, Stop
+and SessionEnd commands ran there.
