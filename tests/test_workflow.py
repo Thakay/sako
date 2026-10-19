@@ -799,10 +799,11 @@ class Workflow(unittest.TestCase):
         fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1"), fixture.row("T-2", touches="`docs/`"))})
         agent = subprocess.Popen(["sleep", "60"])
         self.agents.append(agent)
-        header = f"sako {sako.VERSION} · work {self.root.as_posix()} (main, started at "
+        # the header's end, since Windows reads its middle dot back in its code page
+        header = f" work {self.root.as_posix()} (main, started at "
         first = fixture.git(self.root, "rev-parse", "HEAD")[:9]
         context = self.assert_ok(fixture.cli(self.root, "start", session="holder", pid=agent.pid))
-        self.assertTrue(context.startswith(f"{header}{first})\n"), context)
+        self.assertTrue(context.split("\n", 1)[0].endswith(f"{header}{first})"), context)
         self.assertNotIn("your rows", context, "a session that holds no rows prints nothing new")
         for task in ("T-1", "T-2"):
             self.assert_ok(self.run_cli("claim", task, session="holder"))
@@ -821,7 +822,8 @@ class Workflow(unittest.TestCase):
                                          else fixture.cli(self.root, "hook", "claude", pid=agent.pid, stdin=payload))
                 self.assertIn(f'\nsession: "holder" (use this ID with --session){held}', context)
                 since = fixture.git(self.root, "rev-parse", "HEAD")[:9] if source == "resume" else first
-                self.assertTrue(context.startswith(f"{header}{since})\n"), "the start revision, which a resume before end keeps")
+                self.assertTrue(context.split("\n", 1)[0].endswith(f"{header}{since})"),
+                                "the start revision, which a resume before end keeps")
 
     def test_a_peer_line_shows_its_commits_and_uncommitted_paths_in_its_own_checkout_even_once_removed(self):
         side = Path(self.workspace.name) / "side"
