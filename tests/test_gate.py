@@ -1021,6 +1021,39 @@ class Gate(unittest.TestCase):
         self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
         self.assertIn("evidence is stale", refusal.stderr)
 
+    def test_a_close_with_a_pass_stays_proven_while_only_a_live_peer_here_moved_checked_content(self):
+        for task, path in (("Print two", "src/app.py"), ("Peer library", "src/lib.py")):
+            fixture.succeeds(fixture.installed_copy(self.root, "add", task, "--done-when", "Runs", "--scope", path))
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Prints 2", "--session", "s1"))
+        self.assertIn("; check pass ", (self.root / ".sako/work/DONE.md").read_text())
+        fixture.commit_all(self.root, "Print two")
+        self.backdate("T-10")
+        fixture.succeeds(fixture.installed_copy(self.root, "end", "--session", "s1"))
+        self.start("s1")  # a resume after its end takes a new start record, after its own work landed
+        self.start("peer")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "peer"))
+        fixture.write(self.root, {"src/lib.py": "x = 1\n"})
+        self.assertIn("evidence: stale", self.run_in(self.root, "check")[1])
+        self.assertEqual(self.stop("s1")[:2], (0, ""), "only the peer moved checked content")
+        code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("not counted: src/lib.py: in T-11's scope, claimed by ", out)
+        proven = "Proven: T-10 closed after checked content changed since you started, and the check is stale"
+        fixture.write(self.root, {"src/extra.py": "y = 2\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn(proven, err, "the session's own file moved too")
+        (self.root / "src/extra.py").unlink()
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("src/app.py (changed after you closed T-10)", err)
+        self.assertIn(proven, err, "an edit to the closed task's file after its close, with no new claim")
+
     def test_committed_names_new_files_so_generated_ones_are_not_committed(self):
         self.start("s1")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))

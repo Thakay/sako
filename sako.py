@@ -1262,14 +1262,13 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
         if closed and config["verify_command"] else []
     if moved:
         state, why = evidence_state(roots, config)
-        # A claim still held explains a stale check,
+        # A claim still held explains a stale check, and so do changes only others made,
         # so a close whose receipt shows a pass, or records work, stays proven.
         # The pass is the gate's check, right after the close time; a named check's never counts.
-        working = any(covers(r, path) for r in held for path in moved)
-        exempt = state != "fresh" and any(map(records_only, closed)) \
-            and others_moved(roots, entry, moved, changed, rows, live)
-        unproven = [r.id for r in closed if not (records_only(r) and (exempt or working))
-                    and (not working or not re.search(r"; closed [^;]*; check pass ", r.evidence))]
+        excused = any(covers(r, path) for r in held for path in moved) or (
+            state != "fresh" and others_moved(roots, entry, moved, changed, rows, live))
+        unproven = [r.id for r in closed if not excused or not (
+            records_only(r) or re.search(r"; closed [^;]*; check pass ", r.evidence))]
         if state != "fresh" and unproven:
             problems.append(f"Proven: {', '.join(unproven)} closed after checked content changed "
                             f"since you started, and the check is {state}: {why}"
