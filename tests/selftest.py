@@ -581,6 +581,28 @@ def succeeds(result: subprocess.CompletedProcess) -> str:
     return result.stdout
 
 
+def reading() -> tuple[dict[str, int], str]:
+    """The reading for a normal task, as the budget counts it on the lone-session fixture: the words of the skill, the
+    task template's preamble, a start context and the method down to its Read when needed table; and that context."""
+    method = (HERE.parent / "SAKO.md").read_text(encoding="utf-8")
+    parts = re.split(r"(?m)^(?=## )", method)  # the first part is the title and introduction
+    required = parts[:[part.splitlines()[0][3:] for part in parts[1:]].index("Read when needed") + 2]
+    with tempfile.TemporaryDirectory(prefix="sako-budget-") as workspace:
+        root = make_repo(Path(workspace) / "project")
+        succeeds(seed(root))
+        write(root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": ["src"]})})
+        succeeds(installed(root, "verify"))
+        agent = fake_agent()
+        try:
+            context = succeeds(installed(root, "start", session="budget-session", pid=agent))
+        finally:
+            kill(agent)
+    texts = {"skill": (HERE.parent / "skills/sako/SKILL.md").read_text(encoding="utf-8"),
+             "template": (HERE.parent / "templates/TASKS.md").read_text(encoding="utf-8").split("| ID |")[0],
+             "start context": context, "method": "".join(required)}
+    return {name: len(text.split()) for name, text in texts.items()}, context
+
+
 def scenario_neutral_package_and_shared_host_sessions(ws: Path) -> None:
     """The same installed CLI serves two conversations without selecting a client."""
     need(not WINDOWS, LEASE)

@@ -106,7 +106,7 @@ def main() -> None:
             demo.say("The agent edits `greeting.py` but never claims the task, then tries to stop. The gate "
                      "refuses; exit 2 keeps the session going and shows the agent the message.")
             demo.hook("Stop", "demo-agent", expect=2)
-            demo.say("## 3. The agent fixes it\n\nIt claims the task and runs the check, which fails: the "
+            demo.say("## 3. The agent fixes it\n\nIt claims the task and runs the check, which fails because the "
                      "output lacks the comma and the exclamation mark.")
             demo.sako("claim", "T-1", "--session", "demo-agent")
             demo.sako("verify", expect=1)
@@ -115,7 +115,7 @@ def main() -> None:
             demo.sako("verify")
             demo.sako("close", "T-1", "--session", "demo-agent", "--evidence",
                       "greeting.py prints Hello, Ada!; check.py passes")
-            demo.say("Stopping now is refused again: the work is closed but not committed.")
+            demo.say("Stopping now is refused again, since the work is closed but not committed.")
             demo.hook("Stop", "demo-agent", expect=2)
             demo.git("add", "--", "greeting.py")
             demo.git("commit", "-qm", "A named visitor gets a personal greeting")

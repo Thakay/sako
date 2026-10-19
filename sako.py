@@ -337,9 +337,12 @@ def scopes_overlap(first: Row, second: Row) -> bool:
         return False
 
 
-def covers(row: Row, path: str) -> bool:
+def covers(row: Row, path: str, root: Path | None = None) -> bool:
+    """Given the checkout, a done row no longer covers a file changed in a later minute than its close, the receipt's precision."""
     try:
-        return any(overlaps(tuple(Path(path).parts), scope(t)) for t in row.touches)
+        late = root and row.doc == DONE and os.path.lexists(root / path) and time.strftime("%Y-%m-%dT%H:%M", time.localtime(
+            os.lstat(root / path).st_mtime)) > max(re.findall(r"; closed (\d{4}-\d\d-\d\dT\d\d:\d\d)", row.evidence), default="~")
+        return not late and any(overlaps(tuple(Path(path).parts), scope(t)) for t in row.touches)
     except SakoError:
         return False
 
@@ -584,8 +587,8 @@ def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) 
     return {  # with no host visible (a sandbox), keep the one the hook recorded in this boot: better evidence than none
         "marker": previous.get("marker") or marker_for(session_id), "session_id": session_id,
         "pid": pid or hook.get("pid", 0), "ns": PID_NS if pid else hook.get("ns", PID_NS), "seen": int(time.time()),
-        "started": previous.get("started") or time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "started_at": previous.get("started_at") or int(time.time()),
+        "started": previous.get("started") or time.strftime("%Y-%m-%dT%H:%M:%S%z"), "started_at": previous.get("started_at") or int(time.time()),
+        "start_root": previous.get("start_root") or previous.get("work_root") or str(roots.work),  # only there does dirty_at_start apply
         "work_root": str(roots.work), "branch": git(roots.work, "rev-parse", "--abbrev-ref", "HEAD", check=False) or "?",
         "work_start_rev": previous.get("work_start_rev") or git(roots.work, "rev-parse", "HEAD", check=False),
         "dirty_at_start": previous["dirty_at_start"] if "dirty_at_start" in previous else
@@ -601,7 +604,8 @@ def remove_presence(roots: Roots, session_id: str) -> bool:
 
 
 def my_entry(roots: Roots, session_id: str | None) -> dict | None:
-    return (read_json(presence_dir(roots) / f"{session_key(session_id)}.json") or None) if session_id else None
+    entry = (read_json(presence_dir(roots) / f"{session_key(session_id)}.json") or None) if session_id else None
+    return dict(entry, dirty_at_start={}) if entry and entry.get("start_root", entry.get("work_root")) != str(roots.work) else entry
 
 
 # ----------------------------------------------------------------------------
@@ -663,14 +667,13 @@ def verify(roots: Roots, config: dict, out=print) -> int:
     if not command:
         raise SakoError(f"{CONFIG} has no verify_command; nothing to run")
     path, log, failed = (roots.local / name for name in ("stamp.json", "verify.log", "verify-failed.log"))
-    paths = list(config["verify_paths"])
-    listed = covered_files(roots.work, paths)
-    before = content_id(roots.work, paths)
-    started = time.time()
+    paths = list(config["verify_paths"])  # and the command, looked up on PATH on Windows, whose own search tries System32 first
+    run = [shutil.which(command[0]) or command[0], *command[1:]] if sys.platform == "win32" else list(command)  # bash: Git's, not WSL's
+    listed, before, started = covered_files(roots.work, paths), content_id(roots.work, paths), time.time()
     path.parent.mkdir(parents=True, exist_ok=True)
     with log.open("wb") as kept:  # written as the check runs; a process the check leaves behind never holds verify
         try:
-            result = subprocess.run(list(command), cwd=roots.work, stdout=kept, stderr=subprocess.STDOUT)
+            result = subprocess.run(run, cwd=roots.work, stdout=kept, stderr=subprocess.STDOUT)
         except OSError as error:
             raise SakoError(f"verify_command {command[0]!r} cannot run: {error.strerror or error}") from None
     shown = lambda: log.read_text(encoding="utf-8", errors="replace")  # read after the stamp is settled, since reading can fail
@@ -792,7 +795,7 @@ def others_moved(roots: Roots, entry: dict | None, moved: list[str], changed: di
     committed = set(git(roots.work, "diff", "--no-renames", "--name-only", rev, "HEAD", check=False).splitlines()) if rev else set()
     committed -= set((entry or {}).get("dirty_at_start") or {})  # others' edits left uncommitted before the start; a later edit is in changed
     return not any(path.startswith("(") or (path in committed and path not in changed) or (path in changed and not any(
-        holder_key(r.claim) in here and covers(r, path) for r in rows)) for path in moved)
+        holder_key(r.claim) in here and covers(r, path, roots.work) for r in rows)) for path in moved)
 
 
 def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | None,
@@ -803,10 +806,10 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
     peers = {key_of(e["marker"]): e for e in live if e.get("marker") != marker}
     unrecorded, exempt = [], {}
     for path, label in sorted(changed.items()):
-        if any(covers(row, path) for row in own):
-            continue
         day = label.split()[4] if label.startswith("in commit") else ""  # only a close on or after it excuses a commit
-        holder = next((r for r in rows if not (day and r.doc == DONE) and holder_key(r.claim) in peers and covers(r, path)), None)
+        if any(covers(row, path, None if day else roots.work) for row in own):  # a file changed after a close is not its task's
+            continue
+        holder = next((r for r in rows if not (day and r.doc == DONE) and holder_key(r.claim) in peers and covers(r, path, roots.work)), None)
         if holder and peers[holder_key(holder.claim)].get("work_root") == str(roots.work):
             kind = "unverified" if peers[holder_key(holder.claim)].get("unverified") else "live"
             exempt.setdefault(f"in {holder.id}'s scope, {'closed' if holder.doc == DONE else 'claimed'} by {kind} peer "
@@ -843,7 +846,7 @@ def footprint_lines(roots: Roots, config: dict, manifest: dict) -> list[str]:
              if footprint == "shared" else "Nothing tracked changed; " + ("the folder is listed in .git/info/exclude."
              if listed else f"add the line /{KIT}/ to {ex.as_posix() if roots.work != roots.main else '.git/info/exclude'}, or git status shows the folder."))]
     if footprint == "local":
-        return lines + [records + ". They are not in Git yet; git clean -x deletes them.",
+        return lines + [records + ". They are not in Git yet; git clean -dx deletes them.",
                         "  Keep their history, or share them privately:  uvx sako init --repo [url]",
                         "  Commit them with the code:                    uvx sako init --shared"]
     at, base = (f"-C {shlex.quote(kit)} ", "") if footprint == "repo" else ("", f"{kit}/")
@@ -871,7 +874,8 @@ def hooks_line(roots: Roots, manifest: dict) -> str:
 
 def stray(roots: Roots) -> list[str]:
     """Footprint findings: a stray kit folder, and the recorded footprint against Git."""
-    found = [f"stray {KIT}/ in this worktree is ignored; SAKO uses {roots.kit.as_posix()}"] if roots.home != roots.work and (roots.work / KIT).exists() else []
+    found = [f"stray {KIT}/ in this worktree is ignored; SAKO uses {roots.kit.as_posix()}, so move or delete the stray one"] \
+        if roots.home != roots.work and (roots.work / KIT).exists() else []
     footprint = str(read_json(roots.home / MANIFEST).get("footprint") or "local")
     actual = "shared" if tracked(roots.home, MANIFEST) else "repo" if (roots.kit / ".git/HEAD").is_file() else "local"
     if footprint == "shared" and not subprocess.run(["git", "-C", str(roots.home), "check-ignore", "-q", "--no-index",
@@ -970,7 +974,7 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
                             f"and the check is {state}: {why}\n    fix: {sako} verify, fix what it reports, then stop again.")
     dirty = set(product(dirty_paths(roots.work)))
     for row in closed:
-        pending = [path for path in sorted(changed) if path in dirty and covers(row, path) and not any(covers(r, path) for r in held)]
+        pending = [path for path in sorted(changed) if path in dirty and covers(row, path, roots.work) and not any(covers(r, path) for r in held)]
         if pending:
             quoted, message = " ".join(map(shlex.quote, pending)), shlex.quote(row.task)  # no task ID in product history
             problems.append(f"Committed: {row.id} is closed but its changes are not committed: {', '.join(pending[:8])}\n    fix: "
@@ -1042,8 +1046,8 @@ CODEX_ROOT = "# sako: start\n[sandbox_workspace_write]\nwritable_roots = [{}]\n#
 SHARE = f'git add -A -- {KIT} && git commit -m "Share SAKO records" -- {KIT}'  # the folder only, so anything else staged stays staged
 HOOK_OWNED = r"(?<![\w.])\.sako/sako\.py(?![\w.]).*\bhook {}(?![\w-])"  # SAKO's hook for a client, any Python or redirect
 DOOR = ("This project uses SAKO for task execution. Before a project task, read {}/SAKO.md down to its Read when needed "
-        "table, later sections only when they apply, and follow its daily loop. Questions need no task record until they "
-        "change a file. Project instructions and the owner's choices come first.")
+        "table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change "
+        "a file; add and claim come before that change. Project instructions and the owner's choices come first.")
 POINTER = f"{DOOR.format(KIT)} Records: {KIT}/work/TASKS.md and DONE.md. Commands: python3 {KIT}/sako.py <verb> (python on Windows)."
 
 
@@ -1202,9 +1206,9 @@ def wiring(roots: Roots, checkout: Path, clients: list[str], add: bool = True) -
         proposed = edit_hooks(current, agent, remove=not want, where=str(path))
         if json.loads(proposed) == json.loads(current or "{}"):
             continue
-        if tracked(checkout, path.relative_to(checkout.resolve()).as_posix()):
-            notes.append(f"{CLIENTS[agent]}: {relative} is tracked, so SAKO left it unchanged. Add or remove "
-                         "its hooks there yourself, or run start, check --gate and end explicitly.")
+        if tracked(checkout, path.relative_to(checkout.resolve()).as_posix()):  # named in full from another checkout
+            notes.append(f"{CLIENTS[agent]}: {relative if checkout.resolve() == roots.work else path.as_posix()} is tracked, so SAKO left "
+                         f"it unchanged; run start, check --gate and end explicitly, or give it this content yourself:\n{proposed.rstrip()}")
         else:
             writes[path] = proposed
     relative, want = ".codex/config.toml", "codex" in clients
@@ -1273,7 +1277,7 @@ def hooks_written(roots: Roots, clients: list[str], reason: str) -> str:
     if not clients:
         return (f"Hooks: none, {reason}. Agents read {SHARED_SKILL}; run start, check --gate and end yourself "
                 f"({PYTHON} {shlex.quote(runtime_path(roots))} start --session <id>).{change}{windows}")
-    return "Hooks written: " + listing([f"{CLIENTS[a]} ({hook_file(a)}" + (
+    return "Hooks: " + listing([f"{CLIENTS[a]} ({hook_file(a)}" + (
         ", which runs them only after you trust them in Codex" if a == "codex" else "") + ")" for a in clients]) + \
         f", chosen from {reason}. Start a session to begin.{change}{windows}"
 
@@ -1451,15 +1455,15 @@ def cmd_remove(args: argparse.Namespace) -> int:
         writes: dict[Path, str] = {}
         for checkout in checkouts(roots):
             writes.update(wiring(roots, checkout, [])[0])  # with no client chosen, every checkout loses SAKO's hooks
-        apply(writes)
-        for path in deletes + [roots.main / MANIFEST]:
+        for path in deletes + [roots.main / MANIFEST] + [p for p in apply(writes) if not p.exists()]:  # and settings left empty
             path.unlink(missing_ok=True)
-            with suppress(OSError):
-                path.parent.rmdir()
+            with suppress(OSError):  # then the folders left empty, such as .claude/skills/ and .claude/; a top folder keeps .git
+                for folder in path.parents[:3]:
+                    folder.rmdir()
     shutil.rmtree(roots.state, ignore_errors=True)
-    print("\n".join(notes + [f"Removed the SAKO kit and its hooks. {CONFIG} and {KIT}/work/ keep your records; "
-                              f"delete {KIT}/ to leave no trace."] + ([f"{KIT}/ is tracked: commit the removal with git add -A -- "
-        f"{KIT} && git commit, or take the records out of Git too with git rm -r --cached {KIT} && git commit."] if shared else [])))
+    print("\n".join(notes + [f"Removed the SAKO kit and its hooks. {CONFIG} and {KIT}/work/ keep your records; delete {KIT}/ and "
+                             "SAKO's lines in .git/info/exclude to leave no trace."] + ([f"{KIT}/ is tracked: commit the removal with "
+        f"git add -A -- {KIT} && git commit, or take the records out of Git too with git rm -r --cached {KIT} && git commit."] if shared else [])))
     return 0
 
 
@@ -1561,8 +1565,8 @@ def add_task(rows: list[Row], active: Path, text: str, records: str, args: argpa
         if len(existing) != 1:
             raise SakoError(f"source {source!r} is mapped more than once; reconcile the records before retrying")
         old = existing[0]
-        if (old.task, old.done_when, set(map(scope, old.touches)), set(old.after)) != (
-                task, done_when, set(map(scope, touches)), set(after)):
+        if (old.task, old.done_when, set(map(scope, old.touches)), set(old.after if old.doc == "tasks" else after)) != (
+                task, done_when, set(map(scope, touches)), set(after)):  # the done record keeps no After to compare
             raise SakoError(f"source {source!r} already maps to {old.id} with a different task, done when, scope or "
                             "prerequisites; reconcile that row, or use a distinct source for different work")
         if args.pri and old.doc == "tasks" and old.pri != pri:

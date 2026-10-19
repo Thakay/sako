@@ -65,7 +65,7 @@ python3 .sako/sako.py add "Import skips blank lines" --done-when "A notes file w
 For a PLAN.md with phases and numbered steps.
 
 - Reference each step by phase and number, such as `PLAN.md#phase-2/step-3`. Keep
-  a step's number once it is taken: renumbering points old references at
+  a step's number once it is taken. Renumbering points old references at
   different work.
 - Add the selected steps in plan order, so each prerequisite already has an ID,
   and pass it with `--after` (in the example, T-1 is step 1). `next` holds the step and

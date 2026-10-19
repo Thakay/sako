@@ -227,24 +227,12 @@ class Budgets(unittest.TestCase):
             self.assertTrue(first.startswith("Read this when"), title)
             self.assertIn(title, required[-1], f"the router names {title}")
             self.assertNotIn(title, "".join(required[:-1]), f"only the router may send the agent to {title}")
-        with tempfile.TemporaryDirectory(prefix="sako-budget-") as workspace:
-            root = fixture.make_repo(Path(workspace) / "project")
-            fixture.succeeds(fixture.seed(root))
-            fixture.write(root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"],
-                                                                  "verify_paths": ["src"]})})
-            fixture.succeeds(fixture.installed(root, "verify"))
-            agent = fixture.fake_agent()
-            try:
-                context = fixture.succeeds(fixture.installed(root, "start", session="budget-session", pid=agent))
-            finally:
-                fixture.kill(agent)
+        counts, context = fixture.reading()  # tests/measure.py prints the same counts
         for door in (context, sako.POINTER):  # the start context, and the line init gives for project instructions
             self.assertIn("read .sako/SAKO.md down to its Read when needed table, later sections only when they apply", door)
-            self.assertIn("Questions need no task record until they change a file.", door)
+            self.assertIn("Questions need no task record until they change a file; add and claim come before that change.", door)
         skill = (fixture.SAKO.parent / "skills/sako/SKILL.md").read_text()
-        template = (fixture.SAKO.parent / "templates/TASKS.md").read_text().split("| ID |")[0]
-        counts = {name: len(text.split()) for name, text in
-                  (("skill", skill), ("template", template), ("start context", context), ("method", "".join(required)))}
+        self.assertEqual(counts["method"], len("".join(required).split()), "the helper counts the same required part")
         self.assertLessEqual(sum(counts.values()), 1500, counts)
         stops, guide = " ".join("".join(required).split()), " ".join(skill.split())  # folded, so a rewrap never breaks a pin
         self.assertIn("Read this file down to its **Read when needed** table.", stops)
@@ -281,8 +269,9 @@ class Words(unittest.TestCase):
                       "A duplicate ID, a source mapped twice, a faulty row, an overlap with your own claim and a footprint "
                       "finding also block", "notes, such as another session's stale claim, never block"):
             self.assertIn(words, done)
-        self.assertIn("It counts no file under `.sako/`, so a scope there only locks paths against other claims",
-                      self.section("The gate and checks in detail"))
+        detail = self.section("The gate and checks in detail")
+        self.assertIn("It counts no file under `.sako/`, so a scope there only locks paths against other claims", detail)
+        self.assertIn("The first line of `check --gate` is its verdict, and its exit code decides", detail)
         limits = self.text("docs/limits.md")
         for words in ("The gate judges only the checkout it runs in", "In a shared checkout the gate sees what changed, not who "
                       "changed it.", "Closing a task scoped `.` makes the Committed fix stage every uncommitted change made "
@@ -303,10 +292,12 @@ class Words(unittest.TestCase):
             self.assertIn("(records only)", self.text(name))
         self.assertNotIn("the closing session, the date", self.text("docs/validation.md"))
 
-    def test_security_names_every_environment_variable_a_hook_reads(self):
+    def test_security_names_every_environment_variable_a_hook_or_init_reads(self):
         source = (self.ROOT / "sako.py").read_text(encoding="utf-8")
         names = set(re.findall(r'os\.environ\.get\("(\w+)"\)', source)) | set(re.findall(r"\$\{([A-Z_]+)",
                                                                                           sako.hook_command("claude")))
+        names |= set(re.findall(r'\("(?:claude|codex)", "([A-Z_]+)"\)', source))  # the session signals init's detect reads
+        self.assertIn("CLAUDECODE", names)
         self.assertIn("CLAUDE_PROJECT_DIR", names)
         security = self.text("SECURITY.md")
         for name in sorted(names):

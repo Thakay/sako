@@ -2,14 +2,15 @@
 
 Notable changes to SAKO, one entry per release. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/). SAKO is alpha software: commands and file
-formats can change in any 0.x release.
+[Semantic Versioning](https://semver.org/). SAKO is alpha software, so commands and
+file formats can change in any 0.x release.
 
 ## [0.6.0] - 2026-10-18
 
 Sessions that share a checkout hold each other up less, and the records say more.
-Another session's stale claim or overlap no longer blocks a stop, records-only tasks
-close without the product check, receipts carry times and the checked commit,
+Another session's stale claim or overlap no longer blocks a stop as a ledger finding,
+a closed task no longer covers later edits in its scope, records-only tasks close
+without the product check, receipts carry times and the checked commit,
 `verify` keeps its last pass and the check's output, and Claude Code's hooks find
 the kit from a nested repository. The method, the skill and the docs follow the
 runtime, and task records from 0.5.1 still parse. SAKO remains alpha software.
@@ -22,16 +23,18 @@ To update from 0.5.1, follow these steps:
 1. Update between working sessions, in the main checkout. There `init --update`
    also gives each linked worktree that has SAKO's hooks the new hook command and
    keeps its other entries. A worktree without them gets none until you run
-   `uvx sako init` in it, and a tracked settings file there is left unchanged, with
-   a note.
+   `uvx sako@0.6.0 init` in it, and a tracked settings file there is left unchanged,
+   with a note that names the file in full and gives the content to write.
 2. The hook command changed for both clients. When the shell's folder leads to no
    kit, it looks again from the folder Claude Code names in `$CLAUDE_PROJECT_DIR`.
    Codex records trust against each hook's hash and skips changed hooks until you
    trust them, so open `/hooks` in Codex and trust SAKO's hooks again.
-3. End any session left open across the update, and start a new one. Until it ends,
-   it keeps its start record, and every file with the owner's executable bit that
-   was already uncommitted when it started reads as changed by it. On Windows,
-   Python reports `.bat`, `.cmd`, `.com` and `.exe` files as executable.
+3. End any session left open across the update, then start it again with the same
+   ID, which keeps its claims and takes a new start record, or start a new one.
+   Until it ends, it keeps its start record, and every file with the owner's
+   executable bit that was already uncommitted when it started reads as changed by
+   it. On Windows, Python reports `.bat`, `.cmd`, `.com` and `.exe` files as
+   executable.
 4. Run `verify` when a check is configured. The new version makes every recorded
    pass stale, with the reason "the check command or paths changed since the last
    pass".
@@ -45,11 +48,12 @@ To update from 0.5.1, follow these steps:
 
 - Records-only tasks, whose every scope entry lies in `.sako/`, close without a
   fresh check while only others moved checked content. Their receipt says "no
-  automated check (records only)", and the Proven rule skips them; Recorded and
-  Committed still apply. Others' changes are edits left uncommitted before your
-  session started, committed since or not, and edits or commits in the scope of a
-  task that a live peer in this checkout claimed or closed. Any other commit since
-  your start, and a merge, pull or checkout of older commits, counts as yours.
+  automated check (records only)", and the Proven rule skips them while that holds;
+  Recorded and Committed still apply. Others' changes are edits left uncommitted
+  before your session started, committed since or not, and edits or commits in the
+  scope of a task that a live peer in this checkout claimed or closed. Any other
+  commit since your start, and a merge, pull or checkout of older commits, counts
+  as yours.
 - `verify` writes the check's output to `verify.log` beside the stamp and prints it
   when the check ends, instead of as it runs. A failed run's output also goes to
   `verify-failed.log`, which a later pass leaves in place. The PASS and FAILED lines
@@ -93,9 +97,9 @@ To update from 0.5.1, follow these steps:
   they judged.
 - The start context, and the line `init` gives for project instructions, say to
   read SAKO.md down to its Read when needed table and later sections only when they
-  apply, and that questions need no task record until they change a file. The start
-  context labels its pick "next, if no task was named for you", and its marker line
-  drops its hint.
+  apply, and that questions need no task record until they change a file, with
+  `add` and `claim` before that change. The start context labels its pick "next, if
+  no task was named for you", and its marker line drops its hint.
 - Each "not counted" note of the gate names at most three paths, then "and N more",
   and the sentence that a shared checkout shows what changed, not who changed it,
   comes once, as its own note.
@@ -109,19 +113,29 @@ To update from 0.5.1, follow these steps:
   linked worktree that has them, keeping the other entries there. A linked
   worktree's settings file that holds SAKO's entries but does not parse stops the
   update before anything is written.
+- A tracked client settings file is still left unchanged, and the note `init`
+  prints for it now gives the content to write there, SAKO's hooks included, and
+  names the file in full when it is in another checkout. The line that lists the
+  wired clients begins `Hooks:` instead of `Hooks written:`, since a tracked file
+  gets none.
+- `remove` also deletes the client folders it leaves empty, such as
+  `.claude/skills/`, so a later `init` no longer detects a client from them, and
+  its last line says that SAKO's lines in `.git/info/exclude` remain to delete.
+- The finding for a stray `.sako/` in a linked worktree says to move or delete it.
 - The method and the skill say to read SAKO.md down to its Read when needed table
-  and that questions need no task record until they change a file. The skill names
-  `uvx sako init` for a project without `.sako/` and drops the check-in paragraph
-  that the daily loop holds. The method follows the runtime throughout, including
-  how to park an owner's step or deferred work as its own row, what leaving, a
-  resume, `/clear`, a fork and a restart do to presence and claims, and which
-  session ID a subagent uses.
+  and that questions need no task record until they change a file, with `add` and
+  `claim` before that change. The skill names `uvx sako init` for a project without
+  `.sako/` and drops the check-in paragraph that the daily loop holds. The method
+  follows the runtime throughout, including how to park an owner's step or deferred
+  work as its own row, what leaving, a resume, `/clear`, a fork and a restart do to
+  presence and claims, and which session ID a subagent uses.
 - The limits page names the limits that remain in local coordination. The
   compatibility page says that a subagent's shell carries its parent's session ID,
-  and records what background `/exit` and resume did in use. The update page covers
-  linked worktrees, a session left open across an update, and rollback. SECURITY.md
-  lists everything a hook reads, and the glossary, the validation page and the
-  README match the gate and its receipts.
+  that Codex runs hooks only after you trust them in `/hooks`, again after each
+  change, and records what background `/exit` and resume did in use. The update page
+  covers linked worktrees, a session left open across an update, and rollback.
+  SECURITY.md lists everything a hook or `init` reads, and the glossary, the
+  validation page and the README match the gate and its receipts.
 - CONTRIBUTING.md welcomes pull requests that agents open on their own, when they
   name the tool, show the checks and answer review. AGENTS.md covers work from a
   fork, a pull request template asks for the issue, the change, the check output and
@@ -171,13 +185,31 @@ To update from 0.5.1, follow these steps:
   change to only a group or other bit no longer makes the check stale. With
   `core.fileMode` set to false, Git ignores the bit, so such a change on a file that
   was clean at the start still goes uncounted, as the [limits](docs/limits.md) say.
+- A closed task no longer covers an uncommitted file that changed in a later minute
+  than its close, the precision of its receipt. Before, an edit made with no task in
+  the scope of a task a live peer had closed passed the editor's gate, and the
+  closer's gate asked to commit it under the closed task's title. A task closed and
+  committed earlier was also named for a later task's change in the same scope. Now
+  such an edit counts under Recorded unless a claim covers it, and Committed names
+  a closed task only for files that last changed no later than the minute it closed.
+- A gate run in a linked worktree other than the one where the session started no
+  longer names files that were uncommitted in the starting checkout. A presence
+  entry records the checkout of its start record, and in any other checkout every
+  uncommitted file there counts.
+- Repeating the intake of a done task that was added with `--after` reuses it, as
+  the method says. The done record keeps no After column, so the repeat was refused.
+- On Windows, `verify` looks a bare command name up on the path before it runs it.
+  Windows' own search tries System32 first, so `["bash", ...]` ran WSL's bash there,
+  even from Git Bash.
+- The local footprint's records line says `git clean -dx`, which deletes `.sako/`,
+  instead of `git clean -x`, which keeps the folder.
 
 ### Validation
 
-- Both suites pass on Python 3.10 and 3.12 locally, with 242 tests and 22
+- Both suites pass on Python 3.10 and 3.12 locally, with 246 tests and 22
   scenarios; these counts overlap.
 - Natively on Windows from Git Bash, with Python 3.14.4 and Git for Windows 2.52.0,
-  242 tests ran with 46 skipped and the scenario suite passed 17 and skipped 5, with
+  246 tests ran with 46 skipped and the scenario suite passed 17 and skipped 5, with
   none failed.
 - CI checks Python 3.10 and 3.14 on Linux, macOS and Windows, plus package building
   and installation. The known [platform limits](docs/limits.md) remain.

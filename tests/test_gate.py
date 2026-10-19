@@ -6,10 +6,12 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -52,6 +54,14 @@ class Gate(unittest.TestCase):
         code, out, err = self.run_in(where or self.root, "start", session=session, pid=pid)
         self.assertEqual(code, 0, out + err)
         return pid
+
+    def backdate(self, task, minutes=5):
+        """Date a receipt's close some minutes back, so the edits after it come in a later minute, as in real use."""
+        done = self.root / ".sako/work/DONE.md"
+        earlier = time.strftime("%Y-%m-%dT%H:%M%z", time.localtime(time.time() - 60 * minutes))
+        text, count = re.subn(rf"(?m)^(\| {task} \|.*; closed )[^;]+;", rf"\g<1>{earlier};", done.read_text())
+        self.assertEqual(count, 1, text)
+        done.write_text(text)
 
     def test_unrecorded_work_blocks_once_and_a_claim_clears_it(self):
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
@@ -356,7 +366,8 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.stop("s1")[:2], (0, ""), "no checked content moved, so no fresh check was needed")
 
     def test_closed_work_left_uncommitted_in_a_sibling_worktree_blocks_only_the_gate_run_there(self):
-        self.start("s1")
+        fixture.write(self.root, {".gitignore": "__pycache__/\n*.log\n", "notes.txt": "untracked\n"})  # uncommitted before the start
+        self.start("s1")  # its start record lists those files of this checkout, so it holds for no other checkout
         linked = self.base / "linked"
         fixture.git(self.root, "worktree", "add", "-q", str(linked))
         self.assertEqual(self.run_in(linked, "claim", "T-1", session="s1")[0], 0)
@@ -509,10 +520,61 @@ class Gate(unittest.TestCase):
         fixture.git(self.root, "add", "src/app.py")
         fixture.git(self.root, "commit", "-qm", "Invented task")
         self.assertEqual(self.stop("s1")[0], 0)
+        self.backdate("T-1")
         fixture.write(self.root, {"src/wip.py": "someone else's draft, now edited\n"})
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
-        self.assertIn("Committed: T-1 is closed but its changes are not committed: src/wip.py", err)
+        self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/wip.py "
+                      "(edited after start; already dirty at start)", err, "an edit after the close is not the closed task's")
+        self.assertNotIn("Committed:", err)
+
+    def test_a_live_peers_closed_task_excuses_no_edit_made_after_it_closed(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Prints 2", "--session", "s1"))
+        fixture.git(self.root, "commit", "-qam", "Invented task")
+        self.backdate("T-1")
+        self.start("s2")
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})  # with no task, in the scope of T-1, which s1 closed earlier
+        unrecorded = "Recorded: changed this session but covered by no task you claimed or closed: src/app.py\n"
+        code, _, err = self.stop("s2")
+        self.assertEqual(code, 2, err)
+        self.assertIn(unrecorded, err, "a live peer's closed task no longer excuses a later edit")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn(unrecorded, err, "the closer sees what changed, not who changed it")
+        self.assertNotIn("Committed:", err, "and is not told to commit the edit under its closed task's title")
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Plan", "--done-when", "Written", "--scope", ".sako/work/plan.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s2"))
+        refusal = fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Planned", "--session", "s2")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("evidence is stale", refusal.stderr, "the edit is s2's own, so its records work needs the check")
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Print three", "--done-when", "Prints 3", "--scope", "src/app.py"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s2"))
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s2")[0], 0, "once recorded, it is s2's claimed work")
+
+    def test_a_closed_and_committed_task_is_not_named_for_the_next_tasks_change_in_its_scope(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Prints 2", "--session", "s1"))
+        fixture.git(self.root, "commit", "-qam", "Invented task")
+        self.backdate("T-1")
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Print three", "--done-when", "Prints 3", "--scope", "src/"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Prints 3", "--session", "s1"))
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("SAKO gate: 1 problem(s) before you stop:\n  Committed: T-10 is closed but its changes are not committed: "
+                      "src/app.py\n    fix: git add -- src/app.py, then git commit -m 'Print three'", err)
+        self.assertNotIn("T-1 ", err, "T-1's work is in its commit; the change came after it closed")
 
     def test_work_under_a_new_claim_does_not_reopen_earlier_closes(self):
         self.start("s1")

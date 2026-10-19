@@ -146,6 +146,12 @@ class Workflow(unittest.TestCase):
         fixture.commit_all(self.root, "retain completed prerequisites and the dependent action")
         self.assert_ok(self.run_cli("check", "--gate", session="dependency-session"))
         self.assert_ok(self.run_cli("claim", "T-11", session="dependency-session"))
+        self.assert_ok(self.run_cli("close", "T-11", "--evidence", "Printed the sorted sample", session="dependency-session"))
+        self.assertIn("T-11: done; reused source", self.assert_ok(self.run_cli(*args)),
+                      "the done record keeps no After, so repeating the intake of done work with prerequisites reuses it")
+        code, _, err = self.run_cli("add", "Print names", *args[2:])
+        self.assertEqual(code, 3, err)
+        self.assertIn("already maps to T-11", err, "a changed task still refuses")
 
     def test_invalid_intake_references_leave_the_ledger_unchanged(self):
         active = self.root / ".sako/work/TASKS.md"
@@ -813,6 +819,17 @@ class Workflow(unittest.TestCase):
                 self.assertFalse(roots.state.exists(), "a read takes no lock, since Windows locks are exclusive")
             with sako.ledger_lock(roots, write=True):
                 self.assertEqual(calls, [(2, 1), (2, 1)], "a held lock is retried")
+
+    def test_on_windows_verify_looks_a_bare_command_up_on_the_path(self):
+        """Windows' own search tries System32 before PATH, where a bare bash is WSL's launcher, not Git Bash's bash."""
+        config = dict(sako.DEFAULTS, verify_command=["sako-test-python", "-c", "pass"], verify_paths=["src"])
+        fixture.write(self.root, {".sako/config.json": json.dumps(config)})
+        found = {"sako-test-python": sys.executable}
+        with patch.object(sako.sys, "platform", "win32"), patch.object(sako.shutil, "which", side_effect=found.get) as which:
+            self.assertEqual(sako.verify(sako.resolve_roots(self.root), config, out=lambda _: None), 0)
+        which.assert_called_once_with("sako-test-python")
+        with patch.object(sako.sys, "platform", "linux"), patch.object(sako.shutil, "which", side_effect=AssertionError("Windows only")):
+            self.assertRaisesRegex(sako.SakoError, "'sako-test-python' cannot run", sako.verify, sako.resolve_roots(self.root), config)
 
     def test_output_is_utf8_whatever_the_locale(self):
         fixture.succeeds(fixture.installed_copy(self.root, "add", "Show a → b", "--pri", "P1", "--scope", "src/"))

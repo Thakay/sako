@@ -40,14 +40,14 @@ uvx sako@latest init --update
 ```
 
 From a reviewed checkout, `python3 ../sako/sako.py init --update` does the same.
-Plain `uvx sako` can reuse a cached copy. Daily work needs neither. Commands and
-hooks use the project's own copy.
+Plain `uvx sako` can reuse a cached copy. Daily commands and hooks use the
+project's own copy.
 
 The installer checks for conflicts and invalid hook settings before writing any
 file. It replaces unmodified kit files, keeps the records and the configuration,
 and merges only the chosen integrations. Linked worktrees with SAKO's hooks get the
 new ones, keeping their other entries; one without them gets none until you run
-`uvx sako init` there. The client choice from the first install is
+`uvx sako@latest init` there. The client choice from the first install is
 kept; `--client claude`, `--client codex` or `--client none` replaces it. Dropping a
 client removes only SAKO's hook entries and deletes its unmodified skill copy; an
 edited copy refuses until you keep what you need and delete it. A different
@@ -66,22 +66,22 @@ Run `check`, `verify` when a check is configured, and a fresh session pickup.
 `check` reports the ledger and the automated evidence separately; an absent or
 failing check never becomes a pass, and a new runtime version makes old stamps
 stale. A session open across the update keeps its old start record, so its gate
-can name files it never changed; start a new one. New hook definitions may need the
-client's trust again ([compatibility](compatibility.md)); watch a hook run before
-relying on it.
+can name files it never changed; end it and start it again. New hook definitions
+may need the client's trust again ([compatibility](compatibility.md)); watch a hook
+run before relying on it.
 
 ## Remove or roll back
 
 Run `python3 .sako/sako.py remove` in the main checkout. It refuses changed kit
 files before deleting anything, then removes what the table in
-[What init changes](#what-init-changes) says, in every worktree. Git history
-remains. Delete `.sako/` to leave no trace.
+[What init changes](#what-init-changes) says, in every worktree, with folders left
+empty. Git history remains. Delete `.sako/` and SAKO's lines in `.git/info/exclude`
+to leave no trace.
 
 In the repo footprint `remove` also keeps `.sako/.git` and warns when the records
 repository has commits that exist only there. In the shared footprint it deletes the
 tracked kit files and prints the commit command, or `git rm -r --cached .sako` to take
-the records out of Git as well. `remove` also forgets the client choice with
-`install.json`, so the next `init` detects the clients again.
+the records out of Git as well.
 
 Switching footprints keeps the records byte for byte; the method's
 [install, update and remove](../SAKO.md#install-update-and-remove) section has the

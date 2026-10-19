@@ -16,17 +16,16 @@ as the method says.
 |---|---|---|---|
 | Last checked with | 2.1.280 on Linux (WSL2, Ubuntu 24.04), 2026-09-22; 2.1.220 on Windows, hooks only, 2026-09-23 | 0.154.0 on Linux (WSL2, Ubuntu 24.04), 2026-09-23 | Not checked, Cursor included |
 | `init` detects it from | Its session running `init`, `.claude/`, `CLAUDE.md` or `AGENTS.md` | Its session running `init`, `.codex/` or `AGENTS.md` | Not detected; use `init --client none` |
-| Hooks | `.claude/settings.local.json`, untracked | `.codex/hooks.json`, untracked; Codex runs them only after you trust them in Codex and skips untrusted ones silently | None; the agent runs the commands |
+| Hooks | `.claude/settings.local.json`, untracked | `.codex/hooks.json`, untracked; Codex runs them only after you trust them in `/hooks`, and again after each change | None; the agent runs the commands |
 | How the agent finds SAKO | The start context, and the `sako` skill in `.claude/skills/` | The start context, and the `sako` skill in `.agents/skills/` | Point its instructions at `.sako/SAKO.md`; a client that reads `.agents/skills/` finds the skill |
 | A command without `--session` | Uses `CLAUDE_CODE_SESSION_ID`, the ID its hooks use, in a subagent too | Uses `CODEX_SESSION_ID`, the ID its hooks use, in a subagent too; before Codex 0.148, `CODEX_THREAD_ID` | Pass `--session`, or set `SAKO_SESSION` |
 | Where agent commands run | On the host; Claude Code's own sandbox is optional and unchecked | In Codex's sandbox (checked in its workspace-write mode): their own process namespace, writes only in the checkout and the roots you add | Where the client runs them |
 
-`init` prints which clients it wired and why; `--client claude`, `--client codex`
-or `--client none` replaces the choice, and `status` says when each client's hook
-last ran, or "not seen yet". A tracked client settings file is left unchanged, with
-a note to add the hooks there yourself or run the commands. A new linked worktree
-needs `init` there for its own hook settings and, for Codex, a writable root for the
-main checkout's `.sako/`.
+`init` prints which clients it wired and why, and `status` says when each client's
+hook last ran, or "not seen yet". A tracked client settings file is left unchanged,
+with a note to add the hooks there yourself or run the commands. A new linked
+worktree needs `init` there for its own hook settings and, for Codex, a writable
+root for the main checkout's `.sako/`.
 
 ## Checked live
 
@@ -79,6 +78,7 @@ through the start context.
 
 ## Not verified
 
+- The 0.6.0 hook command in a live session.
 - Codex hooks trusted the normal way, in Codex, instead of bypassed per run.
 - Claude Code with its own sandbox turned on.
 - The shared footprint in Claude Code and the repo footprint in Codex.

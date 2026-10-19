@@ -104,7 +104,7 @@ class Compatibility(unittest.TestCase):
     @unittest.skipIf(fixture.WINDOWS, fixture.NO_CODEX)
     def test_the_client_flag_replaces_the_choice_and_clears_what_it_no_longer_needs(self):
         printout = self.fresh("switch", {"AGENTS.md": "rules\n"})
-        self.assertIn("Hooks written: Claude Code (.claude/settings.local.json) and Codex (.codex/hooks.json, "
+        self.assertIn("Hooks: Claude Code (.claude/settings.local.json) and Codex (.codex/hooks.json, "
                       "which runs them only after you trust them in Codex), chosen from AGENTS.md", printout)
         claude_skill = self.root / ".claude/skills/sako/SKILL.md"
         self.assertIn("chosen from --client.", fixture.succeeds(fixture.seed(self.root, "--client", "codex")))
@@ -412,6 +412,31 @@ class Compatibility(unittest.TestCase):
                 self.assertEqual(commands, ["echo mine"] * (event == "Stop") + [sako.hook_command("claude")],
                                  f"{checkout.name} {event}: a linked worktree's entries are refreshed from the main checkout")
         self.assertFalse((unwired / sako.hook_file("claude")).exists(), "a worktree that has no SAKO hooks gets none")
+
+    def test_a_tracked_settings_file_is_left_unchanged_and_the_note_gives_the_content_to_write(self):
+        team, hooks = '{"permissions": {"allow": []}}\n', sako.hook_file("claude")
+        fixture.write(self.root, {hooks: team})
+        fixture.git(self.root, "add", "-f", hooks)  # forced, since Claude Code may list the file in a global ignore
+        fixture.commit_all(self.root, "the team's settings")
+        linked = self.root.parent / "project-team"  # a branch whose tracked file holds SAKO's hook from an older release
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "team", str(linked))
+        settings = json.loads(sako.edit_hooks(team, "claude"))
+        for entries in settings["hooks"].values():
+            entries[0]["hooks"][0]["command"] = "python3 .sako/sako.py hook claude"
+        older = json.dumps(settings, indent=2) + "\n"
+        fixture.write(linked, {hooks: older})
+        fixture.git(linked, "add", "-f", hooks)
+        fixture.commit_all(linked, "the team's hooks")
+        printout = fixture.succeeds(fixture.seed(self.root, "--client", "claude"))
+        self.assertEqual(((self.root / hooks).read_text(), (linked / hooks).read_text()), (team, older), "tracked files never change")
+        self.assertIn("Hooks: Claude Code (.claude/settings.local.json), chosen from --client.", printout)
+        lead = ("Claude Code: .claude/settings.local.json is tracked, so SAKO left it unchanged; run start, check --gate and end "
+                "explicitly, or give it this content yourself:\n")
+        self.assertIn(lead, printout)
+        self.assertEqual(json.JSONDecoder().raw_decode(printout.split(lead)[1])[0], json.loads(sako.edit_hooks(team, "claude")),
+                         "the file's own settings with SAKO's hooks added")
+        self.assertIn(f"Claude Code: {(linked / hooks).resolve().as_posix()} is tracked, so SAKO left it unchanged;", printout,
+                      "another checkout's file is named in full")
 
     def test_on_windows_codex_gets_no_hooks_and_a_note_says_why(self):
         self.root, printed = fixture.make_repo(Path(self.workspace.name) / "windows", {"AGENTS.md": "rules\n"}), []

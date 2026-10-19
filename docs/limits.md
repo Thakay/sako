@@ -18,19 +18,20 @@ platform:
   Bash, `python --version` must show 3.10 or newer. The python.org installer leaves
   Python off the path unless you tick that box, and the Microsoft Store's
   placeholder only prints a message. A failed `init --repo URL` there can leave
-  read-only Git files in `.sako/`; delete the folder before trying again. How Claude
-  Code and Codex run hooks on Windows is in [compatibility](compatibility.md#windows).
+  read-only Git files in `.sako/`; delete the folder before trying again. `verify`
+  finds a bare command on the path, so from PowerShell `bash` can be WSL's; give
+  Git's `bash.exe` by its full path there. How Claude Code and Codex run hooks on
+  Windows is in [compatibility](compatibility.md#windows).
 - **macOS:** both test suites in CI on GitHub's macOS runner with Python 3.10 and
-  3.14, on the same POSIX code as Linux; one test skips by name, since macOS refuses
-  a file name that is not UTF-8. No live client session has run on a Mac. A stock
-  Mac's `python3` is 3.9, below the floor; install Python 3.10 or newer.
+  3.14, on the same POSIX code as Linux; four tests skip by name, each saying why.
+  No live client session has run on a Mac. A stock Mac's `python3` is 3.9, below
+  the floor; install Python 3.10 or newer.
 
-SAKO's hooks and printed commands use `python3`, or `python` on Windows. Parent
-discovery reads `/proc` and falls back to `ps`, including when the shell is `fish`.
-Liveness uses a zero-signal process check, treats permission denial as alive, and
-applies only in the process namespace that recorded the process, which `/proc`
-names. On Windows SAKO reads no process, so presence there is the 24-hour lease the
-method describes, and `SAKO_AGENT_PID` has no effect.
+Parent discovery reads `/proc` and falls back to `ps`. Liveness uses a zero-signal
+process check, treats permission denial as alive, and applies only in the process
+namespace that recorded the process, which `/proc` names. On Windows SAKO reads no
+process, so presence there is the 24-hour lease the method describes, and
+`SAKO_AGENT_PID` has no effect.
 
 Commands run from any folder of the repository or its linked worktrees. Git finds
 the main checkout, whose `.sako/` holds the kit. Bare repositories, a Git folder kept
@@ -42,7 +43,7 @@ SAKO writes client files only inside the repository, judged by their real paths;
 client file whose folder leads outside it is skipped with a note. Record paths stay
 inside `.sako/`, outside `state/`, including through symlinks. In the local
 footprint the records are not in Git; `.sako/` is listed in `.git/info/exclude`, so
-`git clean -x` deletes them.
+`git clean -dx` deletes them.
 
 ## Local coordination
 
@@ -59,8 +60,7 @@ state under `.git/`, which a client's sandbox can make read-only for agent comma
 It does not isolate code edits, arbitrary record edits, commits, the staging area,
 or other clones. A Git push is not a task lock. Keep one writer for shared files,
 avoid overlapping scopes, and serialize shared Git operations. Use separate
-worktrees when that isolation is more useful; SAKO does not create them. Claims
-across worktrees are as strict as in one checkout; overlapping scopes refuse.
+worktrees when that isolation is more useful; SAKO does not create them.
 
 Worktrees share one ledger, one numbering, one lock and one presence roster; each
 keeps its own check stamp. The gate judges only the checkout it runs in; work in
@@ -100,8 +100,8 @@ the parent, so the ledger shows no separate holder for it.
 This is a deliberately narrow Markdown table parser. It recognizes `T-<number>`
 rows in tables whose header names the required columns, and fenced examples. It
 detects task-like malformed IDs and shapes; it cannot recognize arbitrary prose
-as a lost task. Literal cell pipes and multiline cells are unsupported. Task
-cells can contain references; they are not a full issue schema.
+as a lost task. Task cells can contain references; they are not a full issue
+schema.
 
 Of a file's mode, the [fingerprint](../SAKO.md#the-gate-and-checks-in-detail)
 counts only the owner's executable bit, the one Git tracks. It leaves out ignored
@@ -151,7 +151,8 @@ footprint's `.sako/`, falls back to `$CLAUDE_PROJECT_DIR`, where the Claude Code
 session started, and judges that checkout. A Codex hook there exits 1 instead,
 naming the folder it searched, and that stop goes ungated, as does any hook in a
 linked worktree of the shared footprint while the main checkout's branch has no
-`.sako/`.
+`.sako/`. A hook runs the `.sako/sako.py` of the repository its folder is in, so a
+nested clone that holds one runs its own.
 
 Written hook settings do not prove that hooks run, so `status` says when each
 client's hook last ran, or "not seen yet"; a recent time does not prove every stop

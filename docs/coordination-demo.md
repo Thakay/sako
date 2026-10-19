@@ -21,7 +21,7 @@ Install without hooks so every session command is visible. The project supplies 
 ```text
 $ python3 ../sako/sako.py init --client none
 SAKO installed in .sako/ (local). Nothing tracked changed; the folder is listed in .git/info/exclude.
-Records: .sako/work/TASKS.md and DONE.md. They are not in Git yet; git clean -x deletes them.
+Records: .sako/work/TASKS.md and DONE.md. They are not in Git yet; git clean -dx deletes them.
   Keep their history, or share them privately:  uvx sako init --repo [url]
   Commit them with the code:                    uvx sako init --shared
 Hooks: none, your choice. Agents read .agents/skills/sako/SKILL.md; run start, check --gate and end yourself (python3 .sako/sako.py start --session <id>). Change the client with: uvx sako init --client claude|codex|none.
@@ -46,7 +46,7 @@ In the already open code session, run `start` to register with SAKO and get cont
 ```text
 $ python3 .sako/sako.py start --session demo-code
 sako 0.6.0 · work /work/greeting (main @ 53a59d8b5)
-This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-code
 your marker: sk-0115-3c0f5f721a4a
@@ -70,7 +70,7 @@ The already open docs session checks in while the code session is still active. 
 ```text
 $ python3 .sako/sako.py start --session demo-docs
 sako 0.6.0 · work /work/greeting (main @ 53a59d8b5)
-This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-docs
 your marker: sk-0115-0d70912d790f
@@ -162,7 +162,7 @@ A fresh agent session is opened in the coding tool. It runs `start` to check in 
 ```text
 $ python3 .sako/sako.py start --session demo-next
 sako 0.6.0 · work /work/greeting (main @ 3e00c7d5c)
-This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next
 your marker: sk-0115-a5133dc77184

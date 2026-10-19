@@ -82,7 +82,7 @@ class Footprint(KitCase):
         self.assertEqual(printout[0], "SAKO installed in .sako/ (local). Nothing tracked changed; "
                                       "the folder is listed in .git/info/exclude.")
         self.assertEqual(printout[1], "Records: .sako/work/TASKS.md and DONE.md. They are not in Git yet; "
-                                      "git clean -x deletes them.")
+                                      "git clean -dx deletes them.")
         self.assertEqual(printout[2], "  Keep their history, or share them privately:  uvx sako init --repo [url]")
         self.assertEqual(printout[3], "  Commit them with the code:                    uvx sako init --shared")
         self.assertIn("Claude Code (.claude/settings.local.json)", printout[4])
@@ -161,7 +161,8 @@ class Footprint(KitCase):
         linked = self.worktree("linked")
         fixture.write(linked, {".sako/work/TASKS.md": "# A stray ledger\n"})
         output = fixture.cli(linked, "check")[1]
-        self.assertIn(f"stray .sako/ in this worktree is ignored; SAKO uses {(self.root.resolve() / '.sako').as_posix()}", output)
+        self.assertIn(f"stray .sako/ in this worktree is ignored; SAKO uses {(self.root.resolve() / '.sako').as_posix()}, so move "
+                      "or delete the stray one", output, "the finding names its fix")
         self.assertIn("Main task", fixture.cli(linked, "next")[1])
 
     def test_git_clean_x_deletes_a_local_kit_folder_as_the_printout_says(self):
@@ -174,11 +175,15 @@ class Footprint(KitCase):
         fixture.succeeds(fixture.installed(self.root, "add", "Keep this task", "--scope", "src/"))
         kept = {p: p.read_bytes() for p in (self.root / ".sako").rglob("*")
                 if p.is_file() and ("work" in p.parts or p.name == "config.json")}
-        fixture.succeeds(fixture.installed(self.root, "remove"))
+        printout = fixture.succeeds(fixture.installed(self.root, "remove"))
+        self.assertIn("delete .sako/ and SAKO's lines in .git/info/exclude to leave no trace.", printout)
         self.assertEqual({p: p.read_bytes() for p in kept}, kept)
         remaining = {p.relative_to(self.root).as_posix() for p in self.root.rglob("*")
                      if p.is_file() and ".git" not in p.relative_to(self.root).parts}
         self.assertEqual(remaining, {"src/app.py", "README.md", ".sako/config.json", ".sako/work/TASKS.md"})
+        folders = {p.relative_to(self.root).as_posix() for p in self.root.rglob("*")
+                   if p.is_dir() and ".git" not in p.relative_to(self.root).parts}
+        self.assertEqual(folders, {"src", ".sako", ".sako/work"}, "the client folders that init made and remove emptied go too")
 
     @unittest.skipIf(fixture.WINDOWS or os.geteuid() == 0, "file modes do not bind root, nor on Windows")
     def test_no_state_under_git_and_a_read_only_kit_folder_refuses_plainly(self):

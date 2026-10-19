@@ -85,12 +85,13 @@ This row is an example, not live work. `Pri` is P1, P2 (empty reads P2) or P3.
 Status's first word is `open` (empty reads open), `parked` with its reason, or the
 claiming session's marker. `After` lists prerequisite IDs. Scopes are
 repository-relative path prefixes; `.` covers everything. The done record keeps
-`ID | Task | Done when | Receipt | Scope | Source`. IDs are never reused. Columns are
-read by name, in any order, and columns you add are kept. Keep a cell on one line,
-without literal pipes. Hand edits are fine, and commands change only their own rows.
+`ID | Task | Done when | Receipt | Scope | Source`. IDs are never reused; park a
+dropped row instead of deleting it. Columns are read by name, in any order, and
+columns you add are kept. Keep a cell on one line, without literal pipes. Hand
+edits are fine, and commands change only their own rows.
 
 The records' footprint, which `status` names, is local (out of Git, so
-`git clean -x` deletes them), repo (their own repository inside `.sako/`) or shared
+`git clean -dx` deletes them), repo (their own repository inside `.sako/`) or shared
 (committed with the code, one copy per branch).
 
 Put each discovery where the next reader needs it: an invariant in the code or test
@@ -201,7 +202,7 @@ Before pausing a claimed task, write `handoff.md` in the folder `claim` printed,
 next step, and traps. Other working notes can sit beside it; plans stay in their
 own home, linked. The folder is found by task ID and is never checked content or an
 unrecorded change. On close, move its lasting facts to their real home and delete
-it. `start` and `status` list open tasks' folders.
+it.
 
 A background subagent that a message can resume is paused, not finished. When the
 next step is the owner's, close what you finished. The owner's act, or deferred
@@ -213,19 +214,20 @@ until it is taken over. Two rows avoid that, the second listing the first in
 After.
 
 A new session reads the records, the handoff and the relevant Git diff before it
-continues. For an ended session, `status --session <id>` shows its rows and this
-checkout's uncommitted changes but not its commits. A live owner cannot be
-replaced. For a stale claim, inspect its work, then take it over with
-`claim T-1 --session <new-id> --takeover "reason"` or park it. Take over the
-holder's other overlapping claims too, one after another, as the claim line asks.
-A takeover moves the claim, not the previous holder's uncommitted files, which
-count only once they change again.
+continues. For an ended session, `status --session <its ID>`, not its marker, shows
+its rows and this checkout's uncommitted changes but not its commits. A live owner
+cannot be replaced. For a stale claim, inspect its work, then take it over with
+`claim T-1 --session <new-id> --takeover "reason"` or park it. Until a resume or
+takeover, the holder's uncommitted files count against sessions started before
+they changed, even once parked. Take over the holder's other overlapping claims
+too, one after another, as the claim line asks. A takeover moves the claim, not the
+previous holder's uncommitted files, which count once they differ from your start
+record.
 
-Leaving releases nothing, so close finished work and hand off the rest first. Each
-conversation needs its own session ID, even when several share one host process.
-A resume keeps the session ID, marker key and claims, but after an end, as when
-the client exits, it takes a new start record and the gate counts only later
-changes. In Claude Code, `/clear` and a fork start a new session with its own ID.
+Leaving releases nothing, so close finished work and hand off the rest first. A
+resume keeps the session ID, marker key and claims, but after an end, as when the
+client exits, it takes a new start record and the gate counts only later changes.
+In Claude Code, `/clear` and a fork start a new session with its own ID.
 
 Presence judges liveness by the host process where that process is visible, and
 on Linux and WSL a restart ends it. A client's sandbox (Codex runs agent commands
@@ -247,8 +249,7 @@ Read this when another session or a subagent works in this repository. Every
 worktree uses the main checkout's `.sako/`, so sessions share one ledger, one
 numbering and one lock. A claim refuses a live owner and a scope that overlaps
 another session's claim. The lock serializes `add`, `claim` and `close` only, not
-application edits, hand edits of the records, Git's index or other clones. A push
-is a record, not a lock.
+application edits, hand edits of the records, Git's index or other clones.
 Keep scopes disjoint, coordinate direct record edits, and stage explicit paths.
 SAKO does not schedule agents or merge their edits.
 
@@ -272,8 +273,8 @@ the check runs; a finished run that earns no stamp deletes it. Output goes to
 stamp covers the content, paths, symlink text and executable bit of unignored
 files under `verify_paths`; an empty list covers everything outside `.sako/`,
 documentation included. Name product subtrees if documentation-only work should
-not invalidate the check. Dependencies and services need another check by
-judgment. Stamps are local, one per worktree; rerun `verify` after a fresh clone.
+not invalidate the check. Stamps are local, one per worktree; rerun `verify` after
+a fresh clone.
 
 The gate judges the checkout it runs in, for a hook the session's current
 checkout. It counts no file under `.sako/`, so a scope there only locks paths
@@ -283,19 +284,20 @@ here once merged; until then, `check --gate --session <id>` run there judges it.
 **Recorded** counts files edited since the session started or committed since then,
 deletions and both sides of a rename; a file already dirty at start counts only when
 it changes again. A live peer's claimed scope in this checkout is not counted, with
-a note, nor are uncommitted files in a task it closed. A commit is not counted when
-a task another session closed on or after the commit's day, in local time, covers
-it. Without a start record, every uncommitted change counts and commits go
-unchecked; the gate says so. **Proven:** while a claim you still hold covers
+a note, nor are uncommitted files in a task it closed. A closed task no longer
+covers an uncommitted file changed in a later minute than its close. A commit is not
+counted when a task another session closed on or after the commit's day, in local
+time, covers it. Without a start record, every uncommitted change counts and commits
+go unchecked; the gate says so. **Proven:** while a claim you still hold covers
 changed checked files, a stale check is that claim's work in progress, and a close
 whose receipt shows a pass stays proven. Records work, a task whose every scope
 entry lies in `.sako/`, closes without a fresh check while only others moved
 checked content since your start, by edits left uncommitted before it, even once
 committed, or in the scope of a task a live peer in this checkout claimed or
 closed. Its receipt then says "no automated check (records only)", and Proven
-skips it. Any other commit, merge, pull or checkout here counts as yours.
-**Committed** skips files inside a claim you still hold; its fix applies only when
-the owner allows commits, otherwise say the work awaits approval.
+skips it while that holds. Any other commit, merge, pull or checkout here counts as
+yours. **Committed** skips files inside a claim you still hold; its fix applies only
+when the owner allows commits, otherwise say the work awaits approval.
 
 The first line of `check --gate` is its verdict, and its exit code decides. Two
 advisories never block: a claimed, unfinished task without a `handoff.md`, and a
@@ -312,7 +314,7 @@ anywhere in the project's Git repository. It needs no flags. The runtime, this
 method, `install.json`, `config.json` and an empty `work/TASKS.md` land in the main
 checkout's `.sako/`, which is listed in `.git/info/exclude` with the client files
 `init` writes, so nothing tracked changes. The project's instructions stay
-untouched; the start context names the method, the records and the command line.
+untouched.
 
 `init` wires SessionStart, Stop and SessionEnd hooks for each client it finds a
 sign of: the Claude Code or Codex session running it, `.claude/` or `CLAUDE.md`
@@ -358,6 +360,6 @@ It also refreshes SAKO's hooks in linked worktrees that have them. Modified kit
 files refuse; an unmodified one the new choice or release no longer needs is
 deleted. `python3 .sako/sako.py remove` in the main checkout removes unmodified kit
 files, SAKO's hook entries in every worktree and the disposable state;
-`config.json` and `work/` stay, and deleting `.sako/` leaves no trace. The client
-choice goes with `install.json`, so a later `init` detects the clients again. The
-copy in a project cannot seed another project.
+`config.json` and `work/` stay. The client choice goes with `install.json`, so a
+later `init` detects the clients again. The copy in a project cannot seed another
+project.

@@ -19,10 +19,10 @@ In the project, with no flags. The project has a `CLAUDE.md`, so Claude Code get
 ```text
 $ python3 ../sako/sako.py init
 SAKO installed in .sako/ (local). Nothing tracked changed; the folder is listed in .git/info/exclude.
-Records: .sako/work/TASKS.md and DONE.md. They are not in Git yet; git clean -x deletes them.
+Records: .sako/work/TASKS.md and DONE.md. They are not in Git yet; git clean -dx deletes them.
   Keep their history, or share them privately:  uvx sako init --repo [url]
   Commit them with the code:                    uvx sako init --shared
-Hooks written: Claude Code (.claude/settings.local.json), chosen from CLAUDE.md. Start a session to begin. Change the client with: uvx sako init --client claude|codex|none.
+Hooks: Claude Code (.claude/settings.local.json), chosen from CLAUDE.md. Start a session to begin. Change the client with: uvx sako init --client claude|codex|none.
 ```
 
 The check is the project's own `check.py`, set in `.sako/config.json` as `"verify_command": ["python3", "check.py"]`.
@@ -34,7 +34,7 @@ The owner opens the agent in their coding tool. Its hook registers the existing 
 ```text
 $ # Claude Code's SessionStart hook (demo-agent)
 sako 0.6.0 · work /work/greeting (main @ 689762746)
-This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-agent
 your marker: sk-0115-7a281dacac30
@@ -65,7 +65,7 @@ SAKO gate: 1 problem(s) before you stop:
 
 ## 3. The agent fixes it
 
-It claims the task and runs the check, which fails: the output lacks the comma and the exclamation mark.
+It claims the task and runs the check, which fails because the output lacks the comma and the exclamation mark.
 
 ```text
 $ python3 .sako/sako.py claim T-1 --session demo-agent
@@ -92,7 +92,7 @@ $ python3 .sako/sako.py close T-1 --session demo-agent --evidence "greeting.py p
 T-1: done; recorded locally, not committed
 ```
 
-Stopping now is refused again: the work is closed but not committed.
+Stopping now is refused again, since the work is closed but not committed.
 
 ```text
 $ # Claude Code's Stop hook (demo-agent)
@@ -143,7 +143,7 @@ The owner opens a new conversation in the coding tool. Its hook checks it in wit
 ```text
 $ # Claude Code's SessionStart hook (demo-next)
 sako 0.6.0 · work /work/greeting (main @ 7500e251e)
-This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file. Project instructions and the owner's choices come first.
+This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next
 your marker: sk-0115-a5133dc77184

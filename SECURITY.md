@@ -18,8 +18,8 @@ a printed command that runs something other than SAKO, task text or records that
 run as code, and records or settings changed without a command asking for it.
 
 Not a vulnerability: an agent stopping after the gate refused once. The finish gate
-is feedback, not a security boundary. It refuses a stop once and names the fix, and
-a bug in a hook lets the session go ([limits](docs/limits.md#hooks)).
+is feedback, not a security boundary, and a bug in a hook lets the session go
+([limits](docs/limits.md#hooks)).
 
 ## What SAKO reads and sends
 
@@ -29,8 +29,7 @@ clone that `init --repo <url>` makes. Everything SAKO keeps stays in the project
 `.sako/` and the client files listed in
 [what init changes](docs/update-and-remove.md#what-init-changes).
 
-A hook reads only these, and prints the start context or the gate's findings back to
-the agent:
+A hook reads only these, and prints its context or findings to the agent:
 
 - the event the client passes on standard input
 - `CLAUDE_PROJECT_DIR`, a second place to look for the kit
@@ -39,3 +38,5 @@ the agent:
 - outside Windows, `SAKO_AGENT_PID`, and `/proc` or `ps`, to judge which sessions
   are live
 - the repository's Git state and files, `.sako/` included
+
+`init` also reads `CLAUDECODE` and `CODEX_THREAD_ID` to tell which client runs it.
