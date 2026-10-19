@@ -633,7 +633,7 @@ def content_id(root: Path, paths: list[str]) -> str:
     for relative in covered_files(root, paths):
         path = root / relative
         if path.is_symlink() or path.is_file():
-            kind = "link" if path.is_symlink() else str(path.stat().st_mode & 0o111)
+            kind = "link" if path.is_symlink() else str(path.stat().st_mode & 0o100)  # the owner's executable bit, the only one Git tracks
             digest.update(f"{relative}\0{kind}\0{fingerprint(root, relative)}\0".encode("utf-8", "surrogateescape"))
     return digest.hexdigest()[:16]
 
@@ -746,7 +746,7 @@ def fingerprint(root: Path, relative: str) -> str:
     if path.is_symlink():
         data = b"link:" + os.readlink(path).encode("utf-8", "surrogateescape")
     elif path.is_file():
-        data = path.read_bytes() + (b"\0exec" if path.stat().st_mode & 0o111 else b"")  # the stamp counts the bit too
+        data = path.read_bytes() + (b"\0exec" if path.stat().st_mode & 0o100 else b"")  # the bit Git tracks, which the stamp counts too
     elif path.is_dir():
         data = b"commit:" + git(path, "rev-parse", "HEAD", check=False).encode()
     else:

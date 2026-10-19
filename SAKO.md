@@ -240,7 +240,7 @@ Read this when a gate finding or a check result needs explaining. `verify` runs 
 configured argument array at the top of the checkout; use `["bash",
 "scripts/check.sh"]` for shell features. It stamps a pass only when the checked
 content and the command stay unchanged during the run; a failure deletes old
-evidence. The stamp covers the content, paths, symlink text and executable bits of
+evidence. The stamp covers the content, paths, symlink text and executable bit of
 unignored files under `verify_paths`; an empty list covers everything outside
 `.sako/`, documentation included. Name product subtrees if documentation-only work
 should not invalidate the check. Dependencies and services need another check by

@@ -93,14 +93,21 @@ as a lost task. Literal cell pipes and multiline cells are unsupported. Task
 cells can contain references; they are not a full issue schema.
 
 The fingerprint includes tracked and untracked unignored files in selected paths,
-file bytes, symlink text, and executable bits. Ignored artifacts, submodule internals,
-symlink target content outside the covered files, services, secrets, environment,
-and dependencies not represented there are not evidence-covered. Include relevant
-tests, manifests, and lockfiles; independently check external behavior when needed.
+file bytes, symlink text, and the owner's executable bit, the one Git tracks.
+Ignored artifacts, submodule internals, symlink target content outside the covered
+files, services, secrets, environment, and dependencies not represented there are
+not evidence-covered. Include relevant tests, manifests, and lockfiles; independently
+check external behavior when needed.
 A check that writes files where the fingerprint looks, such as Python's `__pycache__`
 or a build folder, changes the content it checks: `verify` names those files, and
 the gate says to delete or ignore generated ones. List them in `.gitignore`, or keep
 the check from writing them (`python3 -B -m unittest`).
+
+The gate and `close` read a session's changes from Git, and from the start record for
+files already uncommitted when the session started. With `core.fileMode` set to false,
+Git ignores the executable bit. A change to only that bit, on a file with no
+uncommitted changes at the start, then makes the check stale without counting as the
+session's change. Run `verify` after such a change.
 
 The before/after fingerprint detects persistent changes during a check, not an
 edit that changes and returns to identical bytes during the run. Verification is

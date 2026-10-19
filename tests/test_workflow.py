@@ -613,9 +613,11 @@ class Workflow(unittest.TestCase):
         self.assertEqual((self.root / ".sako/work/DONE.md").read_text().count("| T-1 |"), 1)
 
     @unittest.skipIf(fixture.WINDOWS, "Windows keeps no executable bit")
-    def test_content_evidence_includes_executable_mode(self):
+    def test_content_evidence_includes_the_executable_bit_git_tracks(self):
         fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": ["src"]})})
         self.assert_ok(self.run_cli("verify"))
+        os.chmod(self.root / "src/app.py", 0o655)
+        self.assertIn("evidence: fresh", self.run_cli("check")[1], "Git tracks only the owner's bit, so the others' are no content")
         os.chmod(self.root / "src/app.py", 0o755)
         self.assertIn("evidence: stale", self.run_cli("check")[1])
 

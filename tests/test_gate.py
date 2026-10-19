@@ -660,6 +660,25 @@ class Gate(unittest.TestCase):
         self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
         self.assertIn("evidence is stale", refusal.stderr, "so the session's own mode change needs the check")
 
+    @unittest.skipIf(fixture.WINDOWS, "Windows keeps no executable bit")
+    def test_a_change_to_executable_bits_git_does_not_track_moves_neither_the_check_nor_the_session(self):
+        fixture.write(self.root, {"src/lib.py": "x = 1\n"})
+        fixture.commit_all(self.root, "A library")
+        fixture.write(self.root, {"src/app.py": "print('a draft from before this session')\n", "src/new.py": "y = 2\n"})
+        for name, mode in (("app.py", 0o744), ("new.py", 0o644), ("lib.py", 0o644)):
+            os.chmod(self.root / "src" / name, mode)
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Plan", "--done-when", "Written", "--scope", ".sako/work/plan.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        for name, mode in (("app.py", 0o755), ("new.py", 0o654), ("lib.py", 0o654)):  # dirty, new and clean at start
+            os.chmod(self.root / "src" / name, mode)
+        self.assertIn("evidence: fresh", self.run_in(self.root, "check")[1], "the stamp counts only the owner's bit, as Git does")
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Written", "--session", "s1"))
+        self.assertIn("; no automated check (records only)]", (self.root / ".sako/work/DONE.md").read_text(), "so does the start record")
+        code, out, err = self.stop("s1")
+        self.assertEqual((code, err), (0, ""), out)
+
     def test_a_records_only_task_needs_the_check_once_this_session_moved_checked_content(self):
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
         self.start("s1")
