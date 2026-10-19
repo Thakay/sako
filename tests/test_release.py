@@ -338,9 +338,23 @@ class Words(unittest.TestCase):
         pause = self.section("Pause, handoff and takeover")
         for words in ("A background subagent that a message can resume is paused",
                       "When the next step is the owner's, close what you finished.",
-                      "The owner's act, or deferred work, is its own row, parked by hand with its reason; whoever finishes "
-                      "what it waits for sets it to `open`, then claims and closes it."):
+                      "The owner's act, or deferred work, is its own row, parked with its reason (`edit T-1 --park "
+                      "\"reason\"`); whoever finishes what it waits for opens it (`edit T-1 --open`), then claims and "
+                      "closes it."):
             self.assertIn(words, pause)
+
+    def test_an_unmet_part_becomes_a_new_task_and_a_later_verdict_goes_on_the_row_that_waits_for_it(self):
+        self.assertIn("An unmet or waived part of the completion condition becomes a new task; the receipt names both.",
+                      self.section("Daily loop"))
+        self.assertIn("A completion condition names what the closing session can observe; a later verdict, such as a "
+                      "reviewer's or the owner's, goes on the row that waits for it.", self.section("Task intake"))
+
+    def test_the_owner_learns_where_things_stand_from_the_planner_next_and_status(self):
+        self.assertIn("| Where things stand, for the owner | The planner for its items, `next` for ready and waiting rows, "
+                      "`status` for live peers; a progress tracker names task IDs and never copies their state |",
+                      self.section("Records"))
+        self.assertIn("A parked row whose reason waits on a plan item is closed or reopened in the step that ticks that item.",
+                      self.section("Task intake"))
 
 
 class Demo(unittest.TestCase):

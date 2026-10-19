@@ -23,7 +23,7 @@ command line the start context prints.
    start and why. For new work, run
    `add "task" --done-when "observable result" --scope src/`, then
    `claim T-1 --session <id>` with the returned ID. Keep scopes narrow and widen
-   them in the ledger before the work grows. If nothing fits, return to the
+   them with `edit` before the work grows. If nothing fits, return to the
    selected planner.
 3. **Work and check.** Use the project's own tools and checks. When a check is
    configured, `verify` runs it, so it replaces a separate run, and records a
@@ -34,7 +34,9 @@ command line the start context prints.
    moves the row to the done record with a receipt: your evidence, then the
    claim's marker and time, the close time, and what the check said and at which
    commit. State the outcome and its limits, not just "done", and cite proof that
-   outlives the session, never a `/tmp` path. Commit the task's work within the
+   outlives the session, never `/tmp` or the handoff folder. An unmet or waived
+   part of the completion condition becomes a new task; the receipt names both.
+   Commit the task's work before the next task writes its files, within the
    owner's authorization, staging explicit paths, or report it as uncommitted.
    SAKO never commits, pushes or deploys.
 5. **Finish.** Run `check --gate --session <id>` (the Stop hook runs it too) and
@@ -61,7 +63,7 @@ A duplicate ID, a source mapped twice, a faulty row, an overlap with your own
 claim and a footprint finding also block. Claimed, unfinished work, advisories and
 notes, such as another session's stale claim, never block. A clear gate means these
 rules passed, not that the owner accepts the result. With a null `verify_command`,
-the receipt says "no automated check", never a pass; do not call that work
+the receipt says "no automated check" in place of a pass; do not call that work
 verified.
 
 ## Records
@@ -74,6 +76,7 @@ verified.
 | A paused task's handoff and notes | `.sako/work/T-<n>-<slug>/`, printed by `claim`; you delete it at close |
 | Unresolved decisions | The affected task or the project's context: the question, any assumption, who decides |
 | The owner holds agreed work ("wait until I try it") | That work's row, `parked` with the reason, so a fresh session waits too |
+| Where things stand, for the owner | The planner for its items, `next` for ready and waiting rows, `status` for live peers; a progress tracker names task IDs and never copies their state |
 
 ```markdown
 | ID | Pri | Task | Done when | Status | Scope | After | Source |
@@ -87,8 +90,9 @@ claiming session's marker. `After` lists prerequisite IDs. Scopes are
 repository-relative path prefixes; `.` covers everything. The done record keeps
 `ID | Task | Done when | Receipt | Scope | Source`. IDs are never reused; park a
 dropped row instead of deleting it. Columns are read by name, in any order, and
-columns you add are kept. Keep a cell on one line, without literal pipes. Hand
-edits are fine, and commands change only their own rows.
+columns you add are kept. Keep a cell on one line, without literal pipes. Change
+Scope, After, Done when and Status with `edit`, Task and Pri by hand; commands
+change only their own rows.
 
 The records' footprint, which `status` names, is local (out of Git, so
 `git clean -dx` deletes them), repo (their own repository inside `.sako/`) or shared
@@ -96,7 +100,8 @@ The records' footprint, which `status` names, is local (out of Git, so
 
 Put each discovery where the next reader needs it: an invariant in the code or test
 that enforces it, a product choice in the project's context, progress and traps in
-the task's handoff. Reference that home from the receipt rather than copying it.
+the task's handoff. Reference a lasting home from the receipt rather than copying
+it.
 
 ## Read when needed
 
@@ -122,17 +127,25 @@ scope and known prerequisites; add only details that change execution.
    reference such as `PLAN.md#N1` for `--source`. Give each local action from one
    upstream item its own reference, and reuse it exactly on later intake.
 2. **Record or reuse it.** Put the outcome in the task text and the completion
-   condition in `--done-when`. Declare the files with `--scope`, including a source
-   document the task will update. Pass the planner's priority with `--pri` and
-   prerequisites with `--after`:
+   condition in `--done-when`. A completion condition names what the closing
+   session can observe; a later verdict, such as a reviewer's or the owner's, goes
+   on the row that waits for it. Declare the files with `--scope`, including a
+   source document the task will update. Pass the planner's priority with `--pri`
+   and prerequisites with `--after`:
 
    ```sh
    python3 .sako/sako.py add "Discover note names" --done-when "Filtering and unchanged inputs are checked" --source PLAN.md#N1 --pri P1 --scope src/ --scope tests/
-   python3 .sako/sako.py add "Print sorted names" --done-when "The agreed sample matches" --source PLAN.md#N2 --after T-1 --scope preview.py
+   # prints T-4: open; recorded locally, not committed
+   python3 .sako/sako.py add "Print sorted names" --done-when "The agreed sample matches" --source PLAN.md#N2 --after T-4 --scope preview.py
    ```
 
-   Use the IDs the command returns. Prerequisites release when all are done;
-   `next` ranks what is ready by priority, then row order.
+   Take each ID from what `add` prints, never a predicted number. `add` numbers
+   past the highest task ID written anywhere in TASKS.md and DONE.md, those in
+   sources and receipts included, and another session may add a task between your
+   commands. The
+   [intake recipes](https://github.com/Thakay/sako/blob/main/docs/intake-recipes.md#a-phase-plan)
+   show a one-line capture. Prerequisites release when all are done; `next` ranks
+   what is ready by priority, then row order.
 3. **Handle repeat or changed input.** The same source, task, completion
    condition, scope and prerequisites reuse the existing ID, completed work
    included. A new `--pri` updates an unfinished task's priority and says so.
@@ -144,10 +157,11 @@ scope and known prerequisites; add only details that change execution.
 4. **Return the result.** Before starting, check that the source item still
    applies. When returning the result edits a file the check covers, such as
    ticking the item's box, make that edit before `verify` and `close`; an edit
-   after close needs a fresh check. After close, compare the result with the
-   upstream acceptance and return the evidence through the project's authorized
-   procedure, or report that update as pending. Local completion does not complete
-   a larger upstream item.
+   after close is new work, with its own task and a fresh check. A parked row whose
+   reason waits on a plan item is closed or reopened in the step that ticks that
+   item. After close, compare the result with the upstream acceptance and return
+   the evidence through the project's authorized procedure, or report that update
+   as pending. Local completion does not complete a larger upstream item.
 
 Source references are exact identifiers; the runtime does not fetch, interpret,
 watch or synchronize them. When a source changes, you judge what it means.
@@ -206,8 +220,8 @@ it.
 
 A background subagent that a message can resume is paused, not finished. When the
 next step is the owner's, close what you finished. The owner's act, or deferred
-work, is its own row, parked by hand with its reason; whoever finishes what it
-waits for sets it to `open`, then claims and closes it.
+work, is its own row, parked with its reason (`edit T-1 --park "reason"`); whoever
+finishes what it waits for opens it (`edit T-1 --open`), then claims and closes it.
 
 A claim left on purpose for another session reads as stale to every other session
 until it is taken over. Two rows avoid that, the second listing the first in
@@ -217,17 +231,22 @@ A new session reads the records, the handoff and the relevant Git diff first. Fo
 an ended session, `status --session <its ID>`, not its marker, shows its rows and
 counts this checkout's uncommitted changes, not its commits. A live owner cannot be
 replaced. For a stale claim, inspect its work, then take it over with
-`claim T-1 --session <new-id> --takeover "reason"` or park it. Until a resume or
-takeover, the holder's uncommitted files count against sessions started before
-they changed; once the row is parked, they count until a claim covers them. Take
-over the holder's other overlapping claims in turn, as the claim line asks. A
-takeover moves the claim, not the previous holder's uncommitted files, which count
-once they differ from your start record.
+`claim T-1 --session <new-id> --takeover "reason"`, and finish it or park it with
+`edit`. Until a resume or takeover, the holder's uncommitted files count against
+sessions started before they changed; once the row is parked, they count until a
+claim covers them. Take over the holder's other overlapping claims in turn, as the
+claim line asks. When two ended sessions hold overlapping claims, neither can be
+taken over until a hand edit narrows one Scope. A takeover moves the claim, not
+the previous holder's uncommitted files, which count once they differ from your
+start record.
 
-Leaving releases nothing, so close finished work and hand off the rest first. A
-resume keeps the session ID, marker key and claims, but after an end, as when the
-client exits, it takes a new start record and the gate counts only later changes.
-In Claude Code, `/clear` and a fork start a new session with its own ID.
+Leaving releases nothing, so close finished work and hand off the rest first; to
+release a claim that no agent will resume, open or park it with `edit`. A resume
+keeps the session ID, marker key and claims, but after an end, as when the client
+exits, it takes a new start record and the gate counts only later changes. The
+start context lists the claims you hold, each with its scope and whether its
+handoff is written, and `status` lists your claimed and closed rows. In Claude
+Code, `/clear` and a fork start a new session with its own ID.
 
 Presence judges liveness by the host process where that process is visible, and
 on Linux and WSL a restart ends it. A client's sandbox (Codex runs agent commands
@@ -247,10 +266,17 @@ refused; never delete completed evidence blindly.
 Read this when another session or a subagent works in this repository. Every
 worktree uses the main checkout's `.sako/`, so sessions share one ledger, one
 numbering and one lock. A claim refuses a live owner and a scope that overlaps
-another session's claim. The lock serializes `add`, `claim` and `close` only, not
-application edits, hand edits of the records, Git's index or other clones.
-Keep scopes disjoint, coordinate direct record edits, and stage explicit paths.
-SAKO does not schedule agents or merge their edits.
+another session's claim. The lock serializes `add`, `claim`, `edit` and `close`
+only, not application edits, hand edits of the records, Git's index or other
+clones. Only a claim's holder edits its row. A path `edit` adds to a claimed scope
+meets the same overlap rule as a claim; a narrowing never does, and files already
+changed in the dropped paths then read as unrecorded. Keep scopes disjoint,
+coordinate direct record edits, and stage explicit paths. SAKO does not schedule
+agents or merge their edits.
+
+`start` and `status` show each live peer's claims, its commits since its start and
+the uncommitted paths in its checkout, yours included when you share one. In the
+repo footprint, `status` also lists the records commits made since your start.
 
 In Claude Code, as in Codex, a subagent's shell carries its parent's session ID, so
 a command there without `--session` acts as the parent. A helper inside the
@@ -260,6 +286,9 @@ evidence names it with its commits. An agent holding its own claim gets its own 
 in its brief and passes `--session` on every command, `end` included. Claude Code
 sends a subagent's stop to SubagentStop, which SAKO does not wire, and in use
 subagents ran no session hooks, so a worktree only they use needs no `init`.
+
+When you close work you did not build, name its builder in the receipt. Cite a
+commit that a kept, pushed branch holds, such as the landed commit after a rebase.
 
 ## The gate and checks in detail
 
@@ -272,8 +301,19 @@ the check runs; a finished run that earns no stamp deletes it. Output goes to
 stamp covers the content, paths, symlink text and executable bit of unignored
 files under `verify_paths`; an empty list covers everything outside `.sako/`,
 documentation included. Name product subtrees if documentation-only work should
-not invalidate the check. Stamps are local, one per worktree; rerun `verify` after
-a fresh clone.
+not invalidate the check. Each checkout writes only its own stamp; rerun `verify`
+after a fresh clone.
+
+A pass in another checkout that shares this `.sako/` counts here on identical
+checked content and command, even after a run here failed, which deletes only this
+checkout's stamp; `status`, the start context and the receipt name where it ran.
+That checkout's ignored files and dependencies are not proven here.
+
+`checks` in `.sako/config.json` maps names, such as `browser`, to more argument
+arrays over the same `verify_paths`. `verify NAME` runs one under the same rules,
+with its own stamp and logs, and one checkout runs one check at a time. `status`
+shows each, and a close adds "NAME pass TIME" to the receipt for each fresh one. A
+named check is evidence, never a gate rule.
 
 The gate judges the checkout it runs in, for a hook the session's current
 checkout. It counts no file under `.sako/`, so a scope there only locks paths
@@ -282,21 +322,30 @@ here once merged; until then, `check --gate --session <id>` run there judges it.
 
 **Recorded** counts files edited since the session started or committed since then,
 deletions and both sides of a rename; a file already dirty at start counts only when
-it changes again. A live peer's claimed scope in this checkout is not counted, with
-a note, nor are uncommitted files in a task it closed. A closed task no longer
-covers an uncommitted file changed in a later minute than its close. A commit is not
-counted when a task another session closed on or after the commit's day, in local
-time, covers it. Without a start record, every uncommitted change counts and commits
-go unchecked; the gate says so. **Proven:** while a claim you still hold covers
-changed checked files, a stale check is that claim's work in progress, and a close
-whose receipt shows a pass stays proven. Records work, a task whose every scope
-entry lies in `.sako/`, closes without a fresh check while only others moved
-checked content since your start, by edits left uncommitted before it, even once
-committed, or in the scope of a task a live peer in this checkout claimed or
-closed. Its receipt then says "no automated check (records only)", and Proven
-skips it while that holds. Any other commit, merge, pull or checkout here counts as
-yours. **Committed** skips files inside a claim you still hold; its fix applies only
-when the owner allows commits, otherwise say the work awaits approval.
+it changes again. A commit after the start revision dated in the minute before the
+start counts too, since a wall clock can step back. A live peer's claimed scope in
+this checkout is not counted, with a note, nor are uncommitted files in a task it
+closed. A closed task no longer covers an uncommitted file written in a later minute
+than its close. The gate labels such a file "changed after you closed T-1", or
+names the live peer here that closed it, and its fix first offers a commit under
+that task's title, for content that is still its work, only rewritten by a stash, a
+Git hook, a formatter or an editor save. A commit is not counted when a task
+another session closed on or after the commit's day, in local time, covers it.
+Without a start record, every uncommitted change counts and commits go unchecked;
+the gate says so.
+
+**Proven:** while a claim you still hold covers changed checked files, a stale check
+is that claim's work in progress, and a close whose receipt shows the gate's check
+pass stays proven. Such a close also stays proven while only others moved checked
+content since your start, by edits left uncommitted before it, even once committed,
+or by edits and commits in the scope of a task a live peer in this checkout
+claimed, or closed no earlier than the minute the file was last written. Any other
+commit, merge, pull or checkout here counts as yours. Records work, a task whose
+every scope entry lies in `.sako/`, closes without a fresh check while only others
+moved checked content; its receipt then says "no automated check (records only)",
+and Proven skips it while that holds. A named check's pass never stands in for the
+gate's check pass. **Committed** skips files inside a claim you still hold; its fix
+applies only when the owner allows commits, otherwise say the work awaits approval.
 
 The first line of `check --gate` is its verdict, and its exit code decides. Two
 advisories never block: a claimed, unfinished task without a `handoff.md`, and a
@@ -329,10 +378,11 @@ changed; `init` says what to edit by hand. A client that reads neither hooks
 nor skills can be pointed to `.sako/SAKO.md` in its instructions.
 
 Configure the check in `.sako/config.json`: `verify_command` as an argument array,
-such as `["python3", "-B", "-m", "unittest"]`, and `verify_paths`. In a new linked
-worktree, run `init` there. It wires that worktree for the clients the main
-checkout chose and, for Codex, a writable root for the main `.sako/`, which Codex
-reads once it trusts the project. The records stay in the main checkout.
+such as `["python3", "-B", "-m", "unittest"]`, `verify_paths`, and any named
+`checks`. In a new linked worktree, run `init` there. It wires that worktree for
+the clients the main checkout chose and, for Codex, a writable root for the main
+`.sako/`, which Codex reads once it trusts the project. The records stay in the
+main checkout.
 
 Two footprints put the records in Git. `init --repo [url]` gives them their own
 repository inside `.sako/`, still out of the code's. Its `.gitignore` leaves out
