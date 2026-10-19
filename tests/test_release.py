@@ -246,12 +246,69 @@ class Budgets(unittest.TestCase):
         counts = {name: len(text.split()) for name, text in
                   (("skill", skill), ("template", template), ("start context", context), ("method", "".join(required)))}
         self.assertLessEqual(sum(counts.values()), 1500, counts)
+        stops, guide = " ".join("".join(required).split()), " ".join(skill.split())  # folded, so a rewrap never breaks a pin
+        self.assertIn("Read this file down to its **Read when needed** table.", stops)
+        self.assertIn("Stop here; open a section below only when its situation applies:", stops)
+        self.assertIn("down to its **Read when needed** table and follow its daily loop; open a later section only when its "
+                      "situation applies.", guide)
+        for text in (stops, guide):
+            self.assertIn("need no task record until they change a file; `add` and `claim` come before that change.", text)
+        self.assertIn("If `.sako/` is absent and the owner asks to adopt SAKO, run `uvx sako init`", guide)
 
     def test_the_loop_keeps_end_for_sessions_that_ran_start(self):
         """With hooks, an agent that ran end itself left its own Stop gate without a start record."""
         loop = (fixture.SAKO.parent / "SAKO.md").read_text().split("## Daily loop")[1].split("\n## ")[0]
         self.assertIn("If you ran `start` yourself, run\n   `end --session <id>` last.", loop)
         self.assertIn("With hooks, the client ends the session; do not run\n   `end`", loop)
+
+
+class Words(unittest.TestCase):
+    """Sentences the method must keep, compared with whitespace folded so a rewrap never breaks a pin."""
+
+    ROOT = fixture.SAKO.parent
+
+    def text(self, name):
+        return " ".join((self.ROOT / name).read_text(encoding="utf-8").split())
+
+    def section(self, title):
+        """One section of SAKO.md, from its heading to the next one."""
+        return self.text("SAKO.md").split(f"## {title} ")[1].split(" ## ")[0]
+
+    def test_the_gate_documents_claim_only_what_it_reads(self):
+        done = self.section("Done means")
+        for words in ("every file changed in this checkout since the session started, outside `.sako/`, belongs to a task it "
+                      "claimed or closed", "in the repo and shared footprints, its receipt too",
+                      "A duplicate ID, a source mapped twice, a faulty row, an overlap with your own claim and a footprint "
+                      "finding also block", "notes, such as another session's stale claim, never block"):
+            self.assertIn(words, done)
+        self.assertIn("It counts no file under `.sako/`, so a scope there only locks paths against other claims",
+                      self.section("The gate and checks in detail"))
+
+    def test_a_subagent_carries_its_parents_session_id(self):
+        beside = self.section("Working beside other sessions")
+        for words in ("a subagent's shell carries its parent's session ID, so a command there without `--session` acts as "
+                      "the parent", "uses the parent's ID as the same holder and never runs `end`",
+                      "the parent's close evidence names it with its commits",
+                      "An agent holding its own claim gets its own ID in its brief and passes `--session` on every command, "
+                      "`end` included", "a worktree only they use needs no `init`"):
+            self.assertIn(words, beside)
+        for name in ("SAKO.md", "skills/sako/SKILL.md"):
+            self.assertNotIn("carries its own", self.text(name), name)
+
+    def test_a_claim_left_on_purpose_reads_as_stale_until_taken_over(self):
+        self.assertIn("A claim left on purpose for another session reads as stale to every other session until it is taken "
+                      "over. Two rows avoid that,", self.section("Pause, handoff and takeover"))
+
+    def test_a_claim_is_kept_only_for_work_an_agent_will_resume(self):
+        loop = self.section("Daily loop")
+        self.assertIn("Keep a claim only for work an agent will resume", loop)
+        self.assertIn("A session that keeps a claim to resume it does not run `end`", loop)
+        pause = self.section("Pause, handoff and takeover")
+        for words in ("A background subagent that a message can resume is paused",
+                      "When the next step is the owner's, close what you finished.",
+                      "The owner's act, or deferred work, is its own row, parked by hand with its reason; whoever finishes "
+                      "what it waits for sets it to `open`, then claims and closes it."):
+            self.assertIn(words, pause)
 
 
 class Demo(unittest.TestCase):
