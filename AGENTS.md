@@ -12,7 +12,7 @@ evidence (validation).
 ## Read path
 
 1. This file, then [CONTRIBUTING.md](CONTRIBUTING.md) for the design budgets and the
-   [principles](README.md#why-it-stays-small) it points to.
+   [principles](README.md#simple-not-small) it points to.
 2. [SAKO.md](SAKO.md) before changing behavior or planning, and the
    [guarantees](docs/validation.md#guarantees) a change must keep.
 3. `tests/selftest.py` to see what is proven.

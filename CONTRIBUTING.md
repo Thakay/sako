@@ -18,7 +18,7 @@ For new machinery, show the observed problem and why the existing task record,
 instructions, or commands cannot handle it. Keep planning practices replaceable.
 An external integration must define source identity, status ownership, and recovery.
 A change serves the finish gate, the ledger, installing, or leaving cleanly, and
-keeps to the [principles](README.md#why-it-stays-small); a change that serves none of
+keeps to the [principles](README.md#simple-not-small); a change that serves none of
 these waits.
 
 A pull request explains the problem, the resulting behavior, how it was checked, and

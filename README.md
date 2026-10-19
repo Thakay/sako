@@ -60,6 +60,10 @@ For a Python project using unittest:
 
 Use your own project's command. On Windows, use `python` and follow the
 [platform notes](https://github.com/Thakay/sako/blob/main/docs/limits.md#environment).
+You can also add named checks, such as browser tests, under
+[`checks`](https://github.com/Thakay/sako/blob/main/SAKO.md#the-gate-and-checks-in-detail)
+and run one with SAKO's `verify NAME`. A close records its fresh pass in the
+receipt, and the gate never requires it.
 
 Open a fresh session in your coding tool and ask for one small change. The
 agent checks in with SAKO, then follows the installed instructions to record,
@@ -79,22 +83,28 @@ explains setup and how to confirm the hooks ran.
 - **Bring an existing project.** Turn your notes, issues, or plan into
   [clear tasks](https://github.com/Thakay/sako/blob/main/docs/intake-recipes.md).
 - **Add parallel work.** Use separate task scopes to coordinate sessions in
-  [one repository and its worktrees](https://github.com/Thakay/sako/blob/main/SAKO.md#working-beside-other-sessions).
-  For work across machines, follow the
+  [one repository and its worktrees](https://github.com/Thakay/sako/blob/main/SAKO.md#working-beside-other-sessions),
+  and widen one with the `edit` command before the work outgrows it. Each session
+  sees its live peers' claims, commits and uncommitted files, and a check that
+  passed in one worktree counts in another with identical checked content. For
+  work across machines, follow the
   [tracker migration guide](https://github.com/Thakay/sako/blob/main/docs/move-to-a-tracker.md).
 - **Choose where records live.** Keep them local, give them a separate Git
   repository, or share them with your code. See the
   [storage choices](https://github.com/Thakay/sako/blob/main/SAKO.md#install-update-and-remove).
 
-## Why it stays small
+## Simple, not small
+
+Simple is about everyday use, not size. SAKO gains a capability when real use
+asks for it, and only then.
 
 1. **Keep evidence visible.** Review the task, its check result, and the changes
    together. You decide what good work means.
 2. **Give each fact one home.** Your plan holds intent, the task records hold
    ownership and evidence, and Git holds the changes.
-3. **Keep everyday use simple.** Bring your agent, planner, and checks. The
-   runtime is one Python file using the standard library, with no service or
-   telemetry.
+3. **Keep everyday use simple.** Bring your agent, planner, and checks. One
+   command installs SAKO, and its runtime is one standard-library Python file you
+   can read, with no service or telemetry.
 4. **Make adoption reversible.** The default install changes no tracked files.
    [Update or remove SAKO](https://github.com/Thakay/sako/blob/main/docs/update-and-remove.md)
    while keeping your task records.

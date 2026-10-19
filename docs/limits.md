@@ -202,7 +202,7 @@ installed in the project and no service to run. Daily commands and hooks use tha
 copy, offline. The cost is an explicit update step and one folder in the project.
 Python's standard library handles the structured records, atomic writes, locks and
 fingerprints in one file; your application can use any language, and its check can
-be any command. The [principles](../README.md#why-it-stays-small) give the reasoning.
+be any command. The [principles](../README.md#simple-not-small) give the reasoning.
 
 That copy cannot install SAKO into another project; installing and updating need
 the package or a checkout. SAKO has no update service; review what you install, and

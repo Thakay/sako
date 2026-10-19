@@ -13,15 +13,16 @@ records allow one writer at a time. Move once; do not run two task systems.
 
 ## The move, for any tracker
 
-1. **Settle claimed work.** Close finished tasks with evidence; park the rest by
-   hand (Status `parked: <reason>`). Commit, then fix what
+1. **Settle claimed work.** Close finished tasks with evidence and park the rest
+   with `edit T-n --park "reason"`, which releases the claim; take over a stale
+   claim first (`claim T-n --takeover "reason"`). Commit, then fix what
    `check --gate --session <id>` names.
 2. **Create one item per row left in `TASKS.md`.** The Task text becomes the title
    and Done when becomes the acceptance (a Beads field; elsewhere, the body). Scope,
    Source, the row's ID and any handoff notes go in the body. A parked row becomes a
-   parked item with its reason. Map Pri with this table, then set the row's Status to
-   `parked: moved to <item id>`: it keeps its ID, cannot be claimed, and records the
-   mapping.
+   parked item with its reason. Map Pri with this table, then park the row with
+   `edit T-n --park "moved to <item id>"`, so it keeps its ID, cannot be claimed,
+   and records the mapping.
 
    | SAKO | Beads | GitHub label | Linear |
    |---|---|---|---|
