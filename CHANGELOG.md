@@ -5,6 +5,88 @@ Notable changes to SAKO, one entry per release. The format follows
 [Semantic Versioning](https://semver.org/). SAKO is alpha software, so commands and
 file formats can change in any 0.x release.
 
+## [0.7.0] - 2026-10-19
+
+Agents change rows through a command instead of by hand, sessions see each other's
+progress, a pass in one worktree proves identical content in another, and named
+checks sit beside the gate's check. A stop that the gate cleared by mistake when the
+clock stepped back now blocks. The runtime may grow to 4,000 lines and wraps at 100
+columns. Task records from 0.6.0 still parse. SAKO remains alpha software.
+
+From your project's Git repository, install with `uvx sako@0.7.0 init`, or update an
+existing installation with `uvx sako@0.7.0 init --update`.
+
+To update from 0.6.0, follow these steps:
+
+1. Update between working sessions, in the main checkout. The hook command is the
+   same as in 0.6.0, so Codex keeps its trust in SAKO's hooks.
+2. End any session left open across the update, then start it again with the same
+   ID, which keeps its claims and takes a new start record, or start a new one.
+3. Run `verify` when a check is configured. The new version makes every recorded
+   pass stale.
+
+### Added
+
+- `edit T-n` changes a row under the ledger lock: its scope (`--scope` replaces,
+  `--widen` adds), its prerequisites (`--after`, where `-` clears them), its done-when,
+  or its state (`--park REASON`, `--open`). A claimed row is edited only by its
+  holder, a path new to its scope faces claim's overlap rule, and the edited row
+  passes the row checks or nothing is written. Task and Pri stay hand edits, and a
+  done row stays as history.
+- Named checks. `config.json` takes `checks`, a map of names to argument arrays over
+  the same `verify_paths`. `verify NAME` runs one and keeps its own stamp and logs,
+  `status` shows each as fresh, stale or none, and a close adds `NAME pass TIME` for
+  each fresh one. A named check is evidence, never one of the gate's rules.
+- A pass recorded in another worktree or in the main checkout counts when its
+  content and command match this checkout's, and `status`, `start` and the receipt
+  say where it ran.
+- Start, resume and compact contexts list the session's own rows with their handoff
+  state and scope, and the header names the start revision. Each live peer's line
+  shows its commits since its start and its uncommitted paths in its own checkout,
+  read within 2 seconds. In the repo footprint, `status` lists the records committed
+  since you started.
+
+### Changed
+
+- Refusals and findings that sent an agent to hand-edit `.sako/work/TASKS.md` print
+  an `edit` command instead: claim's overlap and missing-scope refusals, the parked
+  refusal, the stale-claim finding and the gate's own overlap finding.
+- A closed task's file rewritten after its close, as by a stash, a Git hook, a
+  formatter or an editor save, is listed under Recorded with the task that closed
+  it, and the fix says to commit it under that task's title when the content is
+  still its work.
+- The Proven rule counts only the gate's own check pass in a receipt, never a named
+  check's. A close whose receipt shows that pass stays proven while only others
+  moved checked content since the session started.
+- The note for a path claimed by a peer in another worktree says its work counts
+  here once merged, and `remove` names a linked worktree's tracked Codex settings
+  file in full.
+- `status` says "landed in the code since you started".
+- The runtime cap is 4,000 lines, and no line of `sako.py` runs past 100 columns.
+
+### Fixed
+
+- The gate dropped a commit made just after the session started when the wall clock
+  stepped back, as WSL's can by a second or two, and could clear a stop it should
+  have blocked. It now lists the session's commits from a minute before its start,
+  still bounded by its start revision. The records line in `status` looks back 5
+  seconds.
+- `verify` timed its run by the wall clock, so a clock stepping back could print a
+  negative time such as `PASS in -1s`. It uses a monotonic clock.
+
+### Known issues
+
+- A live peer in the same checkout can claim a scope that covers this session's
+  closed files. Edits there then count as the peer's under Recorded and Proven until
+  they are committed. The peer's own close still needs a fresh check.
+- Two ended sessions holding overlapping claims still need a hand edit of the
+  ledger, since neither claim can be taken over while they overlap.
+
+### Validation
+
+- Both suites pass on Python 3.10 and 3.12 locally, with 275 tests and 22 scenarios;
+  these counts overlap.
+
 ## [0.6.0] - 2026-10-19
 
 Sessions that share a checkout hold each other up less, and the records say more.
@@ -298,3 +380,4 @@ Install from your project's Git repository with `uvx sako init`. To update later
 [0.5.0]: https://github.com/Thakay/sako/releases/tag/v0.5.0
 [0.5.1]: https://github.com/Thakay/sako/releases/tag/v0.5.1
 [0.6.0]: https://github.com/Thakay/sako/releases/tag/v0.6.0
+[0.7.0]: https://github.com/Thakay/sako/releases/tag/v0.7.0
