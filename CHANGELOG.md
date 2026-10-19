@@ -51,9 +51,9 @@ To update from 0.5.1, follow these steps:
   automated check (records only)", and the Proven rule skips them while that holds;
   Recorded and Committed still apply. Others' changes are edits left uncommitted
   before your session started, committed since or not, and edits or commits in the
-  scope of a task that a live peer in this checkout claimed or closed. Any other
-  commit since your start, and a merge, pull or checkout of older commits, counts
-  as yours.
+  scope of a task that a live peer in this checkout claimed, or closed no earlier
+  than the minute the file last changed. Any other commit since your start, and a
+  merge, pull or checkout of older commits, counts as yours.
 - `verify` writes the check's output to `verify.log` beside the stamp and prints it
   when the check ends, instead of as it runs. A failed run's output also goes to
   `verify-failed.log`, which a later pass leaves in place. The PASS and FAILED lines
@@ -115,12 +115,16 @@ To update from 0.5.1, follow these steps:
   update before anything is written.
 - A tracked client settings file is still left unchanged, and the note `init`
   prints for it now gives the content to write there, SAKO's hooks included, and
-  names the file in full when it is in another checkout. The line that lists the
+  names the file in full when it is in another checkout. When SAKO would take its
+  hooks out of such a file, as when a client is dropped, the note says to remove
+  them there yourself and gives the content without them. The line that lists the
   wired clients begins `Hooks:` instead of `Hooks written:`, since a tracked file
   gets none.
 - `remove` also deletes the client folders it leaves empty, such as
   `.claude/skills/`, so a later `init` no longer detects a client from them, and
-  its last line says that SAKO's lines in `.git/info/exclude` remain to delete.
+  its last line says that SAKO's lines in `.git/info/exclude` remain to delete. It
+  now prints the note for a tracked settings file, which keeps SAKO's hooks until
+  you remove them there.
 - The finding for a stray `.sako/` in a linked worktree says to move or delete it.
 - The method and the skill say to read SAKO.md down to its Read when needed table
   and that questions need no task record until they change a file, with `add` and
@@ -192,6 +196,10 @@ To update from 0.5.1, follow these steps:
   committed earlier was also named for a later task's change in the same scope. Now
   such an edit counts under Recorded unless a claim covers it, and Committed names
   a closed task only for files that last changed no later than the minute it closed.
+  The minute is read with the zone offset in the receipt, so a gate in any time zone
+  judges alike. An edit in the same minute as the close still counts as the closed
+  task's, and a task closed under 0.5.1, whose receipt carries only the close date,
+  covers its scope as before.
 - A gate run in a linked worktree other than the one where the session started no
   longer names files that were uncommitted in the starting checkout. A presence
   entry records the checkout of its start record, and in any other checkout every
@@ -206,10 +214,10 @@ To update from 0.5.1, follow these steps:
 
 ### Validation
 
-- Both suites pass on Python 3.10 and 3.12 locally, with 246 tests and 22
+- Both suites pass on Python 3.10 and 3.12 locally, with 248 tests and 22
   scenarios; these counts overlap.
 - Natively on Windows from Git Bash, with Python 3.14.4 and Git for Windows 2.52.0,
-  246 tests ran with 46 skipped and the scenario suite passed 17 and skipped 5, with
+  248 tests ran with 46 skipped and the scenario suite passed 17 and skipped 5, with
   none failed.
 - CI checks Python 3.10 and 3.14 on Linux, macOS and Windows, plus package building
   and installation. The known [platform limits](docs/limits.md) remain.

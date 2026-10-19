@@ -74,9 +74,9 @@ run before relying on it.
 
 Run `python3 .sako/sako.py remove` in the main checkout. It refuses changed kit
 files before deleting anything, then removes what the table in
-[What init changes](#what-init-changes) says, in every worktree, with folders left
-empty. Git history remains. Delete `.sako/` and SAKO's lines in `.git/info/exclude`
-to leave no trace.
+[What init changes](#what-init-changes) says, in every worktree, and the client
+folders it empties. Git history remains. Delete `.sako/` and SAKO's lines in
+`.git/info/exclude` to leave no trace.
 
 In the repo footprint `remove` also keeps `.sako/.git` and warns when the records
 repository has commits that exist only there. In the shared footprint it deletes the

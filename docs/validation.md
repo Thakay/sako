@@ -1,9 +1,8 @@
 # Validation: guarantees and evidence
 
-What SAKO guarantees, the evidence behind each guarantee, and what that evidence
-cannot show. The evidence comes from synthetic local fixtures, not an outside adopter
-study or a guarantee for every environment; the [method](../SAKO.md) defines the
-behavior in full.
+What SAKO guarantees, the evidence behind each, and what that evidence cannot show.
+The evidence comes from synthetic local fixtures, not an outside adopter study or a
+guarantee for every environment; the [method](../SAKO.md) defines the behavior.
 
 ## Guarantees
 
@@ -12,7 +11,7 @@ behavior in full.
 | 1 | **Three rules and a fix in every finding.** Recorded, Proven and Committed judge what changed in the checkout the gate runs in since the session started, read from Git, the start record and the check stamp; faults in the records and overlaps with the session's claims also block; an absent or failing check never passes; every finding ends with its exact fix | [test_gate.py](../tests/test_gate.py): each rule and exemption, which ledger findings block, the fix in every finding, a close refused without fresh evidence; scenarios `stop_gate`, `verify_evidence`, `invalid_configuration_never_passes`; the [demo](demo.md) | Who made a change, which Git does not show |
 | 2 | **Refuses once, never traps.** A stop is blocked once; a repeated stop, a bug in the hook or a missing kit lets the session go; pausing with a held claim passes; findings about other sessions never block | A repeated stop fails open; claimed, unfinished work passes; handoff advisories and findings about other sessions never block; hooks exit 1, never 2, without the kit; a bug in the hook handler and a hook that cannot start Python let the session go | None |
 | 3 | **A receipt on every finished task.** The completion condition, the evidence, the claim's marker and time, the close time, and what the check said on its own fingerprint and at which commit, or "no automated check", marked "(records only)" for records work closed without the check; never a pass the check did not give | Receipts in each form, records work included; an interrupted close finishes on repeat; the demo's receipt; scenario `greenfield_discovery_without_automated_check` | None |
-| 4 | **Plain, forgiving records.** Markdown tables with at most eight required columns, read by name; your columns and hand edits survive every write; IDs are never reused; a fault names its file and line | Columns by name in any order, your columns kept through close, hand edits, faults with file and line, a bad value held out of `next`; scenario `ledger_findings`; a test holds the required columns at 8 | None |
+| 4 | **Plain, forgiving records.** Markdown tables with at most eight required columns, read by name; your columns and hand edits survive every write; IDs are never reused while their rows stay; a fault names its file and line | Columns by name in any order, your columns kept through close, hand edits, faults with file and line, a bad value held out of `next`; scenario `ledger_findings`; a test holds the required columns at 8 | None |
 | 5 | **One explainable next.** Priority, then row order, among ready tasks; it names its pick and why, what else is ready and what waits | Ranking tests; scenario `next_frontier`; the demo's pickup | None |
 | 6 | **Writes under one lock, across worktrees.** Parallel adds get distinct IDs, one claim wins, overlaps and live owners are refused, a stale takeover needs a reason, and repeated intake reuses its task | Concurrent adds from two worktrees, claim races, unverified holders, repeat intake; scenarios `presence_peers_and_stale_claims`, `scopes_and_overlap`, `interruption_recovery`, `worktrees_share_presence`, `external_plan_intake_and_completion` | Across machines: one writer at a time, stated, not tested |
 | 7 | **One command, nothing tracked changes.** `init` needs no flags, leaves `git status` clean and instructions untouched, names the clients it wired and why, and refuses unsupported platforms and layouts before any write | Detection from each client signal, `--client`, tracked client files left alone, refusals, the package and a checkout installing the same files; scenarios `init_and_hook_dispatch`, `root_refusals`, `invalid_install_has_no_partial_assets`; an offline `uvx` install from the wheel | Live hook delivery beyond the sessions in [compatibility](compatibility.md); Cursor unchecked |
@@ -34,7 +33,7 @@ Skills format. No independent agent or outside user has validated adoption
 judgment.
 
 Last local run on 2026-10-18, on WSL2 (Linux 6.18) with Git 2.43.0:
-both suites pass on Python 3.10.20 and 3.12.3, with 246 tests and 22 scenarios.
+both suites pass on Python 3.10.20 and 3.12.3, with 248 tests and 22 scenarios.
 
 ## Native Windows
 
@@ -44,8 +43,8 @@ Windows 2.52.0:
 
 | Suite | Result |
 |---|---|
-| Unit and integration discovery | 246 run: 200 passed, 46 skipped, none failed, in 210 s |
-| Standalone scenario suite | 17 passed, 5 skipped, none failed, in 32 s |
+| Unit and integration discovery | 248 run: 202 passed, 46 skipped, none failed, in 207 s |
+| Standalone scenario suite | 17 passed, 5 skipped, none failed, in 33 s |
 
 Each skip names why its premise fails there: Codex gets no hooks (12 tests), presence
 is the 24-hour lease (11), symlinks need a privilege that host did not grant (9),
@@ -81,28 +80,28 @@ with the machine, filesystem, repository, cache and check command.
 
 | Measure | Observed |
 |---|---|
-| No client signal: kit and shared skill, no hooks | 6 files, 134,829 bytes |
-| Codex | 7 files, 136,463 bytes |
-| Claude Code, with its own skill copy | 8 files, 137,315 bytes |
-| Both clients | 9 files, 138,949 bytes |
-| Installed method, one document | 3,758 whitespace-separated words |
+| No client signal: kit and shared skill, no hooks | 6 files, 135,085 bytes |
+| Codex | 7 files, 136,719 bytes |
+| Claude Code, with its own skill copy | 8 files, 137,571 bytes |
+| Both clients | 9 files, 139,205 bytes |
+| Installed method, one document | 3,760 whitespace-separated words |
 | Reading for a normal task, lone-session fixture | 1,381 words: skill 128, template preamble 46, start context 132, the method's required part 1,075 |
 | Runtime source | 1,800 lines, one standard-library Python file, within the 1,800-line cap |
-| Initial install with no client signal, one sample | 55.4 ms |
+| Initial install with no client signal, one sample | 58.2 ms |
 | Fingerprint fixture | 101 covered files, 409,609 bytes |
 | Trials per command | 7, median reported in the next rows |
-| `start` | 43.2 ms |
-| `check` | 40.4 ms |
-| `next` | 39.6 ms |
-| `verify`, including a small source-content assertion | 78.5 ms |
-| `check --gate`, no completed rows | 46.6 ms |
+| `start` | 44.3 ms |
+| `check` | 41.9 ms |
+| `next` | 41.1 ms |
+| `verify`, including a small source-content assertion | 79.9 ms |
+| `check --gate`, no completed rows | 48.8 ms |
 
 `start` is sampled before verification has established evidence, and the gate
 fixture has no closed rows, so completed-work fingerprinting is not timed. These are
 byte, word and execution measurements, not model token counts, onboarding time, or
 proof of low overwhelm.
 
-`uv build` makes a wheel of about 47 KB holding `sako/__init__.py`, the method, the
+`uv build` makes a wheel of about 48 KB holding `sako/__init__.py`, the method, the
 task template and the skill, with a `sako` command, and `twine check` passes for it
 and the source archive. With an empty home folder and uv cache,
 `uvx --offline --from` that wheel ran `init` with no flags in a fresh repository

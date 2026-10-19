@@ -213,16 +213,16 @@ A claim left on purpose for another session reads as stale to every other sessio
 until it is taken over. Two rows avoid that, the second listing the first in
 After.
 
-A new session reads the records, the handoff and the relevant Git diff before it
-continues. For an ended session, `status --session <its ID>`, not its marker, shows
-its rows and this checkout's uncommitted changes but not its commits. A live owner
-cannot be replaced. For a stale claim, inspect its work, then take it over with
+A new session reads the records, the handoff and the relevant Git diff first. For
+an ended session, `status --session <its ID>`, not its marker, shows its rows and
+counts this checkout's uncommitted changes, not its commits. A live owner cannot be
+replaced. For a stale claim, inspect its work, then take it over with
 `claim T-1 --session <new-id> --takeover "reason"` or park it. Until a resume or
 takeover, the holder's uncommitted files count against sessions started before
-they changed, even once parked. Take over the holder's other overlapping claims
-too, one after another, as the claim line asks. A takeover moves the claim, not the
-previous holder's uncommitted files, which count once they differ from your start
-record.
+they changed; once the row is parked, they count until a claim covers them. Take
+over the holder's other overlapping claims in turn, as the claim line asks. A
+takeover moves the claim, not the previous holder's uncommitted files, which count
+once they differ from your start record.
 
 Leaving releases nothing, so close finished work and hand off the rest first. A
 resume keeps the session ID, marker key and claims, but after an end, as when the
@@ -233,11 +233,10 @@ Presence judges liveness by the host process where that process is visible, and
 on Linux and WSL a restart ends it. A client's sandbox (Codex runs agent commands
 in one) hides the host's processes, so there, and for a session started inside
 one, presence counts as live for 24 hours after its last `start`, marked
-unverified. A claim held by an unverified session can be taken over once you have
-checked that it stopped. Without `end`, presence stays until its host process
-exits or its 24 hours pass. Do not end a peer's presence without confirming it
-stopped. `SAKO_AGENT_PID` can name a long-lived host process, never a temporary
-shell.
+unverified. A claim held by an unverified session can be taken over once you
+confirm it stopped. Without `end`, presence stays until its host exits or its 24
+hours pass. Do not end a peer's presence without confirming it stopped.
+`SAKO_AGENT_PID` can name a long-lived host process, never a temporary shell.
 
 An interrupted close can leave the same row in both records. Repeat the exact
 close command with the same evidence and session. Conflicting closed content is
@@ -326,7 +325,7 @@ With no sign of a client, a later `init` detects one that appears.
 The shared skill always installs in `.agents/skills/sako/`, and Claude Code gets a
 copy in `.claude/skills/sako/`. Codex runs project hooks only after you trust them;
 `status` says when each client's hook last ran. A tracked settings file is never
-changed; `init` says what to add by hand. A client that reads neither hooks
+changed; `init` says what to edit by hand. A client that reads neither hooks
 nor skills can be pointed to `.sako/SAKO.md` in its instructions.
 
 Configure the check in `.sako/config.json`: `verify_command` as an argument array,

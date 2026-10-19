@@ -338,10 +338,10 @@ def scopes_overlap(first: Row, second: Row) -> bool:
 
 
 def covers(row: Row, path: str, root: Path | None = None) -> bool:
-    """Given the checkout, a done row no longer covers a file changed in a later minute than its close, the receipt's precision."""
+    """Given the checkout, a done row no longer covers a file changed in a later minute than its receipt's close, in that zone."""
     try:
-        late = root and row.doc == DONE and os.path.lexists(root / path) and time.strftime("%Y-%m-%dT%H:%M", time.localtime(
-            os.lstat(root / path).st_mtime)) > max(re.findall(r"; closed (\d{4}-\d\d-\d\dT\d\d:\d\d)", row.evidence), default="~")
+        late = root and os.path.lexists(root / path) and any(time.strftime("%Y-%m-%dT%H:%M", time.gmtime(os.lstat(root / path).st_mtime
+            + int(h) * 3600 + int(h[0] + m) * 60)) > c for c, h, m in re.findall(r"; closed ([\dT:-]{16})([+-]\d\d)(\d\d)", row.evidence)[-1:])
         return not late and any(overlaps(tuple(Path(path).parts), scope(t)) for t in row.touches)
     except SakoError:
         return False
@@ -787,9 +787,9 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
 
 
 def others_moved(roots: Roots, entry: dict | None, moved: list[str], changed: dict[str, str], rows: list[Row], live: list[dict]) -> bool:
-    """True when only others moved checked content since the start, by edits left uncommitted before it (committed since
-    or not) or by edits or commits in the scope of a row a live peer in this checkout claimed or closed. Any other commit,
-    and a merge, pull or checkout of older commits, is this session's, whoever made it, as is an unknown start."""
+    """True when only others moved checked content since the start, by edits left uncommitted before it (committed since or not)
+    or by edits or commits in the scope of a row a live peer here claimed, or closed no earlier than the minute the file last changed.
+    Any other commit, and a merge, pull or checkout of older commits, is this session's, whoever made it, as is an unknown start."""
     rev, marker = str((entry or {}).get("work_start_rev") or ""), (entry or {}).get("marker")
     here = {key_of(e["marker"]) for e in live if e.get("marker") != marker and e.get("work_root") == str(roots.work)}
     committed = set(git(roots.work, "diff", "--no-renames", "--name-only", rev, "HEAD", check=False).splitlines()) if rev else set()
@@ -1208,7 +1208,8 @@ def wiring(roots: Roots, checkout: Path, clients: list[str], add: bool = True) -
             continue
         if tracked(checkout, path.relative_to(checkout.resolve()).as_posix()):  # named in full from another checkout
             notes.append(f"{CLIENTS[agent]}: {relative if checkout.resolve() == roots.work else path.as_posix()} is tracked, so SAKO left "
-                         f"it unchanged; run start, check --gate and end explicitly, or give it this content yourself:\n{proposed.rstrip()}")
+                         "it unchanged; " + ("run start, check --gate and end explicitly, or give it this content yourself" if want else
+                                             "remove SAKO's hooks from it yourself; without them it reads") + f":\n{proposed.rstrip()}")
         else:
             writes[path] = proposed
     relative, want = ".codex/config.toml", "codex" in clients
@@ -1452,9 +1453,8 @@ def cmd_remove(args: argparse.Namespace) -> int:
             if path.exists() and digest(read_text(path, relative)) != expected:
                 raise SakoError(f"{relative} has local changes; preserve them before removing the kit")
             deletes.append(path)
-        writes: dict[Path, str] = {}
-        for checkout in checkouts(roots):
-            writes.update(wiring(roots, checkout, [])[0])  # with no client chosen, every checkout loses SAKO's hooks
+        wired = [wiring(roots, checkout, []) for checkout in checkouts(roots)]  # with no client chosen, every checkout loses SAKO's hooks
+        writes, notes = {k: v for w, _ in wired for k, v in w.items()}, notes + [n for _, said in wired for n in said]
         for path in deletes + [roots.main / MANIFEST] + [p for p in apply(writes) if not p.exists()]:  # and settings left empty
             path.unlink(missing_ok=True)
             with suppress(OSError):  # then the folders left empty, such as .claude/skills/ and .claude/; a top folder keeps .git

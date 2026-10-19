@@ -438,6 +438,18 @@ class Compatibility(unittest.TestCase):
         self.assertIn(f"Claude Code: {(linked / hooks).resolve().as_posix()} is tracked, so SAKO left it unchanged;", printout,
                       "another checkout's file is named in full")
 
+    def test_remove_or_a_dropped_client_leaves_a_tracked_settings_file_and_says_to_take_sakos_hooks_out(self):
+        hooks = sako.hook_file("claude")
+        fixture.succeeds(fixture.seed(self.root, "--client", "claude"))
+        fixture.git(self.root, "add", "-f", hooks)  # forced, since Claude Code may list the file in a global ignore
+        fixture.commit_all(self.root, "the team's hooks")
+        wired = (self.root / hooks).read_text()
+        note = ("Claude Code: .claude/settings.local.json is tracked, so SAKO left it unchanged; remove SAKO's hooks from it "
+                "yourself; without them it reads:\n{}\n")
+        self.assertIn(note, fixture.succeeds(fixture.seed(self.root, "--update", "--client", "none")))
+        self.assertIn(note, fixture.succeeds(fixture.installed(self.root, "remove")), "remove names the hooks it could not remove")
+        self.assertEqual((self.root / hooks).read_text(), wired, "a tracked file never changes")
+
     def test_on_windows_codex_gets_no_hooks_and_a_note_says_why(self):
         self.root, printed = fixture.make_repo(Path(self.workspace.name) / "windows", {"AGENTS.md": "rules\n"}), []
         with patch.object(sako.sys, "platform", "win32"), patch.dict(os.environ, {"CLAUDECODE": "", "CODEX_THREAD_ID": ""}), \

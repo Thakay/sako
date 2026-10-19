@@ -60,21 +60,23 @@ state under `.git/`, which a client's sandbox can make read-only for agent comma
 It does not isolate code edits, arbitrary record edits, commits, the staging area,
 or other clones. A Git push is not a task lock. Keep one writer for shared files,
 avoid overlapping scopes, and serialize shared Git operations. Use separate
-worktrees when that isolation is more useful; SAKO does not create them.
+worktrees when you need that isolation.
 
 Worktrees share one ledger, one numbering, one lock and one presence roster; each
 keeps its own check stamp. The gate judges only the checkout it runs in; work in
 another worktree counts once merged, or when `check --gate --session <id>` runs
-there. Other machines share no live roster. How Codex's sandbox treats linked
-worktrees is in [compatibility](compatibility.md#client-behavior-worth-knowing).
+there. How Codex's sandbox treats linked worktrees is in
+[compatibility](compatibility.md#client-behavior-worth-knowing).
 
 In a shared checkout the gate sees what changed, not who changed it. Closing a task
-scoped `.` makes the Committed fix stage every uncommitted change made here since
-your start, a peer's included; check `git status` first, or narrow the scope.
-Recorded cannot tell who made a commit either, so another session's closed task can
-excuse your commit, while a peer's commit of its closed work on a later day, even
-just after midnight or in another time zone, counts against you. A peer's edits to
-checked content also make your check stale.
+scoped `.` makes the Committed fix stage every uncommitted change made here between
+your start and its close, a peer's included; check `git status` first, or narrow the
+scope. Recorded cannot tell who made a commit either, so another session's closed
+task can excuse your commit, while a peer's commit of its closed work on a later
+day, even just after midnight or in another time zone, counts against you. A closed
+task still covers edits made in the minute it closed, so read `git diff` before
+following a Committed fix. A peer's edits to checked content also make your check
+stale.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
 different branches keep separate ledgers. They can allocate the same task ID and
@@ -86,12 +88,12 @@ claims as stale. A team that needs more moves to a tracker; see
 [move the task authority to a tracker](move-to-a-tracker.md).
 
 Presence only estimates liveness; the method explains
-[how it works](../SAKO.md#pause-handoff-and-takeover), inside a sandbox too. PID
-reuse, containers and unexpected wrappers, such as a `timeout` around the command,
-can misrepresent it, and a session without an end event can appear live until its
-host exits or its 24 hours pass. On Linux and WSL a restart ends presence. A claim
-left on purpose for another session reads as stale to every other session until it
-is taken over; close your part and leave the rest as a second row.
+[how it works](../SAKO.md#pause-handoff-and-takeover). PID reuse, containers and
+unexpected wrappers, such as a `timeout` around the command, can misrepresent it,
+and a session without an end event can appear live until its host exits or its 24
+hours pass. On Linux and WSL a restart ends presence. A claim left on purpose for
+another session reads as stale to every other session until it is taken over;
+close your part and leave the rest as a second row.
 Do not give concurrent workers the same session ID. A helper on its parent's ID is
 the parent, so the ledger shows no separate holder for it.
 

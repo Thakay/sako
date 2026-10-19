@@ -275,7 +275,9 @@ class Words(unittest.TestCase):
         limits = self.text("docs/limits.md")
         for words in ("The gate judges only the checkout it runs in", "In a shared checkout the gate sees what changed, not who "
                       "changed it.", "Closing a task scoped `.` makes the Committed fix stage every uncommitted change made "
-                      "here since your start, a peer's included", "Recorded cannot tell who made a commit"):
+                      "here between your start and its close, a peer's included", "Recorded cannot tell who made a commit",
+                      "A closed task still covers edits made in the minute it closed, so read `git diff` before following a "
+                      "Committed fix."):
             self.assertIn(words, limits)
         self.assertIn("and against faults in the records. It refuses a stop once and names the fix; findings about other "
                       "sessions are only notes", self.text("docs/glossary.md"))

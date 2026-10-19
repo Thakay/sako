@@ -55,10 +55,12 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         return pid
 
-    def backdate(self, task, minutes=5):
-        """Date a receipt's close some minutes back, so the edits after it come in a later minute, as in real use."""
-        done = self.root / ".sako/work/DONE.md"
-        earlier = time.strftime("%Y-%m-%dT%H:%M%z", time.localtime(time.time() - 60 * minutes))
+    def backdate(self, task, minutes=5, east=None):
+        """Date a receipt's close some minutes back, so the edits after it come in a later minute, as in real use; east, in
+        hours from UTC, writes it in that zone instead of the local one."""
+        done, then = self.root / ".sako/work/DONE.md", time.time() - 60 * minutes
+        earlier = time.strftime("%Y-%m-%dT%H:%M%z", time.localtime(then)) if east is None else \
+            time.strftime("%Y-%m-%dT%H:%M", time.gmtime(then + 3600 * east)) + f"{east:+03d}00"
         text, count = re.subn(rf"(?m)^(\| {task} \|.*; closed )[^;]+;", rf"\g<1>{earlier};", done.read_text())
         self.assertEqual(count, 1, text)
         done.write_text(text)
@@ -575,6 +577,29 @@ class Gate(unittest.TestCase):
         self.assertIn("SAKO gate: 1 problem(s) before you stop:\n  Committed: T-10 is closed but its changes are not committed: "
                       "src/app.py\n    fix: git add -- src/app.py, then git commit -m 'Print three'", err)
         self.assertNotIn("T-1 ", err, "T-1's work is in its commit; the change came after it closed")
+
+    def test_the_close_minute_is_read_in_the_receipts_zone_wherever_the_gate_runs(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        with patch.dict(fixture.ENV, TZ="NST3:30"):  # three and a half hours west of UTC, as POSIX writes it
+            fixture.succeeds(fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Prints 2", "--session", "s1"))
+        self.assertRegex((self.root / ".sako/work/DONE.md").read_text(), r"; closed [\dT:-]{16}-0330;")
+        zones = ("NST3:30", "UTC0", "JST-9", "PST8")
+        for zone in zones:
+            with patch.dict(fixture.ENV, TZ=zone):
+                err = self.run_in(self.root, "check", "--gate", session="s1")[2]
+            self.assertIn("Committed: T-1 is closed but its changes are not committed: src/app.py", err,
+                          f"an edit made before the close is the closed task's, judged in {zone}")
+        self.backdate("T-1", east=9)
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        for zone in zones:
+            with patch.dict(fixture.ENV, TZ=zone):
+                err = self.run_in(self.root, "check", "--gate", session="s1")[2]
+            self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/app.py", err, zone)
+            self.assertNotIn("Committed:", err, f"an edit after the close is new work, judged in {zone}")
 
     def test_work_under_a_new_claim_does_not_reopen_earlier_closes(self):
         self.start("s1")
