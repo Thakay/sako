@@ -607,6 +607,34 @@ class Gate(unittest.TestCase):
         self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: notes.txt", err)
         self.assertNotIn("Proven:", err)
 
+    def test_edits_left_uncommitted_before_the_start_stay_others_once_their_author_commits_them(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.write(self.root, {"src/app.py": "print('a draft from before this session')\n"})
+        self.start("s1")
+        for number in (1, 2, 3):
+            fixture.succeeds(fixture.installed_copy(self.root, "add", f"Plan step {number}", "--done-when", "Written",
+                                                    "--scope", f".sako/work/plan-{number}.md"))
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Written", "--session", "s1"))
+        fixture.commit_all(self.root, "The draft, committed by its author")
+        code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+        self.assertEqual(code, 0, out + err)
+        done = self.root / ".sako/work/DONE.md"
+        for task, stamp in (("T-11", "stale"), ("T-12", "fresh")):
+            with self.subTest(stamp=stamp):
+                if stamp == "fresh":
+                    fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+                fixture.succeeds(fixture.installed_copy(self.root, "claim", task, "--session", "s1"))
+                close = fixture.installed_copy(self.root, "close", task, "--evidence", "Written", "--session", "s1")
+                self.assertEqual(close.returncode, 0, close.stdout + close.stderr)
+                receipt = next(r.evidence for r in sako.parse_rows({"done": done.read_text()}) if r.id == task)
+                self.assertTrue(receipt.endswith("; no automated check (records only)]"), receipt)
+        fixture.write(self.root, {"src/app.py": "print('edited again, by this session')\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Proven: T-10, T-11, T-12 closed after checked content changed since you started", err,
+                      "an edit since the start is this session's, on a path that was dirty at start too")
+
     def test_a_records_only_task_needs_the_check_once_this_session_moved_checked_content(self):
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
         self.start("s1")

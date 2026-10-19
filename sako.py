@@ -784,12 +784,13 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
 
 
 def others_moved(roots: Roots, entry: dict | None, moved: list[str], changed: dict[str, str], rows: list[Row], live: list[dict]) -> bool:
-    """True when only others moved checked content since the start: by edits left uncommitted before it, or by edits or
-    commits in the scope of a row a live peer in this checkout claimed or closed. Any other commit since the start, and a
-    merge, pull or checkout of older commits, is this session's, whoever made it, as is an unknown start."""
+    """True when only others moved checked content since the start, by edits left uncommitted before it (committed since
+    or not) or by edits or commits in the scope of a row a live peer in this checkout claimed or closed. Any other commit,
+    and a merge, pull or checkout of older commits, is this session's, whoever made it, as is an unknown start."""
     rev, marker = str((entry or {}).get("work_start_rev") or ""), (entry or {}).get("marker")
     here = {key_of(e["marker"]) for e in live if e.get("marker") != marker and e.get("work_root") == str(roots.work)}
     committed = set(git(roots.work, "diff", "--no-renames", "--name-only", rev, "HEAD", check=False).splitlines()) if rev else set()
+    committed -= set((entry or {}).get("dirty_at_start") or {})  # others' edits left uncommitted before the start; a later edit is in changed
     return not any(path.startswith("(") or (path in committed and path not in changed) or (path in changed and not any(
         holder_key(r.claim) in here and covers(r, path) for r in rows)) for path in moved)
 
