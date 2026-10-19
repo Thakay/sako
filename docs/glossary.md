@@ -16,6 +16,7 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Hook | A client's automatic call into SAKO when a session starts, stops or ends |
 | Kit | The files SAKO owns and updates: the runtime `.sako/sako.py`, the method `.sako/SAKO.md`, `.sako/install.json` and the skill copies |
 | Ledger | The task records in `.sako/work/`: `TASKS.md` for active work, `DONE.md` for finished work |
+| Marker | A session's name in claims and receipts, such as `sk-0115-7a281dacac30`, made of the month and day of its start and a key derived from its session ID; the start context prints yours |
 | Method | `SAKO.md`, the instructions agents follow in a project |
 | Owner | The person the agent works for, who sets direction, allows commits and accepts results |
 | Parked | A task held on purpose, with its reason in Status; `next` skips it |
