@@ -537,6 +537,9 @@ def scenario_worktrees_share_presence(ws: Path) -> None:
            and not (repo / ".sako/state/stamp.json").exists(), f"each worktree keeps its own stamp: {out + err}")
     expect((repo / ".sako/state/worktrees/repo-b/verify.log").exists() and not (repo / ".sako/state/verify.log").exists(),
            f"the check's output stays beside that worktree's stamp: {out}")
+    code, out, _ = cli(repo, "check")
+    expect("evidence: fresh; last pass " in out and " in worktree repo-b\n" in out,
+           f"that pass counts in the main checkout, whose checked content is identical: {out}")
     expect(not (ws / "repo-b/.sako").exists(), "no command creates a kit folder in a linked worktree")
 
 

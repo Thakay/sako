@@ -741,21 +741,38 @@ def command_id(config: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def last_pass(roots: Roots, config: dict) -> tuple[bool, dict, str, str]:
+    """(fresh, stamp, where it ran, content id now). Any checkout's stamp in the kit's state folder
+    counts as a pass here on identical content and the same command, this checkout's own first;
+    another's names where it ran, and its ignored files are not proven here. Without one, the
+    stamp is this checkout's own, if any."""
+    folders = [roots.local] + [f for f in (roots.state, *sorted(roots.state.glob("worktrees/*")))
+                               if f != roots.local]
+    stamps = [(f, s) for f in folders if (s := read_json(f / "stamp.json"))]
+    now = content_id(roots.work, list(config["verify_paths"])) if stamps else ""
+    for folder, stamp in stamps:
+        if (stamp.get("content_id"), stamp.get("command_id")) == (now, command_id(config)):
+            # a receipt keeps it in one table cell
+            where = "the main checkout" if folder == roots.state \
+                else "worktree " + re.sub(r"[^\w.+-]", "_", folder.name)
+            return True, stamp, "" if folder == roots.local else f" in {where}", now
+    return False, next((s for f, s in stamps if f == roots.local), {}), "", now
+
+
 def evidence_state(roots: Roots, config: dict) -> tuple[str, str]:
     """('none' | 'fresh' | 'stale', explanation) for the current product content."""
     if not config["verify_command"]:
         return "none", "no verify_command configured; SAKO keeps no check evidence"
-    stamp = read_json(roots.local / "stamp.json")
+    fresh, stamp, where, now = last_pass(roots, config)
+    if fresh:
+        return "fresh", f"last pass {stamp.get('time')} on content {now}{where}"
     if not stamp:
         return "none", ("no passing check recorded; run sako.py verify, which runs "
                         f"{shlex.join(config['verify_command'])}")
-    now = content_id(roots.work, list(config["verify_paths"]))
     if stamp.get("command_id") != command_id(config):
         return "stale", "the check command or paths changed since the last pass"
-    if stamp.get("content_id") != now:
-        return "stale", ("checked content moved since the last pass "
-                         f"(was {stamp.get('content_id')}, now {now})")
-    return "fresh", f"last pass {stamp.get('time')} on content {now}"
+    return "stale", ("checked content moved since the last pass "
+                     f"(was {stamp.get('content_id')}, now {now})")
 
 
 def verify(roots: Roots, config: dict, out=print) -> int:
@@ -1914,14 +1931,13 @@ def receipt_part(roots: Roots, config: dict, claim: str, records: bool = False) 
     check = "no automated check" \
         + (" (records only)" if records and config["verify_command"] else "")
     if config["verify_command"] and not records:
-        stamp, (state, _) = read_json(roots.local / "stamp.json"), evidence_state(roots, config)
+        fresh, stamp, where, now = last_pass(roots, config)
         check = "no passing check recorded"
-        if state == "fresh":
+        if fresh:
             at = (stamp["product_rev"][:12] or "no commit") \
                 + (" plus uncommitted changes" if stamp.get("uncommitted") else "")
-            check = f"check pass {stamp['time']} on {stamp['content_id']} at {at}"
+            check = f"check pass {stamp['time']} on {stamp['content_id']} at {at}{where}"
         elif stamp:
-            now = content_id(roots.work, list(config["verify_paths"]))
             check = (f"check stale: last pass {stamp.get('time')} "
                      f"on {stamp.get('content_id')}, now {now}")
     return f"[{holder}; closed {time.strftime('%Y-%m-%dT%H:%M%z')}; {check}]"

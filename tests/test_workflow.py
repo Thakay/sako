@@ -278,6 +278,41 @@ class Workflow(unittest.TestCase):
         self.assert_ok(self.run_cli("close", task, "--evidence", "Docs only", session="receipt-stale"))
         self.assertIn("; check stale: last pass ", (self.root / ".sako/work/DONE.md").read_text())
 
+    def test_a_pass_in_another_worktree_on_identical_content_counts_and_names_where_it_ran(self):
+        setting = {"verify_command": [sys.executable, "-c", "pass"], "verify_paths": ["src"]}
+        fixture.write(self.root, {".sako/config.json": json.dumps(setting)})
+        linked, state = Path(self.workspace.name) / "linked", self.root / ".sako/state"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(linked))
+        self.assert_ok(fixture.cli(linked, "verify"))
+        self.assertFalse((state / "stamp.json").exists(), "each checkout still writes only its own stamp")
+        there = json.loads((state / "worktrees/linked/stamp.json").read_text())
+        line = f"evidence: fresh; last pass {there['time']} on content {there['content_id']} in worktree linked\n"
+        for verb in ("check", "status"):
+            self.assertIn(line, self.run_cli(verb)[1], verb)
+        agent = subprocess.Popen(["sleep", "60"])
+        self.agents.append(agent)
+        self.assertIn(line, self.assert_ok(fixture.cli(self.root, "start", session="here", pid=agent.pid)))
+        self.assert_ok(self.run_cli("claim", "T-1", session="here"))
+        self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Observed", session="here"))
+        self.assertIn(f"; check pass {there['time']} on {there['content_id']} at {there['product_rev'][:12]} in worktree linked]",
+                      (self.root / ".sako/work/DONE.md").read_text(), "the receipt names where the check ran")
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        self.assertIn("evidence: none; no passing check recorded", self.run_cli("check")[1], "a pass on other content is no pass")
+        self.assert_ok(self.run_cli("verify"))
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        self.assertIn("evidence: stale; checked content moved since the last pass", self.run_cli("check")[1])
+        fixture.write(self.root, {"src/app.py": "print(1)\n"})  # back to the content the linked worktree checked
+        self.assertIn(line, self.run_cli("check")[1], "a stale stamp here gives way to a pass on identical content")
+        self.assert_ok(self.run_cli("verify"))
+        (state / "worktrees/linked/stamp.json").unlink()
+        here = json.loads((state / "stamp.json").read_text())
+        self.assertIn(f"evidence: fresh; last pass {here['time']} on content {here['content_id']} in the main checkout\n",
+                      fixture.cli(linked, "check")[1], "and the other way round")
+        fixture.write(self.root, {".sako/config.json": json.dumps(dict(setting, verify_paths=["src", ".gitignore"]))})
+        self.assertIn("evidence: none; no passing check recorded", fixture.cli(linked, "check")[1],
+                      "a pass of another command or paths is no pass either")
+        self.assertIn("evidence: stale; the check command or paths changed since the last pass", self.run_cli("check")[1])
+
     def test_a_check_before_the_first_commit_names_no_commit(self):
         root = Path(self.workspace.name) / "fresh"
         root.mkdir()

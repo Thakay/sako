@@ -407,6 +407,25 @@ class Gate(unittest.TestCase):
         fixture.commit_all(linked, "Invented task")
         self.assertEqual(self.run_in(linked, "check", "--gate", session="s1"), (0, f"SAKO gate: clear in {there}\n", ""))
 
+    def test_a_pass_in_the_worktree_that_did_the_work_proves_its_merge_here_on_identical_content(self):
+        self.start("s1")  # a coordinator in the main checkout holds the task; a helper works in a linked worktree
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        linked = self.base / "linked"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(linked))
+        fixture.write(linked, {"src/app.py": "print(2)\n"})
+        fixture.commit_all(linked, "Invented task")
+        self.assertEqual(self.run_in(linked, "verify")[0], 0)
+        fixture.git(self.root, "merge", "-q", "--ff-only", "side")
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        close = ("close", "T-1", "--evidence", "Prints 2", "--session", "s1")
+        refusal = fixture.installed_copy(self.root, *close)
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("evidence is none", refusal.stderr, "the pass there covers other content than this")
+        fixture.git(self.root, "checkout", "--", "src/app.py")
+        fixture.succeeds(fixture.installed_copy(self.root, *close))
+        self.assertRegex((self.root / ".sako/work/DONE.md").read_text(), r"; check pass [^;]+ in worktree linked\]")
+        self.assertEqual(self.stop("s1"), (0, "", ""), "the merged content is the content checked there")
+
     def test_a_commit_recorded_under_another_sessions_closed_task_is_not_this_sessions(self):
         self.start("s1")
         self.start("s2")
