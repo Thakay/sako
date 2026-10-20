@@ -5,6 +5,48 @@ Notable changes to SAKO, one entry per release. The format follows
 [Semantic Versioning](https://semver.org/). SAKO is alpha software, so commands and
 file formats can change in any 0.x release.
 
+## [0.7.1] - 2026-10-19
+
+The method, the reference pages, the recipes, the glossary, the skill and the README
+describe what 0.7.0 added, and a test that failed on native Windows passes there.
+Runtime behavior is the same as in 0.7.0. SAKO remains alpha software.
+
+From your project's Git repository, install with `uvx sako@0.7.1 init`, or update an
+existing installation with `uvx sako@0.7.1 init --update`.
+
+To update from 0.7.0, run `init --update` between working sessions, in the main
+checkout, then run `verify` when a check is configured, since the new version makes
+every recorded pass stale. From 0.6.0, follow the steps under 0.7.0.
+
+### Changed
+
+- SAKO.md describes `edit`, the session's own rows and its peers' progress, named
+  checks, a pass from another worktree and the advice for a file rewritten after its
+  close. It also says a receipt cites a lasting home, an unmet part of a done-when
+  becomes a new task, task IDs come from `add`'s output, and an edit after a close is
+  new work.
+- The limits, validation and compatibility pages cover the same additions and their
+  limits, with fresh counts.
+- The intake recipes add a review's findings, the owner's own acts, a row moved from
+  another ledger and an act only one session may do at a time, and show how to
+  capture a new task's ID. The glossary defines Marker, and the skill names `edit`.
+- README's principles section is "Simple, not small", and README names `edit`, named
+  checks, peers' progress and a pass from another worktree where a reader needs
+  them. The tracker recipe parks rows with `edit`.
+
+### Fixed
+
+- A test of the start context compared the header's middle dot, which native Windows
+  reads back in its code page, so the test failed there.
+
+### Validation
+
+- Both suites pass on Python 3.10 and 3.12 locally, with 277 tests and 22 scenarios;
+  these counts overlap.
+- Natively on Windows from Git Bash, with Python 3.14.4 and Git for Windows 2.52.0,
+  277 tests ran with 46 skipped and the scenario suite passed 17 and skipped 5, with
+  none failed.
+
 ## [0.7.0] - 2026-10-19
 
 Agents change rows through a command instead of by hand, sessions see each other's
@@ -77,8 +119,9 @@ To update from 0.6.0, follow these steps:
 ### Known issues
 
 - A live peer in the same checkout can claim a scope that covers this session's
-  closed files. Edits there then count as the peer's under Recorded and Proven until
-  they are committed. The peer's own close still needs a fresh check.
+  closed files. This session's edits and commits there then count as the peer's
+  under Recorded and Proven for as long as the peer is live. The peer's own close
+  still needs a fresh check.
 - Two ended sessions holding overlapping claims still need a hand edit of the
   ledger, since neither claim can be taken over while they overlap.
 
@@ -381,3 +424,4 @@ Install from your project's Git repository with `uvx sako init`. To update later
 [0.5.1]: https://github.com/Thakay/sako/releases/tag/v0.5.1
 [0.6.0]: https://github.com/Thakay/sako/releases/tag/v0.6.0
 [0.7.0]: https://github.com/Thakay/sako/releases/tag/v0.7.0
+[0.7.1]: https://github.com/Thakay/sako/releases/tag/v0.7.1
