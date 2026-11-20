@@ -10,12 +10,15 @@ file formats can change in any 0.x release.
 ### Fixed
 
 - A claim you still hold no longer excuses a stale check for checked files outside
-  it. While such a claim covers a moved file, a close whose receipt shows the gate's
-  check pass, and records work, stay proven only when every other checked file you
-  moved still holds what the last pass here checked. A merge of closed changes that
-  passed apart, or an edit or a commit outside your claims, now blocks the stop
-  under Proven even while you hold a claim over other changed files, and the finding
-  names up to three such files. 0.8.0 and 0.7.1 had this gap.
+  it. While such a claim covers a file you moved, a close whose receipt shows the
+  gate's check pass, and records work, stay proven only when every other checked
+  file you moved still holds what the last pass here checked. A merge of closed
+  changes that passed apart, or an edit or a commit outside your claims, now blocks
+  the stop under Proven even while you hold a claim over other changed files, and
+  the finding names up to three such files. A claim over a file left dirty before
+  your start explains nothing. 0.8.0 and 0.7.1 had this gap.
+- Proven counts both paths of a rename. A merged rename had hidden the old path, so
+  a file the check needs could vanish outside your claims with no finding.
 - `verify` keeps what each checked file held at its last pass beside the stamp, in
   `.sako/state/passed.json` for the main checkout. A failing run deletes the stamp
   but leaves this record, so a claim still held keeps explaining its own files after

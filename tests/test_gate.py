@@ -1482,6 +1482,7 @@ class Gate(unittest.TestCase):
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
         fixture.write(self.root, {"src/app.py": "print(2)\n"})
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        self.assertTrue((self.root / ".sako/state/passed.json").exists(), "verify keeps the record, before any close")
         fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Prints 2", "--session", "s1"))
         fixture.commit_all(self.root, "Print two")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
@@ -1591,6 +1592,87 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 2, err)
         self.assertIn("Proven: T-10 closed after checked content changed since you started, in src/extra.py outside the "
                       "claims you still hold, and the check is none", err, "no pass was recorded in this checkout")
+
+    def steered_check(self, paths=("src",)):
+        """A check that an ignored file steers, two tasks, and T-10 closed with a pass and committed."""
+        fixture.write(self.root, {"control": "pass\n", ".gitignore": "__pycache__/\ncontrol\n", "check.py": (
+            "import pathlib, sys\nsys.exit(pathlib.Path('control').read_text() != 'pass\\n')\n"),
+            ".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": list(paths)})})
+        fixture.commit_all(self.root, "A check that an ignored file steers")
+        for task, path in (("Print two", "src/app.py"), ("A library", "src/lib.py")):
+            fixture.succeeds(fixture.installed_copy(self.root, "add", task, "--done-when", "Runs", "--scope", path))
+
+    def close_the_first(self):
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Prints 2", "--session", "s1"))
+        fixture.git(self.root, "commit", "-qm", "Print two", "--", "src/app.py")
+
+    def test_a_merged_rename_counts_its_old_path_outside_the_claim_still_held(self):
+        """Git's diff names only the new path of a rename unless it is asked for both."""
+        fixture.write(self.root, {"src/required.py": "needed = True\n" * 12, "check.py": (
+            "import pathlib, sys\nsys.exit(not pathlib.Path('src/required.py').is_file())\n"),
+            ".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"], "verify_paths": ["src"]})})
+        fixture.commit_all(self.root, "A check that needs one file")
+        fixture.git(self.root, "checkout", "-qb", "side")
+        fixture.git(self.root, "mv", "src/required.py", "src/replacement.py")
+        fixture.commit_all(self.root, "Move the input")
+        fixture.git(self.root, "checkout", "-q", "main")
+        for task, path in (("Print two", "src/app.py"), ("A replacement", "src/replacement.py")):
+            fixture.succeeds(fixture.installed_copy(self.root, "add", task, "--done-when", "Runs", "--scope", path))
+        self.start("s1")
+        self.close_the_first()
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
+        fixture.git(self.root, "merge", "-q", "--no-edit", "side")
+        self.assertEqual(self.run_in(self.root, "verify")[0], 1, "the merge removed the file the check needs")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Proven: T-10 closed after checked content changed since you started, in src/required.py outside the "
+                      "claims you still hold, and the check is none", err, "the claim covers only the new path")
+
+    def test_a_claim_of_a_file_left_dirty_before_the_start_explains_no_stale_check(self):
+        self.steered_check()
+        fixture.write(self.root, {"src/lib.py": "left = 'dirty before the start'\n"})
+        self.start("s1")
+        self.close_the_first()
+        fixture.write(self.root, {"control": "fail\n"})
+        self.assertEqual(self.run_in(self.root, "verify")[0], 1)
+        proven = "Proven: T-10 closed after checked content changed since you started"
+        self.assertIn(proven + ", and the check is none", self.stop("s1")[2])
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn(proven + ", in src/app.py outside the claims you still hold, and the check is none", err,
+                      "the claim covers a file this session never moved")
+
+    def test_deleting_a_verify_paths_entry_under_a_claim_still_held_does_not_block_the_pause(self):
+        self.steered_check(paths=("src/app.py", "src/lib.py"))
+        fixture.write(self.root, {"src/lib.py": "x = 0\n"})
+        fixture.commit_all(self.root, "A library")
+        self.start("s1")
+        self.close_the_first()
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
+        fixture.write(self.root, {"src/lib.py": "x = 1\n", "control": "fail\n"})
+        self.assertEqual(self.run_in(self.root, "verify")[0], 1)
+        self.assertEqual(self.stop("s1")[:2], (0, ""))
+        (self.root / "src/lib.py").unlink()
+        self.assertEqual(self.stop("s1")[::2], (0, ""), "the gate compares only the files outside the claim")
+
+    def test_a_refused_close_leaves_the_last_pass_here_as_it_was(self):
+        fixture.write(self.root, {".sako/work/DONE.md": fixture.done_file(
+            fixture.row("T-1", status="done", claim="sk-0101-aaaaaaaaaaaa"))})
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        record = self.root / ".sako/state/passed.json"
+        self.assertTrue(record.exists(), "verify keeps the record itself")
+        record.unlink()
+        refusal = fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Prints 2", "--session", "s1")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn("already has a done row from another session", refusal.stderr)
+        self.assertFalse(record.exists(), "only a close that writes its receipt records the pass it names")
 
     def test_committed_names_new_files_so_generated_ones_are_not_committed(self):
         self.start("s1")

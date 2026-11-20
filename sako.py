@@ -687,17 +687,21 @@ def covered_files(root: Path, paths: list[str]) -> list[str]:
     return sorted(listing)
 
 
+def checked_as(root: Path, relative: str) -> str:
+    """What one covered file holds, as its kind and fingerprint ("KIND FINGERPRINT"); empty for a
+    missing path or a folder (a nested repository), which is no checked content."""
+    path = root / relative
+    if not (path.is_symlink() or path.is_file()):
+        return ""
+    # the owner's executable bit, the only one Git tracks
+    kind = "link" if path.is_symlink() else str(path.stat().st_mode & 0o100)
+    return f"{kind} {fingerprint(root, relative)}"
+
+
 def checked(root: Path, paths: list[str]) -> dict[str, str]:
-    """What each covered file holds, by path, as its kind and fingerprint ("KIND FINGERPRINT").
-    A folder (a nested repository) is no checked content."""
-    files = {}
-    for relative in covered_files(root, paths):
-        path = root / relative
-        if path.is_symlink() or path.is_file():
-            # the owner's executable bit, the only one Git tracks
-            kind = "link" if path.is_symlink() else str(path.stat().st_mode & 0o100)
-            files[relative] = f"{kind} {fingerprint(root, relative)}"
-    return files
+    """What each covered file holds, by path."""
+    return {relative: held for relative in covered_files(root, paths)
+            if (held := checked_as(root, relative))}
 
 
 def content_id(files: dict[str, str]) -> str:
@@ -719,18 +723,17 @@ def stamp_home(local: Path, name: str = "") -> Path:
     return local / "checks" / name if name else local
 
 
-def last_pass(roots: Roots, config: dict, name: str = "", files: dict | None = None
+def last_pass(roots: Roots, config: dict, name: str = ""
               ) -> tuple[bool, dict, str, str, dict | None]:
     """(fresh, stamp, where it ran, content id now, what each checked file holds now) for the
     gate's check or the named one. Any checkout's stamp in the kit's state folder counts as a pass
     here on identical content and the same command, this checkout's own first; another's names
     where it ran, and its ignored files are not proven here. Without one, the stamp is this
-    checkout's own, if any. The files are read once a stamp is found, unless given."""
+    checkout's own, if any. The files are read once a stamp is found."""
     folders = [roots.local] + [f for f in (roots.state, *sorted(roots.state.glob("worktrees/*")))
                                if f != roots.local]
     stamps = [(f, s) for f in folders if (s := read_json(stamp_home(f, name) / "stamp.json"))]
-    if stamps and files is None:
-        files = checked(roots.work, list(config["verify_paths"]))
+    files = checked(roots.work, list(config["verify_paths"])) if stamps else None
     now = content_id(files) if stamps else ""
     for folder, stamp in stamps:
         if (stamp.get("content_id"), stamp.get("command_id")) == (now, command_id(config, name)):
@@ -741,14 +744,13 @@ def last_pass(roots: Roots, config: dict, name: str = "", files: dict | None = N
     return False, next((s for f, s in stamps if f == roots.local), {}), "", now, files
 
 
-def evidence_state(roots: Roots, config: dict, name: str = "", files: dict | None = None
-                   ) -> tuple[str, str]:
+def evidence_state(roots: Roots, config: dict, name: str = "") -> tuple[str, str]:
     """('none' | 'fresh' | 'stale', explanation) for the current product content, by the gate's
-    check or the named one; given what each checked file holds, it reads none again."""
+    check or the named one."""
     command = config["checks"].get(name) if name else config["verify_command"]
     if not command:
         return "none", "no verify_command configured; SAKO keeps no check evidence"
-    fresh, stamp, where, now, _ = last_pass(roots, config, name, files)
+    fresh, stamp, where, now, _ = last_pass(roots, config, name)
     if fresh:
         return "fresh", f"last pass {stamp.get('time')} on content {now}{where}"
     if not stamp:
@@ -827,7 +829,9 @@ def changed_since(root: Path, start_rev: str, paths: list[str]) -> list[str]:
     if not start_rev or not git(root, "rev-parse", "-q", "--verify", f"{start_rev}^{{commit}}",
                                 check=False):
         return ["(unknown starting revision; assuming changes)"]
-    changed = set(git(root, "diff", "--name-only", start_rev, "--", *paths).splitlines())
+    # both paths of a rename, as dirty_paths lists them
+    changed = set(git(root, "diff", "--no-renames", "--name-only", start_rev, "--",
+                      *paths).splitlines())
     new = git(root, "ls-files", "-z", "--others", "--exclude-standard", "--", *paths).split("\0")
     # a nested repository is no checked content
     return product(changed | {p for p in new if not p.endswith("/")})
@@ -970,11 +974,10 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
 
 
 def unexplained(roots: Roots, config: dict, entry: dict | None, moved: list[str],
-                changed: dict[str, str], held: list[Row], visitor: bool,
-                files: dict | None = None) -> list[str]:
+                changed: dict[str, str], held: list[Row], visitor: bool) -> list[str]:
     """The moved checked files that leave a close unproven while the check is not fresh. They are
     this session's moves since the start, outside every claim it still holds. While such a claim
-    covers a moved file, only those that differ from the last pass here count, or all of them
+    covers one of its moves, only those that differ from the last pass here count, or all of them
     without a record of that pass. Others move content as this checkout's writer, for a session
     that is not it, or as edits left uncommitted before the start, committed since or not; any
     other commit, and a merge, pull or checkout of older commits, is this session's, whoever made
@@ -986,19 +989,21 @@ def unexplained(roots: Roots, config: dict, entry: dict | None, moved: list[str]
                         check=False).splitlines()) if rev else set()
     # others' edits left uncommitted before the start; a later edit is in changed
     committed -= set((entry or {}).get("dirty_at_start") or {})
-    mine = [path for path in moved if not any(covers(r, path) for r in held)
-            and (path.startswith("(") or path in committed or path in changed)]
-    # only work under a claim still held makes a stale check expected, so without it the last
-    # pass explains nothing, and a failing run on unchanged content still asks for the check
-    if not mine or not any(covers(r, path) for r in held for path in moved):
+    moves = [path for path in moved
+             if path.startswith("(") or path in committed or path in changed]
+    mine = [path for path in moves if not any(covers(r, path) for r in held)]
+    # only its own work under a claim still held makes a stale check expected, so without it the
+    # last pass explains nothing, and a failing run on unchanged content still asks for the check
+    if not mine or len(mine) == len(moves):
         return mine
     # kept through a failing run; one of another command, paths or release tells nothing
     record = read_json(roots.local / "passed.json")
     then = record.get("files") if record.get("command_id") == command_id(config) else None
     if not isinstance(then, dict):
         return mine
-    files = checked(roots.work, list(config["verify_paths"])) if files is None else files
-    return [path for path in mine if path.startswith("(") or files.get(path) != then.get(path)]
+    # file by file, so a deleted verify_paths entry under the claim is no error here
+    return [path for path in mine
+            if path.startswith("(") or checked_as(roots.work, path) != then.get(path, "")]
 
 
 def closed_at(row: Row) -> float:
@@ -1258,17 +1263,13 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
                           list(config["verify_paths"])) \
         if closed and config["verify_command"] else []
     if moved:
-        # read once, for the check's state and for what differs from the last pass
-        files = checked(roots.work, list(config["verify_paths"])) \
-            if (roots.local / "passed.json").exists() else None
-        state, why = evidence_state(roots, config, files=files)
+        state, why = evidence_state(roots, config)
         # A close whose receipt shows a pass, or records work, stays proven while each file moved
         # since the last pass is in a claim still held or moved only by others, such as this
         # checkout's writer when this session is not it. The pass is the gate's check, right
         # after the close time; a named check's never counts.
         loose = [] if state == "fresh" else unexplained(
-            roots, config, entry, moved, changed, held, bool(visiting(roots, rows, live, marker)),
-            files)
+            roots, config, entry, moved, changed, held, bool(visiting(roots, rows, live, marker)))
         unproven = [r.id for r in closed if loose or not (
             records_only(r) or re.search(r"; closed [^;]*; check pass ", r.evidence))]
         if state != "fresh" and unproven:
@@ -2285,12 +2286,13 @@ def cmd_task(args: argparse.Namespace) -> int:
         state, why = evidence_state(roots, config)
         if state != "fresh":
             raise SakoError(f"evidence is {state}: {why}; verify before closing")
-    receipt = (f"{cell(args.evidence, '--evidence')} "
-               f"{receipt_part(roots, config, row.claim, records)}")
     previous = [r for r in rows if r.id == row.id and r.doc == DONE]
     if previous and holder_key(previous[0].claim) != mine:
         raise SakoError(f"{row.id} already has a done row from another session; "
                         "reconcile it before closing")
+    # after the last refusal, since a receipt that shows a pass records it as the last pass here
+    receipt = (f"{cell(args.evidence, '--evidence')} "
+               f"{receipt_part(roots, config, row.claim, records)}")
     # seal the task's uncommitted changes here, so the closed task covers such a file while it
     # holds these bytes; a seal lasts while its file stays uncommitted and unchanged
     start, here = entry.get("dirty_at_start") or {}, roots.local / "seals.json"
