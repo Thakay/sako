@@ -79,9 +79,10 @@ through the start context.
 - `codex exec` records each new checkout it runs in as trusted in your
   `~/.codex/config.toml`.
 - In a Claude Code background session, `/exit` detaches and the session keeps
-  running, so SAKO lists it as a live peer until `/stop` ends it. A resume keeps the
-  session ID, and SAKO takes a new start record if the session had ended. Seen in
-  use with Claude Code 2.1.296 to 2.1.302 on WSL2, 2026-10-11 to 2026-10-14.
+  running, so it stays a live peer while its hooks run, and for two hours after the
+  last one. A resume keeps the session ID, and SAKO takes a new start record if
+  the session had ended. Seen in use with Claude Code 2.1.296 to 2.1.302 on WSL2,
+  2026-10-11 to 2026-10-14.
 
 ## Not verified
 
@@ -134,9 +135,7 @@ the result.
    fix.
 3. Open a second conversation with its own ID. Confirm that each sees the other in
    `status` and that a live claim cannot be taken over; give the second one its
-   own worktree before it claims product files. From
-   inside Codex's sandbox a peer shows as unverified, and its claim can be taken
-   over only with a reason.
+   own worktree before it claims product files.
 4. End one conversation and confirm that only its presence disappears.
 
 Record a failure against discovery, the lifecycle or a command, so a fix targets

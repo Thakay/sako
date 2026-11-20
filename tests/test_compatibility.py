@@ -1,11 +1,10 @@
-"""Shared entry points and conversation identity across agent hosts."""
+"""Shared entry points, conversation identity across agent hosts, and presence by last seen."""
 
 from pathlib import Path
 import contextlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,22 +22,12 @@ class Compatibility(unittest.TestCase):
     def setUp(self):
         self.workspace = tempfile.TemporaryDirectory(prefix="sako-compatibility-")
         self.root = fixture.make_repo(Path(self.workspace.name) / "project")
-        self.processes = []
 
     def tearDown(self):
-        for process in self.processes:
-            if process.poll() is None:
-                process.terminate()
-                process.wait()
         self.workspace.cleanup()
 
-    def host(self):
-        process = subprocess.Popen(["sleep", "60"])
-        self.processes.append(process)
-        return process
-
-    def cli(self, *args, session=None, pid=None, expected=0):
-        code, out, err = fixture.cli(self.root, *args, session=session, pid=pid)
+    def cli(self, *args, session=None, expected=0):
+        code, out, err = fixture.cli(self.root, *args, session=session)
         self.assertEqual(code, expected, out + err)
         return out + err
 
@@ -126,7 +115,6 @@ class Compatibility(unittest.TestCase):
 
     @unittest.skipIf(fixture.WINDOWS, fixture.NO_CODEX)
     def test_named_clients_install_working_hooks_by_default(self):
-        host = self.host()
         for agent in ("codex", "claude"):
             with self.subTest(agent=agent):
                 self.root = fixture.make_repo(Path(self.workspace.name) / agent)
@@ -145,8 +133,7 @@ class Compatibility(unittest.TestCase):
                     hooks = events[name][0]["hooks"]
                     self.assertEqual(len(hooks), 1)
                     return subprocess.run(["sh", "-c", hooks[0]["command"]], cwd=self.root,
-                                          env=dict(fixture.ENV, SAKO_AGENT_PID=str(host.pid),
-                                                   CLAUDE_PROJECT_DIR=str(self.root)),
+                                          env=dict(fixture.ENV, CLAUDE_PROJECT_DIR=str(self.root)),
                                           input=json.dumps({"hook_event_name": name, "session_id": "hook-session"}),
                                           capture_output=True, text=True)
 
@@ -279,22 +266,20 @@ class Compatibility(unittest.TestCase):
             self.assertEqual(outcome.returncode, 2, retired)
             self.assertIn("unrecognized arguments", outcome.stderr)
 
-    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
-    def test_conversations_sharing_a_host_keep_separate_presence_and_ownership(self):
-        host = self.host()
-        self.cli("start", session="conversation-one", pid=host.pid)
+    def test_two_conversations_keep_separate_presence_and_ownership(self):
+        self.cli("start", session="conversation-one")
         self.cli("claim", "T-1", session="conversation-one")
         roots = sako.resolve_roots(self.root)
         first = sako.my_entry(roots, "conversation-one")
-        self.cli("start", session="conversation-two", pid=host.pid)
+        self.cli("start", session="conversation-two")
         self.assertEqual({entry["session_id"] for entry in sako.read_presence(roots)},
                          {"conversation-one", "conversation-two"})
         refusal = self.cli("claim", "T-1", "--takeover", "Inspect earlier work",
                            session="conversation-two", expected=3)
-        self.assertIn("held by a live session", refusal)
+        self.assertIn(f"T-1 is held by {sako.marker_for('conversation-one')}, a live session last seen ", refusal)
         self.cli("add", "Record the sample", "--scope", ".sako/work/sample.md")  # records work, beside the checkout's writer
         self.cli("claim", "T-10", session="conversation-two")
-        self.cli("start", session="conversation-one", pid=host.pid)
+        self.cli("start", session="conversation-one")
         resumed = sako.my_entry(roots, "conversation-one")
         for field in ("marker", "started", "work_start_rev"):
             self.assertEqual(resumed[field], first[field])
@@ -307,11 +292,9 @@ class Compatibility(unittest.TestCase):
     def test_a_claude_code_session_and_its_subagents_need_no_session_flag(self):
         """In Claude Code, as in Codex, a subagent's shell carries its parent's session ID, so a command there without
         --session acts as the parent. A helper given an ID of its own passes it on every command."""
-        host = self.host()
-
         def run(*args, **env):
             return subprocess.run([sys.executable, str(fixture.SAKO), *args], cwd=self.root, text=True,
-                                  capture_output=True, env=dict(fixture.ENV, SAKO_AGENT_PID=str(host.pid), **env))
+                                  capture_output=True, env=dict(fixture.ENV, **env))
 
         parent, main = sako.marker_for("conversation-main"), {"CLAUDE_CODE_SESSION_ID": "conversation-main"}
         subagent = dict(main, CLAUDE_CODE_CHILD_SESSION="1")  # main sessions' shells set it too, so it tells nothing apart
@@ -337,11 +320,9 @@ class Compatibility(unittest.TestCase):
         self.assertIn("needs --session <id>, SAKO_SESSION, or the session ID of Claude Code or Codex", run("end").stderr)
 
     def test_a_codex_session_needs_no_session_flag_unless_it_runs_inside_another_client(self):
-        host = self.host()
-
         def run(*args, **env):
             return subprocess.run([sys.executable, str(fixture.SAKO), *args], cwd=self.root, text=True,
-                                  capture_output=True, env=dict(fixture.ENV, SAKO_AGENT_PID=str(host.pid), **env))
+                                  capture_output=True, env=dict(fixture.ENV, **env))
 
         fixture.succeeds(run("start", CODEX_THREAD_ID="codex-main"))
         fixture.succeeds(run("claim", "T-1", CODEX_THREAD_ID="codex-main"))
@@ -354,7 +335,7 @@ class Compatibility(unittest.TestCase):
 
     def test_a_codex_subagent_uses_the_session_its_hooks_use(self):
         """Codex hooks and CODEX_SESSION_ID carry the root session; a subagent's CODEX_THREAD_ID is its own."""
-        env = dict(fixture.ENV, SAKO_AGENT_PID=str(self.host().pid), CODEX_SESSION_ID="codex-root")
+        env = dict(fixture.ENV, CODEX_SESSION_ID="codex-root")
         for args, extra in ((["start"], {}), (["claim", "T-1"], {"CODEX_THREAD_ID": "codex-subagent"})):
             fixture.succeeds(subprocess.run([sys.executable, str(fixture.SAKO), *args], cwd=self.root, text=True,
                                             capture_output=True, env=dict(env, **extra)))
@@ -362,15 +343,6 @@ class Compatibility(unittest.TestCase):
         nested = subprocess.run([sys.executable, str(fixture.SAKO), "status"], cwd=self.root, text=True, capture_output=True,
                                 env=dict(env, CLAUDE_CODE_SESSION_ID="outer"))  # one client inside the other: no default
         self.assertIn("your rows: none", fixture.succeeds(nested))
-
-    def hidden(self, session, seen, ns="pid:[elsewhere]"):
-        """A presence entry whose host another PID namespace hides, as a client's sandbox shows the hook's entry."""
-        path = sako.presence_dir(sako.resolve_roots(self.root)) / f"{sako.session_key(session)}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"marker": sako.marker_for(session), "session_id": session, "pid": 2 ** 22,
-                                    "ns": ns, "seen": seen, "started": "2026-01-01T00:00:00+0000",
-                                    "started_at": seen, "work_root": str(self.root), "branch": "main",
-                                    "work_start_rev": fixture.git(self.root, "rev-parse", "HEAD"), "dirty_at_start": {}}))
 
     def test_hook_entries_are_known_by_pattern_whatever_their_python_or_redirect(self):
         other = {"type": "command", "command": "echo mine"}
@@ -465,121 +437,151 @@ class Compatibility(unittest.TestCase):
             self.assertFalse((checkout / ".codex/hooks.json").exists(), checkout.name)
             self.assertTrue((checkout / ".claude/settings.local.json").is_file(), checkout.name)
 
-    def test_a_session_whose_host_is_hidden_keeps_working_and_is_taken_over_only_with_a_reason(self):
-        self.hidden("sandboxed", int(time.time()))
-        self.cli("add", "Record the sample", "--scope", "docs/")
-        for task in ("T-1", "T-10"):
-            self.cli("claim", task, session="sandboxed")
-        host = self.host()
-        self.cli("start", session="host-session", pid=host.pid)
-        self.assertIn("unverified from here (counts as live until", self.cli("status", session="host-session"))
-        self.assertIn("ledger: consistent", self.cli("check"), "within its lease it counts as live")
-        waiting = self.cli("next")
-        self.assertIn(f"T-10  claimed by {sako.marker_for('sandboxed')}", waiting)
-        self.assertNotIn("(not live)", waiting)
-        fixture.write(self.root, {"docs/sample.md": "the sandboxed session's edit\n"})
-        self.assertIn(f"this checkout's writer, {sako.marker_for('sandboxed')} with T-1, records the product changes here",
-                      self.cli("check", "--gate", session="host-session"), "an unverified writer counts within its lease")
-        (self.root / "docs/sample.md").unlink()
-        refusal = self.cli("claim", "T-1", session="host-session", expected=3)
-        self.assertIn("which SAKO cannot verify from here (a sandbox, or Windows, hides its process); if it stopped", refusal)
-        taken = self.cli("claim", "T-1", "--takeover", "its sandbox session ended; inspected its work", session="host-session")
-        self.assertIn("T-1: claimed; its previous holder could not be verified from here", taken)
-        self.assertIn(f"(took over from {sako.marker_for('sandboxed')}, unverified: its sandbox session ended",
-                      (self.root / ".sako/work/TASKS.md").read_text())
-        self.hidden("sandboxed", int(time.time()) - sako.LEASE - 1)
-        self.assertIn("T-10 is claimed by", self.cli("check", expected=1), "past its lease the claim is stale")
-        self.assertTrue(sako.my_entry(sako.resolve_roots(self.root), "sandboxed"), "and its starting facts stay on disk")
+    def test_a_session_counts_as_live_for_the_lease_after_its_last_command(self):
+        self.cli("start", session="worker")
+        self.cli("claim", "T-1", session="worker")
+        self.cli("start", session="reader")
+        marker, stale = sako.marker_for("worker"), "which is not a live session"
+        for ago, live in ((sako.LEASE - 60, True), (sako.LEASE + 60, False)):
+            with self.subTest(live=live):
+                fixture.lapse(self.root, "worker", ago)
+                status = self.cli("status", session="reader")
+                self.assertEqual(f"\n  peer {marker} (session ID ends worker) on main since " in status, live, status)
+                self.assertEqual("peers: none" in status, not live)
+                waiting = self.cli("next")
+                self.assertIn(f"T-1  claimed by {marker} since ", waiting)
+                self.assertEqual("(not live)" in waiting, not live)
+                self.assertEqual(f"T-1 is claimed by {marker}, {stale}" in self.cli("check", expected=0 if live else 1), not live)
+        self.assertTrue(fixture.entry_path(self.root, "worker").exists(), "a lapsed entry stays on disk")
 
-    @unittest.skipUnless(Path("/proc/sys/kernel/random/boot_id").is_file(), "needs a kernel that names each boot (Linux)")
-    def test_a_session_from_before_a_restart_has_ended_and_a_resume_keeps_its_starting_facts(self):
-        started = int(time.time()) - 60
-        self.hidden("restarted", started)
-        self.cli("claim", "T-1", session="restarted")
-        self.hidden("restarted", started, ns="pid:[elsewhere] boot earlier")  # the machine restarted since
-        self.assertIn("T-1 is claimed by", self.cli("check", expected=1), "its claim is stale at once, not after the lease")
-        self.cli("start", session="restarted", pid=self.host().pid)
-        self.assertEqual(sako.my_entry(sako.resolve_roots(self.root), "restarted")["started_at"], started,
-                         "a resume keeps its starting facts")
-        self.assertIn("ledger: consistent", self.cli("check"))
+    def test_a_takeover_within_the_lease_is_refused_with_when_the_holder_was_seen_and_needs_a_reason_after_it(self):
+        self.cli("start", session="holder")
+        self.cli("claim", "T-1", session="holder")
+        self.cli("start", session="taker")
+        holder, seen = sako.marker_for("holder"), json.loads(fixture.entry_path(self.root, "holder").read_text())["seen"]
+        at = lambda moment: time.strftime("%Y-%m-%d %H:%M", time.localtime(moment))
+        refusal = (f"sako: T-1 is held by {holder}, a live session last seen {at(seen)}, whose lease ends "
+                   f"{at(seen + sako.LEASE)}. Choose another task. After the lease, or once the owner confirms that session "
+                   "stopped and you end it (end --session holder), take it over with a reason (claim T-1 --takeover REASON)\n")
+        for reason in ((), ("--takeover", "it looks idle")):
+            with self.subTest(reason=reason):
+                self.assertEqual(fixture.cli(self.root, "claim", "T-1", *reason, session="taker"), (3, "", refusal))
+        fixture.lapse(self.root, "holder")
+        self.assertEqual(fixture.cli(self.root, "claim", "T-1", session="taker"),
+                         (3, "", f"sako: T-1 is held by {holder}, a stale claim; inspect its handoff and use --takeover <reason>\n"))
+        self.assertIn("T-1: claimed;", self.cli("claim", "T-1", "--takeover", "quiet past its lease; inspected its work",
+                                                session="taker"))
+        self.assertRegex((self.root / ".sako/work/TASKS.md").read_text(),
+                         rf"\| {sako.marker_for('taker')} since [^|]* \(took over from {holder}: quiet past its lease; "
+                         r"inspected its work\) \|")
+        self.cli("start", session="third")
+        self.assertIn(", a live session last seen ", self.cli("claim", "T-1", "--takeover", "x", session="third", expected=3))
+        self.assertEqual(self.cli("end", session="taker"), "sako: presence ended\n")  # once the owner confirms it stopped
+        self.assertIn("T-1: claimed;", self.cli("claim", "T-1", "--takeover", "the owner confirmed it stopped",
+                                                session="third"), "the override takes effect within the lease")
 
-    @unittest.skipUnless(Path("/proc/sys/kernel/random/boot_id").is_file(), "needs a kernel that names each boot (Linux)")
-    def test_a_resume_in_a_sandbox_after_a_restart_counts_by_its_lease(self):
-        started = int(time.time()) - 60
-        self.hidden("resumed", started, ns="pid:[elsewhere] boot earlier")  # the hook's entry, from before a restart
-        self.cli("start", session="resumed", pid=2 ** 22)  # no host visible from here, and no hook ran
-        entry = sako.my_entry(sako.resolve_roots(self.root), "resumed")
-        self.assertEqual((entry["pid"], entry["started_at"]), (0, started), "the ended host goes and the starting facts stay")
-        self.assertEqual(entry["ns"], sako.PID_NS, "it names this boot, so the next restart ends it")
-        self.assertIn("T-1: claimed", self.cli("claim", "T-1", session="resumed"))
-        self.assertIn("ledger: consistent", self.cli("check"), "its claim counts as live for the lease")
+    def test_a_sessions_own_command_after_its_lease_lapsed_renews_it_and_goes_on(self):
+        fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"]})})
+        self.cli("start", session="paused")
+        roots = sako.resolve_roots(self.root)
+        started = sako.my_entry(roots, "paused")["started_at"]
+        for args in (("status",), ("check",), ("next",), ("verify",), ("add", "Notes", "--scope", "docs/"), ("claim", "T-10"),
+                     ("edit", "T-10", "--widen", "notes/"), ("close", "T-10", "--evidence", "Recorded"), ("check", "--gate"),
+                     ("start",)):
+            with self.subTest(verb=" ".join(args[:2])):
+                lapsed = fixture.lapse(self.root, "paused")["seen"]
+                self.cli(*args, session="paused")
+                entry = sako.my_entry(roots, "paused")
+                self.assertGreater(entry["seen"], lapsed + sako.LEASE, "the command renewed the lease")
+                self.assertEqual(entry["started_at"], started, "and the session kept its start record")
+        self.cli("add", "Library", "--scope", "lib/")
+        self.cli("claim", "T-11", session="paused")
+        fixture.lapse(self.root, "paused")
+        self.cli("start", session="taker")
+        self.cli("claim", "T-11", "--takeover", "quiet past its lease; inspected its work", session="taker")
+        self.assertEqual(fixture.cli(self.root, "close", "T-11", "--evidence", "Done", session="paused"),
+                         (3, "", "sako: T-11 must be claimed by this session before closing\n"),
+                         "a row taken over in the meantime gets the usual refusal")
+        self.assertEqual(fixture.cli(self.root, "edit", "T-11", "--widen", "docs/", session="paused"),
+                         (3, "", f"sako: T-11 is claimed by {sako.marker_for('taker')}; its holder edits it\n"))
 
-    def test_a_takeover_blocked_by_a_hidden_sessions_overlapping_claim_offers_to_wait(self):
-        ended, hidden = sako.marker_for("ended-session"), sako.marker_for("sandboxed")
-        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
-            fixture.row("T-1", status="claimed", claim=ended),
-            fixture.row("T-2", status="claimed", claim=hidden, touches="`src/app.py`"))})
-        self.hidden("sandboxed", int(time.time()))
-        host = self.host()
-        self.cli("start", session="host-session", pid=host.pid)
-        reason = ("--takeover", "its session ended; inspected its work")
-        self.assertIn(f"T-1's scope overlaps T-2 (src/app.py), claimed by {hidden}; neither claim can be taken over while they "
-                      "overlap, so wait for it to close, or narrow a Scope in .sako/work/TASKS.md",
-                      self.cli("claim", "T-1", *reason, session="host-session", expected=3))
-        self.assertIn(f"T-2's scope overlaps T-1 (src/), claimed by {ended}; neither claim can be taken over while they overlap, "
-                      "so narrow a Scope in .sako/work/TASKS.md", self.cli("claim", "T-2", *reason, session="host-session", expected=3))
+    def test_every_hook_but_the_end_renews_the_lease_and_the_end_removes_presence_at_once(self):
+        self.assertEqual(fixture.hook(self.root, "SessionStart", "hooked")[0], 0)
+        roots = sako.resolve_roots(self.root)
+        started = sako.my_entry(roots, "hooked")["started_at"]
+        for event in ("Stop", "SessionStart"):
+            with self.subTest(event=event):
+                lapsed = fixture.lapse(self.root, "hooked")["seen"]
+                self.assertEqual(fixture.hook(self.root, event, "hooked")[0], 0)
+                entry = sako.my_entry(roots, "hooked")
+                self.assertGreater(entry["seen"], lapsed + sako.LEASE, "the hook renewed the lease")
+                self.assertEqual(entry["started_at"], started, "a resume keeps its start record")
+        self.assertEqual(fixture.hook(self.root, "SessionEnd", "hooked"), (0, "", ""))
+        self.assertIsNone(sako.my_entry(roots, "hooked"))
+        self.assertEqual(fixture.hook(self.root, "Stop", "hooked")[0], 0)
+        self.assertIsNone(sako.my_entry(roots, "hooked"), "a later hook renews nothing, so the end stays")
 
-    def test_a_claim_overlapping_a_hidden_sessions_claim_offers_to_wait_until_its_lease_ends(self):
-        hidden = sako.marker_for("sandboxed")
-        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
-            fixture.row("T-1", status="claimed", claim=hidden), fixture.row("T-2", touches="`src/app.py`"))})
-        self.cli("start", session="host-session", pid=self.host().pid)
+    def test_the_one_writer_refusal_lifts_once_the_writer_ends_or_lapses(self):
+        self.cli("add", "Guide", "--scope", "docs/")
+        self.cli("add", "Library", "--scope", "lib/")
+        for session in ("writer", "second", "third"):
+            self.cli("start", session=session)
+        self.cli("claim", "T-1", session="writer")
+        self.assertIn(f"sako: T-10 would make a second writer in this checkout: {sako.marker_for('writer')} holds T-1 (src/) "
+                      "here", self.cli("claim", "T-10", session="second", expected=3))
+        self.assertEqual(self.cli("end", session="writer"), "sako: presence ended\n")
+        self.assertIn("T-10: claimed;", self.cli("claim", "T-10", session="second"), "end frees the checkout at once")
+        self.assertIn(f"would make a second writer in this checkout: {sako.marker_for('second')} holds T-10 (docs/)",
+                      self.cli("claim", "T-11", session="third", expected=3))
+        fixture.lapse(self.root, "second")
+        self.assertIn("T-11: claimed;", self.cli("claim", "T-11", session="third"), "a writer past its lease holds no checkout")
+        fixture.write(self.root, {"lib/shared.py": "x = 1\n"})
+        code, _, err = fixture.cli(self.root, "check", "--gate", session="second")
+        self.assertEqual(code, 2, err)
+        self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: lib/shared.py", err,
+                      "a documented limit, since back within its lease the first writer sees the second one's files")
+
+    def test_an_entry_from_an_earlier_release_is_judged_by_its_last_seen_time_alone(self):
+        path, marker = fixture.entry_path(self.root, "upgraded"), sako.marker_for("upgraded", "0101")
+
+        def older(seen):
+            """The entry an earlier release wrote, with the agent's process, gone now, and its PID namespace and boot."""
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"marker": marker, "session_id": "upgraded", "pid": 2 ** 22,
+                                        "ns": "pid:[4026531836]@1 boot an-earlier-boot", "seen": seen,
+                                        "started": "2026-01-01T00:00:00+0000", "started_at": 1, "start_root": str(self.root),
+                                        "work_root": str(self.root), "branch": "main",
+                                        "work_start_rev": fixture.git(self.root, "rev-parse", "HEAD"), "dirty_at_start": {}}))
+
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1", status="claimed", claim=marker))})
+        older(int(time.time()))
+        self.cli("start", session="reader")
+        self.assertIn(f"\n  peer {marker} ", self.cli("status", session="reader"), "seen within the lease, it is live")
+        self.assertIn(f"T-1 is held by {marker}, a live session last seen ",
+                      self.cli("claim", "T-1", "--takeover", "its process is gone", session="reader", expected=3))
+        older(int(time.time()) - sako.LEASE - 60)
+        self.assertIn(f"T-1 is claimed by {marker}, which is not a live session", self.cli("check", expected=1))
+        self.cli("start", session="upgraded")
+        entry = json.loads(path.read_text())
+        self.assertEqual((entry["marker"], entry["started_at"]), (marker, 1), "a resume keeps its marker and start record")
+        self.assertFalse({"pid", "ns"} & set(entry), "and writes no process")
+        older(int(time.time()) - sako.KEPT - 60)
+        self.cli("start", session="reader")
+        self.assertFalse(path.exists(), "unseen for a week, the entry is deleted at the next start")
+        self.cli("start", session="upgraded")
+        self.assertGreater(json.loads(path.read_text())["started_at"], 1, "so its session starts over")
+
+    def test_a_claim_overlapping_another_sessions_claim_offers_to_wait_within_its_lease_and_a_takeover_after_it(self):
+        self.cli("start", session="holder")
+        self.cli("claim", "T-1", session="holder")
+        self.cli("add", "Narrow work", "--scope", "src/app.py")
+        self.cli("start", session="other")
         takeover = "if it stopped, inspect its handoff and take it over first (claim T-1 --takeover REASON), or "
-        for seen, wait in ((int(time.time()), "wait for it to close, or "), (int(time.time()) - sako.LEASE - 1, "")):
-            with self.subTest(live=bool(wait)):  # live but unverified within its lease, stale past it
-                self.hidden("sandboxed", seen)
-                self.assertIn(f"T-2's scope overlaps T-1 (src/), claimed by {hidden}; {wait}{takeover}narrow T-2's scope "
-                              "(edit T-2 --scope PATH)", self.cli("claim", "T-2", session="host-session", expected=3))
-
-    @unittest.skipUnless(shutil.which("bwrap") and subprocess.run(
-        ["bwrap", "--dev-bind", "/", "/", "--unshare-pid", "--proc", "/proc", "true"], capture_output=True).returncode == 0,
-        "needs bubblewrap with unprivileged PID namespaces, as Codex's sandbox uses")
-    def test_presence_a_hook_wrote_survives_commands_in_a_pid_namespace(self):
-        host = self.host()
-        payload = json.dumps({"session_id": "codex-thread", "hook_event_name": "SessionStart"})
-        self.assertEqual(fixture.cli(self.root, "hook", pid=host.pid, stdin=payload)[0], 0)
-
-        def boxed(*args):
-            return subprocess.run(["bwrap", "--dev-bind", "/", "/", "--unshare-pid", "--proc", "/proc", "--chdir",
-                                   str(self.root), sys.executable, str(fixture.SAKO), *args], capture_output=True,
-                                  text=True, env=dict(fixture.ENV, CODEX_THREAD_ID="codex-thread"))
-
-        fixture.succeeds(boxed("claim", "T-1"))
-        fixture.succeeds(boxed("start"))
-        fixture.succeeds(boxed("start", "--session", "codex-other"))
-        roots = sako.resolve_roots(self.root)
-        tokens = [subprocess.run(["bwrap", "--dev-bind", "/", "/", "--unshare-pid", "--proc", "/proc", sys.executable, "-c",
-                                  "import sako; print(sako.PID_NS)"], capture_output=True, text=True,
-                                 cwd=fixture.SAKO.parent).stdout for _ in range(2)]
-        self.assertNotEqual(tokens[0], tokens[1], "two sandboxes never share a token, even when the kernel reuses the number")
-        self.assertEqual(sako.my_entry(roots, "codex-thread")["pid"], host.pid, "a start inside keeps the hook's host")
-        self.assertEqual(sako.my_entry(roots, "codex-other")["pid"], 0, "PID 1 inside is never recorded")
-        host.terminate()
-        host.wait()
-        self.assertIn("T-1 is claimed by", self.cli("check", expected=1), "the host judges the hook's entry by its PID")
-
-    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
-    def test_dead_shared_host_sweeps_all_its_conversations(self):
-        host = self.host()
-        for session in ("conversation-one", "conversation-two"):
-            self.cli("start", session=session, pid=host.pid)
-        self.cli("claim", "T-1", session="conversation-one")
-        roots = sako.resolve_roots(self.root)
-        self.assertEqual(len(sako.read_presence(roots)), 2)
-        host.terminate()
-        host.wait()
-        self.assertEqual(sako.read_presence(roots), [])
-        self.assertIn("not a live session", self.cli("check", expected=1))
+        for ago, advice in ((sako.LEASE - 60, "wait for it to close, or "), (sako.LEASE + 60, takeover)):
+            with self.subTest(live=ago < sako.LEASE):
+                fixture.lapse(self.root, "holder", ago)
+                self.assertIn(f"T-10's scope overlaps T-1 (src/), claimed by {sako.marker_for('holder')}; {advice}narrow "
+                              "T-10's scope (edit T-10 --scope PATH)", self.cli("claim", "T-10", session="other", expected=3))
 
     def test_install_leaves_project_and_client_instructions_untouched(self):
         untouched = {"CLAUDE.md": "# Project rules\nUse the current specification.\n",

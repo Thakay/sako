@@ -27,22 +27,12 @@ class KitCase(unittest.TestCase):
         fixture.git(self.root, "init", "-q", "-b", "main")
         fixture.write(self.root, {"src/app.py": "print(1)\n", "README.md": "# App\n"})
         fixture.commit_all(self.root, "product")
-        self.processes = []
 
     def tearDown(self):
-        for process in self.processes:
-            if process.poll() is None:
-                process.terminate()
-                process.wait()
         for path in (self.root / ".git", self.root / ".sako"):
             if path.exists():
                 subprocess.run(["chmod", "-R", "u+w", str(path)])
         self.workspace.cleanup()
-
-    def host(self):
-        process = subprocess.Popen(["sleep", "60"])
-        self.processes.append(process)
-        return process.pid
 
     def install(self, *flags):
         return fixture.succeeds(fixture.seed(self.root, *flags))
@@ -51,13 +41,12 @@ class KitCase(unittest.TestCase):
         fixture.git(self.root, "worktree", "add", "-q", str(self.base / name))
         return self.base / name
 
-    def hook(self, checkout, agent, event, session, pid=None, cwd=None, project=None, active=False):
+    def hook(self, checkout, agent, event, session, cwd=None, project=None, active=False):
         """Run the exact command init wrote, as the client would, from that checkout or from the shell's
         folder cwd, with Claude Code's project folder when one is given."""
         entries = json.loads((checkout / sako.hook_file(agent)).read_text())["hooks"][event]
         command = entries[-1]["hooks"][0]["command"]
-        env = dict(fixture.ENV, **({"SAKO_AGENT_PID": str(pid)} if pid else {}),
-                   **({"CLAUDE_PROJECT_DIR": str(project)} if project else {}))
+        env = dict(fixture.ENV, **({"CLAUDE_PROJECT_DIR": str(project)} if project else {}))
         return subprocess.run(["sh", "-c", command], cwd=cwd or checkout, env=env, capture_output=True, text=True,
                               input=json.dumps({"session_id": session, "hook_event_name": event,
                                                 "stop_hook_active": active}))
@@ -97,7 +86,7 @@ class Footprint(KitCase):
         self.assertIn("not in Git", lines[1])
         self.assertIn("--repo [url]", lines[2])
         self.assertEqual(lines[4], "Hooks: Claude Code not seen yet.")
-        fixture.succeeds(self.hook(self.root, "claude", "SessionStart", "status-session", self.host()))
+        fixture.succeeds(self.hook(self.root, "claude", "SessionStart", "status-session"))
         self.assertRegex(self.status().splitlines()[4], r"Claude Code last ran \d{4}-\d\d-\d\d \d\d:\d\d \(SessionStart\)")
 
     def test_status_from_a_linked_worktree_names_the_records_by_absolute_path(self):
@@ -116,7 +105,7 @@ class Footprint(KitCase):
                                 if not (fixture.WINDOWS and a == "codex")]:  # on Windows Codex gets no hooks
             with self.subTest(checkout=checkout.name, agent=agent):
                 session = f"{checkout.name}-{agent}"
-                context = fixture.succeeds(self.hook(checkout, agent, "SessionStart", session, self.host()))
+                context = fixture.succeeds(self.hook(checkout, agent, "SessionStart", session))
                 kit = ".sako" if checkout == self.root else (self.root.resolve() / ".sako").as_posix()
                 self.assertIn(f"method {kit}/SAKO.md; records {kit}/work/TASKS.md and {kit}/work/DONE.md", context)
                 self.assertIn(f"commands: {sako.PYTHON} {(self.root.resolve() / '.sako/sako.py').as_posix()} <verb>", context)
@@ -191,14 +180,12 @@ class Footprint(KitCase):
         fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"],
                                                                    "verify_paths": ["src"]})})
         subprocess.run(["chmod", "-R", "a-w", str(self.root / ".git")], check=True)
-        pid = self.host()
         for args in (("add", "Probe", "--done-when", "It passes", "--scope", "src/"), ("start",), ("claim", "T-1"), ("verify",),
                      ("close", "T-1", "--evidence", "Probe passed"), ("check",), ("status",)):
             with self.subTest(args=args):
                 session = ["--session", "read-only"] if args[0] in ("start", "claim", "close", "status") else []
                 fixture.succeeds(subprocess.run([sys.executable, str(self.root / ".sako/sako.py"), *args, *session],
-                                                cwd=self.root, capture_output=True, text=True,
-                                                env=dict(fixture.ENV, SAKO_AGENT_PID=str(pid))))
+                                                cwd=self.root, capture_output=True, text=True, env=fixture.ENV))
         subprocess.run(["chmod", "-R", "u+w", str(self.root / ".git")], check=True)
         self.assertFalse((self.root / ".git/sako").exists())
         subprocess.run(["chmod", "-R", "a-w", str(self.root / ".sako")], check=True)
@@ -258,7 +245,7 @@ class Footprint(KitCase):
         for folder in (self.root / ".sako", nested):  # the records repository, then the untracked one
             with self.subTest(folder=folder.relative_to(self.root).as_posix()):
                 session = f"moved-{folder.name}"
-                context = fixture.succeeds(self.hook(self.root, "claude", "SessionStart", session, self.host(),
+                context = fixture.succeeds(self.hook(self.root, "claude", "SessionStart", session,
                                                      cwd=folder, project=self.root))
                 self.assertIn(f"work {self.root.resolve().as_posix()} (main, started at ", context)
                 self.assertIn("your marker", context)
@@ -285,7 +272,7 @@ class Footprint(KitCase):
         self.install("--client", "claude")
         linked = self.worktree("linked")
         session = "moved-to-linked"
-        fixture.succeeds(self.hook(self.root, "claude", "SessionStart", session, self.host(), project=self.root))
+        fixture.succeeds(self.hook(self.root, "claude", "SessionStart", session, project=self.root))
         fixture.write(linked, {"src/app.py": "print(2)\n"})
         stop = self.hook(self.root, "claude", "Stop", session, cwd=linked, project=self.root)
         self.assertEqual(stop.returncode, 2, stop.stderr)
@@ -372,7 +359,7 @@ class ReviewRegressions(KitCase):
         fixture.commit_all(spaced, "empty")
         fixture.succeeds(fixture.seed(spaced, "--client", "none"))
         context = fixture.succeeds(subprocess.run([sys.executable, str(spaced / ".sako/sako.py"), "start", "--session",
-                                                   "spaced"], cwd=spaced, env=dict(fixture.ENV, SAKO_AGENT_PID=str(self.host())),
+                                                   "spaced"], cwd=spaced, env=fixture.ENV,
                                                   capture_output=True, text=True))
         command = next(line for line in context.splitlines() if line.startswith("commands: "))[10:]
         self.assertIn("'", command, "the path with a space is quoted")
@@ -498,51 +485,49 @@ class RepoFootprint(KitCase):
     def test_the_gate_wants_the_records_committed_in_the_repo_footprint(self):
         self.install("--client", "none", "--repo")
         sh(self.root, "git -C .sako add -A && git -C .sako commit -qm records")
-        pid = self.host()
         fixture.succeeds(fixture.installed(self.root, "add", "Change app", "--scope", "src/"))
-        fixture.succeeds(fixture.installed(self.root, "start", session="repo-s", pid=pid))
-        fixture.succeeds(fixture.installed(self.root, "claim", "T-1", session="repo-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "start", session="repo-s"))
+        fixture.succeeds(fixture.installed(self.root, "claim", "T-1", session="repo-s"))
         fixture.write(self.root, {"src/app.py": "print(2)\n"})
-        fixture.succeeds(fixture.installed(self.root, "close", "T-1", "--evidence", "done", session="repo-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "close", "T-1", "--evidence", "done", session="repo-s"))
         fixture.commit_all(self.root, "T-1")
-        gate = fixture.installed(self.root, "check", "--gate", session="repo-s", pid=pid)
+        gate = fixture.installed(self.root, "check", "--gate", session="repo-s")
         self.assertEqual(gate.returncode, 2, gate.stdout + gate.stderr)
         fix = "git -C .sako add -- work/TASKS.md work/DONE.md, then git -C .sako commit -m 'T-1 closed' -- work/TASKS.md work/DONE.md"
         self.assertIn(fix, gate.stderr)
         sh(self.root, fix.replace(", then ", " && "))  # the two commands, in order
-        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="repo-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="repo-s"))
         fixture.succeeds(fixture.installed(self.root, "add", "Note the change", "--scope", "docs/"))
-        fixture.succeeds(fixture.installed(self.root, "claim", "T-2", session="repo-s", pid=pid))
-        fixture.succeeds(fixture.installed(self.root, "close", "T-2", "--evidence", "Noted", session="repo-s", pid=pid))
-        gate = fixture.installed(self.root, "check", "--gate", session="repo-s", pid=pid)
+        fixture.succeeds(fixture.installed(self.root, "claim", "T-2", session="repo-s"))
+        fixture.succeeds(fixture.installed(self.root, "close", "T-2", "--evidence", "Noted", session="repo-s"))
+        gate = fixture.installed(self.root, "check", "--gate", session="repo-s")
         self.assertIn("Committed: T-2 closed, but the receipts are not committed", gate.stderr)
         self.assertNotIn("T-1", gate.stderr, "a receipt already committed is not named again")
 
     def test_a_committed_receipt_passes_while_a_peers_receipt_is_pending(self):
         self.install("--client", "none", "--repo")
         fixture.write(self.root, {".sako/notes/draft.md": "the owner's own notes\n"})
-        first, second = self.host(), self.host()
         fixture.succeeds(fixture.installed(self.root, "add", "Change app", "--scope", "src/"))
         fixture.succeeds(fixture.installed(self.root, "add", "Write the plan", "--scope", ".sako/work/plan.md"))
-        for session, pid, task in (("first-s", first, "T-1"), ("second-s", second, "T-2")):
-            fixture.succeeds(fixture.installed(self.root, "start", session=session, pid=pid))
-            fixture.succeeds(fixture.installed(self.root, "claim", task, session=session, pid=pid))
-        fixture.succeeds(fixture.installed(self.root, "close", "T-1", "--evidence", "Checked", session="first-s", pid=first))
+        for session, task in (("first-s", "T-1"), ("second-s", "T-2")):
+            fixture.succeeds(fixture.installed(self.root, "start", session=session))
+            fixture.succeeds(fixture.installed(self.root, "claim", task, session=session))
+        fixture.succeeds(fixture.installed(self.root, "close", "T-1", "--evidence", "Checked", session="first-s"))
         line = next(x for x in self.status().splitlines() if x.startswith("Records: "))
         names = ".gitignore config.json work/TASKS.md work/DONE.md"
         self.assertIn(f'Commit them with: git -C .sako add -- {names} && git -C .sako commit -m "SAKO records" -- {names}', line)
         sh(self.root, line.split("Commit them with: ")[1])
         fixture.write(self.root, {".sako/work/plan.md": "the plan\n"})
-        fixture.succeeds(fixture.installed(self.root, "close", "T-2", "--evidence", "Planned", session="second-s", pid=second))
-        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="first-s", pid=first))
-        gate = fixture.installed(self.root, "check", "--gate", session="second-s", pid=second)
+        fixture.succeeds(fixture.installed(self.root, "close", "T-2", "--evidence", "Planned", session="second-s"))
+        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="first-s"))
+        gate = fixture.installed(self.root, "check", "--gate", session="second-s")
         self.assertEqual(gate.returncode, 2, gate.stdout + gate.stderr)
         self.assertIn("Committed: T-2 closed, but the receipts are not committed: work/DONE.md", gate.stderr)
         self.assertNotIn("T-1", gate.stderr, "a peer's committed receipt is not this session's")
         fix = "git -C .sako add -- work/TASKS.md work/DONE.md, then git -C .sako commit -m 'T-2 closed' -- work/TASKS.md work/DONE.md"
         self.assertIn(fix, gate.stderr)
         sh(self.root, fix.replace(", then ", " && "))
-        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="second-s", pid=second))
+        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="second-s"))
         self.assertEqual(set(fixture.git(self.root / ".sako", "ls-files").splitlines()), set(names.split()))
 
     def test_remove_warns_about_commits_that_exist_only_here_and_keeps_the_history(self):
@@ -574,10 +559,9 @@ class RepoFootprint(KitCase):
         mask = self.root / ".sako/.git"
         mask.mkdir()
         mask.chmod(0o555)  # Codex's sandbox puts an empty, read-only .git in every writable folder
-        pid = self.host()
-        fixture.succeeds(fixture.installed(self.root, "start", session="codex-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "start", session="codex-s"))
         self.assertNotIn("footprint:", self.status())
-        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="codex-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="codex-s"))
         mask.chmod(0o755)
         mask.rmdir()
         self.install("--client", "none", "--repo")
@@ -588,13 +572,12 @@ class RepoFootprint(KitCase):
         earlier = dict(fixture.ENV, GIT_AUTHOR_DATE="2001-01-01T09:00:00+0000", GIT_COMMITTER_DATE="2001-01-01T09:00:00+0000")
         subprocess.run(["sh", "-c", 'git -C .sako add -A && git -C .sako commit -qm "Records before the start"'],
                        cwd=self.root, env=earlier, check=True, capture_output=True)
-        pid = self.host()
-        fixture.succeeds(fixture.installed(self.root, "start", session="reader", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "start", session="reader"))
         fixture.succeeds(fixture.installed(self.root, "add", "Change app", "--scope", "src/"))
         sh(self.root, 'git -C .sako commit -qm "A peer adds T-1" -- work/TASKS.md')
         fixture.write(self.root, {".sako/work/plan.md": "the plan\n"})
         sh(self.root, 'git -C .sako add -- work/plan.md && git -C .sako commit -qm "A peer writes the plan"')
-        out = fixture.succeeds(fixture.installed(self.root, "status", session="reader", pid=pid))
+        out = fixture.succeeds(fixture.installed(self.root, "status", session="reader"))
         kept = "".join(f"  {line}\n" for line in fixture.git(self.root / ".sako", "log", "--format=%h %s", "-2").splitlines())
         self.assertIn("\nlanded in the code since you started: nothing\nrecords committed since you started: 2\n" + kept, out)
         self.assertNotIn("Records before the start", out)
@@ -662,7 +645,7 @@ class SharedFootprint(KitCase):
                                         capture_output=True, text=True))
         self.assertIn("Feature task", (feature / ".sako/work/TASKS.md").read_text())
         self.assertNotIn("Feature task", (self.root / ".sako/work/TASKS.md").read_text())
-        context = fixture.succeeds(self.hook(feature, "claude", "SessionStart", "feature-s", self.host()))
+        context = fixture.succeeds(self.hook(feature, "claude", "SessionStart", "feature-s"))
         self.assertIn("records .sako/work/TASKS.md", context)
         self.assertIn("M .sako/work/TASKS.md", fixture.git(feature, "status", "--porcelain"))
         refusal = fixture.seed(old)
@@ -671,20 +654,19 @@ class SharedFootprint(KitCase):
 
     def test_the_gate_wants_the_records_committed_with_the_code(self):
         self.share()
-        pid = self.host()
         fixture.succeeds(fixture.installed(self.root, "add", "Change app", "--scope", "src/"))
-        fixture.succeeds(fixture.installed(self.root, "start", session="sh-s", pid=pid))
-        fixture.succeeds(fixture.installed(self.root, "claim", "T-1", session="sh-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "start", session="sh-s"))
+        fixture.succeeds(fixture.installed(self.root, "claim", "T-1", session="sh-s"))
         fixture.write(self.root, {"src/app.py": "print(2)\n"})
-        fixture.succeeds(fixture.installed(self.root, "close", "T-1", "--evidence", "done", session="sh-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "close", "T-1", "--evidence", "done", session="sh-s"))
         sh(self.root, "git add src && git commit -qm T-1")
-        gate = fixture.installed(self.root, "check", "--gate", session="sh-s", pid=pid)
+        gate = fixture.installed(self.root, "check", "--gate", session="sh-s")
         self.assertEqual(gate.returncode, 2, gate.stdout + gate.stderr)
         self.assertNotIn("Recorded:", gate.stderr)
         fix = "git add -- .sako/work/TASKS.md .sako/work/DONE.md, then git commit -m 'T-1 closed' -- .sako/work/TASKS.md .sako/work/DONE.md"
         self.assertIn(fix, gate.stderr)
         sh(self.root, fix.replace(", then ", " && "))  # the two commands, in order
-        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="sh-s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="sh-s"))
 
     def test_the_shared_records_commit_line_commits_only_the_records_by_name(self):
         self.share()
@@ -724,17 +706,16 @@ class FootprintReview(KitCase):
     """One regression per defect the footprint review found."""
 
     def close_and_claim_next(self, records_commit):
-        pid = self.host()
         for task in ("Change app", "Next change"):
             fixture.succeeds(fixture.installed(self.root, "add", task, "--scope", "src/"))
-        fixture.succeeds(fixture.installed(self.root, "start", session="s", pid=pid))
-        fixture.succeeds(fixture.installed(self.root, "claim", "T-1", session="s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "start", session="s"))
+        fixture.succeeds(fixture.installed(self.root, "claim", "T-1", session="s"))
         fixture.write(self.root, {"src/app.py": "print(2)\n"})
-        fixture.succeeds(fixture.installed(self.root, "close", "T-1", "--evidence", "Changed", session="s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "close", "T-1", "--evidence", "Changed", session="s"))
         sh(self.root, "git add src && git commit -qm T-1 && " + records_commit)
-        fixture.succeeds(fixture.installed(self.root, "claim", "T-2", session="s", pid=pid))
+        fixture.succeeds(fixture.installed(self.root, "claim", "T-2", session="s"))
         fixture.write(self.root, {".sako/work/T-2-next-change/handoff.md": "Where it stands: started\n"})
-        return fixture.installed(self.root, "check", "--gate", session="s", pid=pid)
+        return fixture.installed(self.root, "check", "--gate", session="s")
 
     def test_pausing_after_a_close_stays_free_in_the_repo_footprint(self):
         self.install("--client", "none", "--repo")

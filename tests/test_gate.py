@@ -29,32 +29,20 @@ class Gate(unittest.TestCase):
         self.root = fixture.make_repo(self.base / "project", {
             ".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1", touches="`src/`"), fixture.row("T-2", touches="`docs/`")),
             ".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": ["src"]})})
-        self.processes = []
 
     def tearDown(self):
-        for process in self.processes:
-            if process.poll() is None:
-                process.terminate()
-                process.wait()
         self.workspace.cleanup()
 
-    def host(self):
-        process = subprocess.Popen(["sleep", "60"])
-        self.processes.append(process)
-        return process.pid
-
-    def run_in(self, where, *args, session=None, pid=None):
-        return fixture.cli(where, *args, session=session, pid=pid)
+    def run_in(self, where, *args, session=None):
+        return fixture.cli(where, *args, session=session)
 
     def stop(self, session, where=None, active=False):
         payload = {"session_id": session, "hook_event_name": "Stop", "stop_hook_active": active}
         return fixture.cli(where or self.root, "hook", stdin=json.dumps(payload))
 
     def start(self, session, where=None):
-        pid = self.host()
-        code, out, err = self.run_in(where or self.root, "start", session=session, pid=pid)
+        code, out, err = self.run_in(where or self.root, "start", session=session)
         self.assertEqual(code, 0, out + err)
-        return pid
 
     def seals(self):
         """What the closes made in the main checkout sealed, by task."""
@@ -113,7 +101,7 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.run_in(self.root, "claim", "T-1", session="s1")[0], 0)
         fixture.write(self.root, {"src/app.py": "print(2)\n"})
         self.assertEqual(fixture.hook(self.root, "SessionEnd", "s1")[0], 0)
-        out = fixture.hook(self.root, "SessionStart", "s1", pid=self.host())[1]
+        out = fixture.hook(self.root, "SessionStart", "s1")[1]
         self.assertIn(f"your marker: {today}", out, "the resume starts a new start record under a new marker day")
         out = self.run_in(self.root, "status", session="s1")[1]
         self.assertIn("your rows: T-1 (claimed, no handoff) touches src/\n", out, "the claim outlives the session")
@@ -138,7 +126,7 @@ class Gate(unittest.TestCase):
         self.assertEqual(fixture.hook(self.root, "SessionEnd", "s1")[0], 0)
         self.assertIn(f"T-1 is claimed by {marker}, which is not a live session", self.run_in(self.root, "check")[1],
                       "while the session is gone, its claim reads as stale to everyone")
-        self.assertIn(f"your marker: {marker}\n", fixture.hook(self.root, "SessionStart", "s1", pid=self.host())[1])
+        self.assertIn(f"your marker: {marker}\n", fixture.hook(self.root, "SessionStart", "s1")[1])
         self.assertIn("your rows: T-1 (claimed, no handoff) touches src/\n", self.run_in(self.root, "status", session="s1")[1])
         self.assertIn("ledger: consistent", self.run_in(self.root, "check")[1], "the same ID brings its claim back to life")
 
@@ -147,7 +135,7 @@ class Gate(unittest.TestCase):
             fixture.row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"), fixture.row("T-2", touches="`docs/`"))})
         stale = ("T-1 is claimed by sk-0101-aaaaaaaaaaaa, which is not a live session; resume it, or take it over (claim T-1 "
                  "--takeover REASON), then finish or park it (edit T-1 --park REASON)")
-        code, out, err = self.run_in(self.root, "start", session="s1", pid=self.host())
+        code, out, err = self.run_in(self.root, "start", session="s1")
         self.assertEqual(code, 0, out + err)
         self.assertIn(f"  {stale}", out, "start lists another session's stale claim")
         self.assertEqual(self.stop("s1"), (0, "", ""), "another session's stale claim is not this session's to fix")
@@ -169,7 +157,7 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"),
                          (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}\n", ""), "an edit of the records is no change")
         self.assertEqual(self.stop("s1"), (0, "", ""))
-        views = {"start": self.run_in(self.root, "start", session="s2", pid=self.host())[1],
+        views = {"start": self.run_in(self.root, "start", session="s2")[1],
                  **{view: self.run_in(self.root, view, session="s1")[1] for view in ("check", "status")}}
         for view, out in views.items():
             with self.subTest(view=view):
@@ -273,7 +261,7 @@ class Gate(unittest.TestCase):
         self.assertIn("src/pre.py (edited after start; already dirty at start)", err)
         fixture.write(self.root, {"src/pre.py": "draft\n"})
         self.assertEqual(self.stop("s1")[0], 0, "back to its start bytes, it is not this session's change")
-        code, out, _ = self.run_in(self.root, "start", session="s1", pid=self.host())
+        code, out, _ = self.run_in(self.root, "start", session="s1")
         self.assertEqual(self.stop("s1")[0], 0, "a second start keeps the first snapshot")
 
     def test_commits_since_start_count_and_older_merged_commits_do_not(self):
@@ -313,10 +301,9 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 2, err)
         self.assertIn("src/app.py (deleted)", err)
 
-    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
     def test_a_checkouts_writer_answers_for_the_changes_in_it_and_a_claim_made_elsewhere_excuses_none(self):
         self.start("s1")
-        peer = self.start("peer")
+        self.start("peer")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "peer"))
         fixture.write(self.root, {"docs/x.md": "notes\n", "src/new.py": "x = 1\n"})
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
@@ -328,10 +315,7 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 2, err)
         self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/new.py", err,
                       "the writer is asked about the change outside its claim")
-        os.kill(peer, 15)
-        for process in self.processes:
-            if process.pid == peer:
-                process.wait()
+        fixture.lapse(self.root, "peer")
         self.assertEqual(self.stop("s1")[0], 2, "without a live writer the change is unrecorded")
         linked = self.base / "linked"
         fixture.git(self.root, "worktree", "add", "-q", str(linked))
@@ -858,9 +842,7 @@ class Gate(unittest.TestCase):
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
         fixture.write(self.root, {"src/app.py": "print(10)\n"})
-        for process in self.processes:
-            process.terminate()
-            process.wait()
+        fixture.lapse(self.root, "s1")
         self.start("s2")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s2", "--takeover", "s1 ended"))
         refusal = fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Taken over", "--session", "s2")
@@ -1034,11 +1016,10 @@ class Gate(unittest.TestCase):
         code, _, err = self.stop("s1")
         self.assertEqual((code, err), (0, ""), "a claim still held explains the stale check; pausing is free")
 
-    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
     def test_a_records_only_task_needs_no_check_while_this_checkouts_writer_edits_under_its_claim(self):
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
         self.start("s1")
-        peer = self.start("peer")
+        self.start("peer")
         for number in (1, 2):
             fixture.succeeds(fixture.installed_copy(self.root, "add", f"Plan step {number}", "--done-when", "Written",
                                                     "--scope", f".sako/work/plan-{number}.md"))
@@ -1051,10 +1032,7 @@ class Gate(unittest.TestCase):
         code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
         self.assertEqual(code, 0, out + err)
         self.assertIn(f"not counted: src/app.py: this checkout's writer, {sako.marker_for('peer')} with T-1, ", out)
-        os.kill(peer, 15)
-        for process in self.processes:
-            if process.pid == peer:
-                process.wait()
+        fixture.lapse(self.root, "peer")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
         refusal = fixture.installed_copy(self.root, "close", "T-11", "--evidence", "Written", "--session", "s1")
         self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)

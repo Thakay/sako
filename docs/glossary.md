@@ -15,6 +15,7 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Handoff | A paused task's notes, in `.sako/work/T-<n>-<slug>/handoff.md` |
 | Hook | A client's automatic call into SAKO when a session starts, stops or ends |
 | Kit | The files SAKO owns and updates: the runtime `.sako/sako.py`, the method `.sako/SAKO.md`, `.sako/install.json` and the skill copies |
+| Lease | The two hours a session counts as live after its last SAKO command or hook; each command that carries its session ID, and each hook, renews it |
 | Ledger | The task records in `.sako/work/`: `TASKS.md` for active work, `DONE.md` for finished work |
 | Marker | A session's name in claims and receipts, such as `sk-0115-7a281dacac30`, made of the month and day of its start and a key derived from its session ID; the start context prints yours |
 | Method | `SAKO.md`, the instructions agents follow in a project |

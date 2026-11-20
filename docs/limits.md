@@ -23,15 +23,9 @@ platform:
   Git's `bash.exe` by its full path there. How Claude Code and Codex run hooks on
   Windows is in [compatibility](compatibility.md#windows).
 - **macOS:** both test suites in CI on GitHub's macOS runner with Python 3.10 and
-  3.14, on the same POSIX code as Linux; four tests skip by name, each saying why.
-  No live client session has run on a Mac. A stock Mac's `python3` is 3.9, below
-  the floor; install Python 3.10 or newer.
-
-Parent discovery reads `/proc` and falls back to `ps`. Liveness uses a zero-signal
-process check, treats permission denial as alive, and applies only in the process
-namespace that recorded the process, which `/proc` names. On Windows SAKO reads no
-process, so presence there is the 24-hour lease the method describes, and
-`SAKO_AGENT_PID` has no effect.
+  3.14, on the same POSIX code as Linux; tests whose premise macOS lacks skip by
+  name, each saying why. No live client session has run on a Mac. A stock Mac's
+  `python3` is 3.9, below the floor; install Python 3.10 or newer.
 
 Commands run from any folder of the repository or its linked worktrees. Git finds
 the main checkout, whose `.sako/` holds the kit. Bare repositories, a Git folder kept
@@ -93,14 +87,14 @@ start, since a wall clock can step back. A close seals what each of its files ho
 whoever wrote it, so read `git diff` before following a Committed fix.
 
 The one-writer rule is judged at `claim`, and at an `edit` that grows a records
-claim into product files, among sessions that count as live, which is up to 24 hours
-after a session's last start when SAKO cannot verify it. It reads the checkout a
-session last started in, so a session that moves to another checkout runs `start`
-there. Two sessions that already hold product claims in one checkout, as after a
-hand edit of the records, are each asked about every change there. Once a writer
-closes its last product claim, another session can claim in that checkout, over the
-first one's closed files too. Committed still names the first one's uncommitted
-closed files while they hold what its close sealed.
+claim into product files, among sessions that count as live, those seen in the last
+two hours. It reads the checkout a session last started in, so a session that moves
+to another checkout runs `start` there. Two sessions that already hold product
+claims in one checkout, as after a hand edit of the records, are each asked about
+every change there. Once a writer closes its last product claim, another session
+can claim in that checkout, over the first one's closed files too. Committed still
+names the first one's uncommitted closed files while they hold what its close
+sealed.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
 different branches keep separate ledgers. They can allocate the same task ID and
@@ -111,16 +105,21 @@ locally, so two machines writing at once collide on numbers and see each other's
 claims as stale. A team that needs more moves to a tracker; see
 [move the task authority to a tracker](move-to-a-tracker.md).
 
-Presence only estimates liveness; the method explains [how it
-works](../SAKO.md#pause-handoff-and-takeover). PID reuse, containers and unexpected
-wrappers, such as a `timeout` around the command, can misrepresent it, and a session
-without an end event can appear live until its host exits or its 24 hours pass. On
-Linux and WSL a restart ends presence. A peer's line names its claims and its
-checkout, and SAKO reads no peer's Git state. A claim left on purpose for another
-session reads as stale to every other session until it is taken over; close your
-part and leave the rest as a second row. Do not give concurrent workers the same
-session ID. A helper on its parent's ID is the parent, so the ledger shows no
-separate holder for it.
+Presence only estimates liveness. SAKO reads no process, so on every platform a
+session counts as live for two hours after its last SAKO command or hook, as the
+method explains ([how it works](../SAKO.md#pause-handoff-and-takeover)), and that
+errs both ways. A live session that runs no SAKO command and fires no hook for two
+hours reads as ended. Another session can then take over its claims with a reason
+and claim product work in its checkout, which the one-writer rule does not stop, and
+each session's gate then shows the other's files. A crashed session, or one in a
+client without hooks that never ran `end`, reads as live for two hours after its last
+command. Under the one-writer rule it locks product claims in its checkout until
+then, or until the owner confirms it stopped and someone runs
+`end --session <its ID>`. A peer's line names its claims and its checkout, and SAKO
+reads no peer's Git state. A claim left on purpose for another session reads as
+stale to every other session until it is taken over; close your part and leave the
+rest as a second row. Do not give concurrent workers the same session ID. A helper
+on its parent's ID is the parent, so the ledger shows no separate holder for it.
 
 ## Records and evidence
 
@@ -239,7 +238,7 @@ names the commit a finished task needs, and you or your agent make it.
 | Hooks in tracked client settings, for the shared footprint | A shared clone needs the gate before its own `init`, and both clients' review of committed hooks is verified |
 | Bare-repository layouts | Someone with a bare or separate-Git-folder layout asks for it; until then `init` refuses plainly |
 | A `sako` command on your PATH that runs the project's copy | People often type `uvx sako <verb>` or install the package as a tool |
-| Reading processes on Windows, so presence there is judged like on Linux | A Windows user finds the 24-hour lease misleading in real use |
+| Liveness read from the agent's process, or a lease length you set | The two-hour lease misjudges live or ended sessions in real use |
 | Hooks for Codex on Windows, which runs them in PowerShell | Codex for Windows can be tried, or a Windows Codex user asks |
 | Python 3.9, which a stock Mac ships | A macOS user on Apple's `python3` asks for it |
 

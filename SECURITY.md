@@ -35,8 +35,6 @@ A hook reads only these, and prints its context or findings to the agent:
 - `CLAUDE_PROJECT_DIR`, a second place to look for the kit
 - `SAKO_SESSION`, `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID` and `CODEX_THREAD_ID`,
   when the event names no session
-- outside Windows, `SAKO_AGENT_PID`, and `/proc` or `ps`, to judge which sessions
-  are live
 - the repository's Git state and files, `.sako/` included
 
 `init` also reads `CLAUDECODE` and `CODEX_THREAD_ID` to tell which client runs it.

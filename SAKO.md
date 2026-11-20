@@ -248,14 +248,17 @@ start context lists the claims you hold, each with its scope and whether its
 handoff is written, and `status` lists your claimed and closed rows. In Claude
 Code, `/clear` and a fork start a new session with its own ID.
 
-Presence judges liveness by the host process where that process is visible, and
-on Linux and WSL a restart ends it. A client's sandbox (Codex runs agent commands
-in one) hides the host's processes, so there, and for a session started inside
-one, presence counts as live for 24 hours after its last `start`, marked
-unverified. A claim held by an unverified session can be taken over once you
-confirm it stopped. Without `end`, presence stays until its host exits or its 24
-hours pass. Do not end a peer's presence without confirming it stopped.
-`SAKO_AGENT_PID` can name a long-lived host process, never a temporary shell.
+A session counts as live for two hours, its lease, after its last SAKO command or
+hook, on every platform. Each command that carries its session ID, and each hook,
+renews the lease. A session's own command after its lease ran out renews it and
+goes on, though a claim another session took over meanwhile is no longer its own.
+`end` ends presence at once. A claim whose holder is live refuses a takeover and
+says when the holder was last seen and when its lease ends. Once the lease ends,
+take the claim over with a reason. Before then, only once the owner confirms that
+session stopped, end it with `end --session <its ID>`, then take the claim over; do
+not end a peer's presence without that confirmation. `start` deletes the presence of
+a session unseen for a week, so that session takes a new start record if it comes
+back.
 
 An interrupted close can leave the same row in both records. Repeat the exact
 close command with the same evidence and session. Conflicting closed content is

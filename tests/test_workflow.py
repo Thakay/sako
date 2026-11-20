@@ -28,21 +28,13 @@ class Workflow(unittest.TestCase):
     def setUp(self):
         self.workspace = tempfile.TemporaryDirectory(prefix="sako-workflow-")
         self.root = fixture.make_repo(Path(self.workspace.name) / "project")
-        self.agents = []
 
     def tearDown(self):
-        for proc in self.agents:
-            if proc.poll() is None:
-                proc.terminate()
-                proc.wait()
         self.workspace.cleanup()
 
     def start(self, session, where=None):
-        proc = subprocess.Popen(["sleep", "60"])
-        self.agents.append(proc)
-        code, out, err = fixture.cli(where or self.root, "start", session=session, pid=proc.pid)
+        code, out, err = fixture.cli(where or self.root, "start", session=session)
         self.assertEqual(code, 0, out + err)
-        return proc
 
     def run_cli(self, *args, session=None, where=None):
         return fixture.cli(where or self.root, *args, session=session)
@@ -296,9 +288,7 @@ class Workflow(unittest.TestCase):
         line = f"evidence: fresh; last pass {there['time']} on content {there['content_id']} in worktree linked\n"
         for verb in ("check", "status"):
             self.assertIn(line, self.run_cli(verb)[1], verb)
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
-        self.assertIn(line, self.assert_ok(fixture.cli(self.root, "start", session="here", pid=agent.pid)))
+        self.assertIn(line, self.assert_ok(fixture.cli(self.root, "start", session="here")))
         self.assert_ok(self.run_cli("claim", "T-1", session="here"))
         self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Observed", session="here"))
         self.assertIn(f"; check pass {there['time']} on {there['content_id']} at {there['product_rev'][:12]} in worktree linked]",
@@ -384,9 +374,7 @@ class Workflow(unittest.TestCase):
         fixture.write(root, {".git/info/exclude": "/.sako/\n", ".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1")),
                              ".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"],
                                                               "verify_paths": ["src"]}), "src/app.py": "print(1)\n"})
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
-        self.assert_ok(fixture.cli(root, "start", session="fresh", pid=agent.pid))
+        self.assert_ok(fixture.cli(root, "start", session="fresh"))
         for args in (("claim", "T-1"), ("verify",), ("close", "T-1", "--evidence", "Prints 1")):
             self.assert_ok(fixture.cli(root, *args, session="fresh"))
         self.assertIn(" at no commit plus uncommitted changes]", (root / ".sako/work/DONE.md").read_text())
@@ -448,7 +436,6 @@ class Workflow(unittest.TestCase):
         fixture.write(self.root, {".sako/config.json": "{}"})
         self.assertIn(" verify_command not set\nevidence: none; no verify_command configured", self.assert_ok(self.run_cli("status")))
 
-    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
     def test_parallel_claims_have_one_winner(self):
         for session in ("session-a", "session-b"):
             self.start(session)
@@ -456,11 +443,12 @@ class Workflow(unittest.TestCase):
             results = list(pool.map(lambda name: self.run_cli("claim", "T-1", session=name),
                                     ("session-a", "session-b")))
         self.assertEqual(sorted(r[0] for r in results), [0, 3])
-        self.assertIn("live session", next(r[2] for r in results if r[0] == 3))
+        self.assertIn("T-1 is held by sk-", next(r[2] for r in results if r[0] == 3))
+        self.assertIn(", a live session last seen ", next(r[2] for r in results if r[0] == 3))
         self.assert_ok(self.run_cli("check"))
 
     def test_overlap_is_refused_and_stale_takeover_is_explicit(self):
-        first = self.start("session-a")
+        self.start("session-a")
         self.start("session-b")
         self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
         holder = fixture.marker("session-a")
@@ -471,22 +459,18 @@ class Workflow(unittest.TestCase):
                          "T-11: open; recorded locally, not committed")
         code, _, err = self.run_cli("claim", "T-10", session="session-b")
         self.assertEqual(code, 3)
-        advice = "wait for it to close, or " + ("if it stopped, inspect its handoff and take it over first (claim T-1 --takeover "
-                                                "REASON), or " if fixture.WINDOWS else "")  # Windows sees no process, so the holder is unverified
-        self.assertIn(f"T-10's scope overlaps T-1 (src/), claimed by {holder}; {advice}narrow T-10's scope (edit T-10 --scope PATH)",
-                      err)
-        first.terminate()
-        first.wait()
+        self.assertIn(f"T-10's scope overlaps T-1 (src/), claimed by {holder}; wait for it to close, or narrow T-10's scope "
+                      "(edit T-10 --scope PATH)", err)
+        fixture.lapse(self.root, "session-a")  # it ran no SAKO command or hook for longer than the lease
         code, _, err = self.run_cli("claim", "T-1", session="session-b")
         self.assertEqual(code, 3)
-        self.assertRegex(err, rf"T-1 is held by {sako.marker_for('session-a')}, (a stale claim;|which SAKO cannot verify from here "
-                         r"\(a sandbox, or Windows, hides its process\); if it stopped,) inspect its handoff and use --takeover")
+        self.assertIn(f"T-1 is held by {sako.marker_for('session-a')}, a stale claim; inspect its handoff and use --takeover", err)
         self.assert_ok(self.run_cli("claim", "T-1", "--takeover", "previous session ended; inspected its work", session="session-b"))
         text = (self.root / ".sako/work/TASKS.md").read_text()
         self.assertIn("took over from", text)
         self.assertIn("previous session ended", text)
         self.assertRegex(text, rf"\| {sako.marker_for('session-b')} since {MINUTE} \(took over from "
-                         rf"{sako.marker_for('session-a')}(, unverified)?: previous session ended; inspected its work\) \|",
+                         rf"{sako.marker_for('session-a')}: previous session ended; inspected its work\) \|",
                          "the taker's own claim time; the note names the previous marker alone")
 
     def test_a_takeover_reason_on_an_open_task_is_no_crash(self):
@@ -511,8 +495,8 @@ class Workflow(unittest.TestCase):
         self.assertIn("Its previous holder also holds overlapping T-2, T-3; take them over too before you stop.", out)
         code, _, err = self.run_cli("claim", "T-2", *reason, session="session-c")
         self.assertEqual(code, 3, "a third session is refused against a claim the taker now holds")
-        advice = ("neither claim can be taken over while they overlap, so " if fixture.WINDOWS else "") + "wait for it to close, or "
-        self.assertIn(f"T-2's scope overlaps T-1 (src/), claimed by {taker}; {advice}narrow a Scope in .sako/work/TASKS.md", err)
+        self.assertIn(f"T-2's scope overlaps T-1 (src/), claimed by {taker}; wait for it to close, or narrow a Scope in "
+                      ".sako/work/TASKS.md", err)
         out = self.assert_ok(self.run_cli("claim", "T-2", *reason, session="session-b"))
         self.assertIn("Its previous holder also holds overlapping T-3; take it over too before you stop.", out)
         self.assertNotIn("also holds", self.assert_ok(self.run_cli("claim", "T-3", *reason, session="session-b")),
@@ -602,9 +586,8 @@ class Workflow(unittest.TestCase):
         before = active.read_bytes()
         code, _, err = self.run_cli("edit", "T-1", "--widen", "docs/", "src/", session="session-a")
         self.assertEqual(code, 3, err)
-        advice = "wait for it to close, or " + ("if it stopped, inspect its handoff and take it over first (claim T-10 --takeover "
-                                                "REASON), or " if fixture.WINDOWS else "")  # Windows sees no process
-        self.assertIn(f"T-1's new path src/ overlaps T-10 (src/nested/), claimed by {holder}; {advice}edit without src/", err)
+        self.assertIn(f"T-1's new path src/ overlaps T-10 (src/nested/), claimed by {holder}; wait for it to close, or edit "
+                      "without src/", err)
         self.assertEqual(active.read_bytes(), before, "nothing is written, docs/ included")
         self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--widen", "src/app.py", "src/lib/", session="session-a")),
                          "T-1: claimed; scope src/app.py, tests/, src/lib/; recorded locally, not committed\n",
@@ -661,17 +644,15 @@ class Workflow(unittest.TestCase):
                          "both paths lie inside the old scope, so the overlap with T-2 only shrinks")
 
     def test_only_its_holder_edits_a_claimed_row(self):
-        holder = self.start("session-a")
+        self.start("session-a")
         self.start("session-b")
         active, marker = self.root / ".sako/work/TASKS.md", fixture.marker("session-a")
         self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
         before = active.read_bytes()
         takeover = ", or if it stopped, inspect its handoff and take it over first (claim T-1 --takeover REASON)"
         code, _, err = self.run_cli("edit", "T-1", "--scope", "docs/", session="session-b")
-        self.assertEqual((code, err), (3, f"sako: T-1 is claimed by {marker}; its holder edits it"
-                                          f"{takeover if fixture.WINDOWS else ''}\n"), "a live holder's claim")
-        holder.terminate()
-        holder.wait()
+        self.assertEqual((code, err), (3, f"sako: T-1 is claimed by {marker}; its holder edits it\n"), "a live holder's claim")
+        fixture.lapse(self.root, "session-a")
         for args in (("--open",), ("--park", "its session ended"), ("--done-when", "Something else")):
             with self.subTest(args=args):
                 code, _, err = self.run_cli("edit", "T-1", *args, session="session-b")
@@ -770,9 +751,7 @@ class Workflow(unittest.TestCase):
         self.assertIn(f"changed this session in {self.root.resolve().as_posix()}: 0", out)
         listed = "handoffs: T-1 .sako/work/T-1-invented-task/, T-10 .sako/work/T-10-renamed-by-hand/"
         self.assertIn(listed, self.assert_ok(self.run_cli("status", "--session", "session-a")))
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
-        self.assertIn(listed, self.assert_ok(fixture.cli(self.root, "start", session="session-b", pid=agent.pid)))
+        self.assertIn(listed, self.assert_ok(fixture.cli(self.root, "start", session="session-b")))
 
     def test_a_closed_tasks_handoff_folder_is_listed_for_everyone_and_the_advisory_stays_with_the_closer(self):
         self.start("closer")
@@ -782,9 +761,7 @@ class Workflow(unittest.TestCase):
         self.assert_ok(self.run_cli("add", "Other work", "--scope", "docs/"))
         fixture.write(self.root, {".sako/work/T-10-other-work/handoff.md": "Where it stands: started\n"})
         listed = "handoffs: T-10 .sako/work/T-10-other-work/, T-1 (closed: delete) .sako/work/T-1-invented-task/"
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
-        self.assertIn(listed, self.assert_ok(fixture.cli(self.root, "start", session="newcomer", pid=agent.pid)))
+        self.assertIn(listed, self.assert_ok(fixture.cli(self.root, "start", session="newcomer")))
         self.assertIn(listed, self.assert_ok(self.run_cli("status", session="newcomer")))
         self.assertNotIn("advisory", self.assert_ok(self.run_cli("check", "--gate", session="newcomer")))
         self.assertIn("advisory: T-1 is closed and its handoff folder remains; move lasting facts to their home, then "
@@ -796,9 +773,7 @@ class Workflow(unittest.TestCase):
             ".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1", status="claimed", claim=closer)),
             ".sako/work/DONE.md": fixture.done_file(fixture.row("T-1", status="done", claim=closer)),
             ".sako/work/T-1-invented-task/handoff.md": "Where it stands: closing\n"})
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
-        context = self.assert_ok(fixture.cli(self.root, "start", session="reader", pid=agent.pid))
+        context = self.assert_ok(fixture.cli(self.root, "start", session="reader"))
         for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
             with self.subTest(view=view):
                 listed = [line for line in out.splitlines() if line.startswith("handoffs: ")]
@@ -806,9 +781,7 @@ class Workflow(unittest.TestCase):
                                  "once, and with no delete mark while its tasks row still holds the claim")
 
     def test_the_start_context_offers_its_pick_for_a_session_with_no_task_named(self):
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
-        context = self.assert_ok(fixture.cli(self.root, "start", session="session-a", pid=agent.pid))
+        context = self.assert_ok(fixture.cli(self.root, "start", session="session-a"))
         self.assertIn("\nnext, if no task was named for you: T-1 (P2, the only ready task): Invented task\n", context)
         self.assertNotIn("\nnext: ", context)
         self.assertTrue(self.assert_ok(self.run_cli("next")).startswith("next: T-1 (P2, the only ready task): Invented task\n"))
@@ -822,9 +795,7 @@ class Workflow(unittest.TestCase):
         self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Recorded", session=holder))
         self.assert_ok(self.run_cli("claim", "T-10", session=holder))
         self.start(idle)
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
-        context = self.assert_ok(fixture.cli(self.root, "start", session="reader", pid=agent.pid))
+        context = self.assert_ok(fixture.cli(self.root, "start", session="reader"))
         for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
             with self.subTest(view=view):
                 self.assertIn("live peers (a checkout has one writer, the peer whose product claim was made in it; to write "
@@ -839,12 +810,10 @@ class Workflow(unittest.TestCase):
 
     def test_start_resume_and_compact_contexts_name_the_claims_the_session_holds_with_their_handoffs(self):
         fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1"), fixture.row("T-2", touches="`docs/`"))})
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
         # the header's end, since Windows reads its middle dot back in its code page
         header = f" work {self.root.as_posix()} (main, started at "
         first = fixture.git(self.root, "rev-parse", "HEAD")[:9]
-        context = self.assert_ok(fixture.cli(self.root, "start", session="holder", pid=agent.pid))
+        context = self.assert_ok(fixture.cli(self.root, "start", session="holder"))
         self.assertTrue(context.split("\n", 1)[0].endswith(f"{header}{first})"), context)
         self.assertNotIn("your rows", context, "a session that holds no rows prints nothing new")
         for task in ("T-1", "T-2"):
@@ -860,8 +829,8 @@ class Workflow(unittest.TestCase):
                 payload = json.dumps({"session_id": "holder", "hook_event_name": "SessionStart", "source": source})
                 if source == "resume":  # the client ended the session, then resumed it, with a new start record
                     self.assertEqual(fixture.hook(self.root, "SessionEnd", "holder")[0], 0)
-                context = self.assert_ok(fixture.cli(self.root, "start", session="holder", pid=agent.pid) if source == "start"
-                                         else fixture.cli(self.root, "hook", "claude", pid=agent.pid, stdin=payload))
+                context = self.assert_ok(fixture.cli(self.root, "start", session="holder") if source == "start"
+                                         else fixture.cli(self.root, "hook", "claude", stdin=payload))
                 self.assertIn(f'\nsession: "holder" (use this ID with --session){held}', context)
                 since = fixture.git(self.root, "rev-parse", "HEAD")[:9] if source == "resume" else first
                 self.assertTrue(context.split("\n", 1)[0].endswith(f"{header}{since})"),
@@ -869,16 +838,12 @@ class Workflow(unittest.TestCase):
 
     def test_a_peer_line_names_its_checkout_and_reads_no_git_state_there(self):
         side = self.linked()
-        far = subprocess.Popen(["sleep", "60"])
-        self.agents.append(far)
-        self.assert_ok(fixture.cli(side, "start", session="peer-side", pid=far.pid))
+        self.assert_ok(fixture.cli(side, "start", session="peer-side"))
         fixture.write(side, {"lib/one.py": "one\n"})
         fixture.commit_all(side, "Side work")
         fixture.write(side, {"lib/a.py": "draft\n"})
         self.start("peer-here")
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
-        context = self.assert_ok(fixture.cli(self.root, "start", session="reader", pid=agent.pid))
+        context = self.assert_ok(fixture.cli(self.root, "start", session="reader"))
         for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
             with self.subTest(view=view):
                 self.assertIn(f" on side since ", out)
@@ -889,7 +854,7 @@ class Workflow(unittest.TestCase):
         shutil.rmtree(side)  # its registration stays behind until git worktree prune
         for view in ("start", "status"):
             with self.subTest(view=view, removed=True):
-                code, out, err = fixture.cli(self.root, view, session="reader", pid=agent.pid)
+                code, out, err = fixture.cli(self.root, view, session="reader")
                 self.assertEqual((code, err), (0, ""), out)
                 self.assertIn(f"; in {side.as_posix()} -> no claim\n", out, "no peer's checkout is read, so a removed one costs nothing")
 
@@ -933,9 +898,7 @@ class Workflow(unittest.TestCase):
             fixture.row("T-2", status="claimed", claim=fixture.marker("peer"), touches="`src/app.py`"),
             fixture.row("T-3", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="`lib/`"))})
         self.start("peer")
-        agent = subprocess.Popen(["sleep", "60"])
-        self.agents.append(agent)
-        context = self.assert_ok(fixture.cli(self.root, "start", session="me", pid=agent.pid))
+        context = self.assert_ok(fixture.cli(self.root, "start", session="me"))
         status = self.assert_ok(self.run_cli("status", session="me"))
         found = [[line for line in out.splitlines() if "both claimed" in line or "not a live session" in line]
                  for out in (context, status)]

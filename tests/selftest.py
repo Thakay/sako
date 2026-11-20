@@ -7,7 +7,9 @@ Options: --keep  keep the fixture workspace for inspection.
 Every scenario builds its own repositories under a temporary workspace, drives
 sako.py through its command line exactly as an agent or a hook would, and asserts
 the observable result: exit codes, printed lines, files in the Git directory.
-Fake long-lived processes stand in for agent sessions so presence sweeps are real.
+A session is live because it just ran a command; lapse() sets its last-seen time
+back past the lease, since the command line runs in another process and its clock
+cannot be patched.
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ import hashlib
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -29,7 +30,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SAKO = HERE.parent / "sako.py"
 WINDOWS = sys.platform == "win32"
-LEASE = "on Windows presence is the 24-hour lease: SAKO reads no process there"
 NO_CODEX = "on Windows Codex gets no hooks: it runs them in PowerShell"
 # SAKO resolves every path, so the fixtures start from resolved ones: macOS links /var
 # to /private/var, and Windows may name the temporary folder in its short 8.3 form.
@@ -42,15 +42,6 @@ ENV = dict(os.environ,
            PYTHONDONTWRITEBYTECODE="1")
 for _name in [n for n in ENV if n.startswith(("SAKO_", "CLAUDE", "CODEX_")) or n == "AI_AGENT"]:
     del ENV[_name]  # a client's own shell would make every "no signal" install detect it
-
-FAKE_AGENTS: list[subprocess.Popen] = []
-
-
-def fake_agent() -> int:
-    """A long-lived process standing in for an agent session."""
-    proc = subprocess.Popen(["sleep", "3600"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    FAKE_AGENTS.append(proc)
-    return proc.pid
 
 
 def symlinks() -> bool:
@@ -77,17 +68,6 @@ def need(condition: bool, reason: str) -> None:
     """Skip a scenario whose premise this platform does not have."""
     if not condition:
         raise unittest.SkipTest(reason)
-
-
-def kill(pid: int) -> None:
-    os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))  # Windows has no SIGKILL; SIGTERM ends a process there
-    for proc in FAKE_AGENTS:
-        if proc.pid == pid:
-            proc.wait()
-    for _ in range(50):
-        if not Path(f"/proc/{pid}").exists():
-            return
-        time.sleep(0.05)
 
 
 def git(root: Path, *args: str) -> str:
@@ -156,30 +136,45 @@ def with_done_when(args: tuple[str, ...]) -> tuple[str, ...]:
     return args + ("--done-when", "The result is observed") if args[:1] == ("add",) and "--done-when" not in args else args
 
 
-def cli(root: Path, *args: str, session: str | None = None, pid: int | None = None,
+def cli(root: Path, *args: str, session: str | None = None,
         stdin: str | None = None) -> tuple[int, str, str]:
     """Run the checkout's runtime from root, as an agent in that folder would."""
-    env = dict(ENV)
-    if pid:
-        env["SAKO_AGENT_PID"] = str(pid)
     command = [sys.executable, str(SAKO), *with_done_when(args)]
     if session:
         command += ["--session", session]
-    result = subprocess.run(command, capture_output=True, text=True, env=env, input=stdin, cwd=str(root))
+    result = subprocess.run(command, capture_output=True, text=True, env=ENV, input=stdin, cwd=str(root))
     return result.returncode, result.stdout, result.stderr
 
 
-def hook(root: Path, event: str, session: str, pid: int | None = None,
-         stop_hook_active: bool = False) -> tuple[int, str, str]:
+def hook(root: Path, event: str, session: str, stop_hook_active: bool = False) -> tuple[int, str, str]:
     payload = {"session_id": session, "hook_event_name": event, "cwd": str(root),
                "stop_hook_active": stop_hook_active}
-    return cli(root, "hook", pid=pid, stdin=json.dumps(payload))
+    return cli(root, "hook", stdin=json.dumps(payload))
+
+
+def runtime():
+    """The file under test, imported."""
+    sys.path.insert(0, str(HERE.parent))
+    import sako  # noqa: E402
+    return sako
 
 
 def marker(session: str) -> str:
-    sys.path.insert(0, str(HERE.parent))
-    import sako  # noqa: E402  (the file under test)
-    return sako.marker_for(session)
+    return runtime().marker_for(session)
+
+
+def entry_path(root: Path, session: str) -> Path:
+    """A session's presence entry in the main checkout root's kit folder."""
+    return root / ".sako/state/live" / f"{runtime().session_key(session)}.json"
+
+
+def lapse(root: Path, session: str, ago: int | None = None) -> dict:
+    """Set a session's last-seen time back, by default just past the lease, as if it had run no
+    SAKO command or hook since; returns the entry as written."""
+    path = entry_path(root, session)
+    entry = dict(json.loads(path.read_text()), seen=int(time.time()) - (ago or runtime().LEASE + 60))
+    path.write_text(json.dumps(entry))
+    return entry
 
 
 def claim(root: Path, task_id: str, session: str, touches: str = "`src/`") -> str:
@@ -299,32 +294,30 @@ def scenario_ledger_findings(ws: Path) -> None:
 
 
 def scenario_presence_peers_and_stale_claims(ws: Path) -> None:
-    need(not WINDOWS, LEASE)
     repo = make_repo(ws / "repo", {".sako/work/TASKS.md": ledger(row("T-1"), row("T-2", touches="`docs/`"))})
-    one, two = fake_agent(), fake_agent()
-    code, out, _ = cli(repo, "start", session="s1", pid=one)
+    code, out, _ = cli(repo, "start", session="s1")
     expect(code == 0 and "peers: none" in out and marker("s1") in out, out)
     claim(repo, "T-1", "s1")
-    code, out, _ = cli(repo, "start", session="s2", pid=two)
+    code, out, _ = cli(repo, "start", session="s2")
     expect(f"peer {marker('s1')}" in out and "T-1 (claimed) touches src/" in out
            and "[from the claim column]" in out, out)
-    code, out, _ = cli(repo, "start", session="s1", pid=one)
+    code, out, _ = cli(repo, "start", session="s1")
     expect(out.count(marker("s1")) >= 1 and f"peer {marker('s2')}" in out, "resume keeps the marker and sees peers")
     entries = list((repo / ".sako/state/live").glob("*.json"))
     expect(len(entries) == 2, f"two live entries expected, found {len(entries)}")
-    kill(one)
-    code, out, _ = cli(repo, "check", session="s2", pid=two)
+    lapse(repo, "s1")  # no SAKO command or hook from s1 for longer than the lease
+    code, out, _ = cli(repo, "check", session="s2")
     expect("T-1 is claimed by" in out and "not a live session" in out, f"stale claim expected: {out!r}")
-    code, out, _ = cli(repo, "start", session="s2", pid=two)
-    expect("peers: none" in out, "a dead session is swept from the roster")
-    cli(repo, "end", session="s2", pid=two)
-    expect(not list((repo / ".sako/state/live").glob("*.json")), "end removes the entry")
-    code, out, _ = cli(repo, "start", session="s3", pid=two)
-    expect(code == 0, out)
-    (repo / ".sako/state/live" / "deadbeef0000.json").write_text(json.dumps({"marker": "sk-0101-deadbeef0000", "pid": 2 ** 22}))
-    code, out, _ = cli(repo, "start", session="s3", pid=two)
-    expect("deadbeef" not in out and not (repo / ".sako/state/live/deadbeef0000.json").exists(),
-           "an entry whose process is gone is swept")
+    code, out, _ = cli(repo, "start", session="s2")
+    expect("peers: none" in out, "a lapsed session is no peer")
+    expect(entry_path(repo, "s1").exists(), "its entry stays on disk, so its next command finds its start record")
+    cli(repo, "end", session="s2")
+    expect(not entry_path(repo, "s2").exists() and entry_path(repo, "s1").exists(), "end removes its own entry")
+    (repo / ".sako/state/live" / "deadbeef0000.json").write_text(json.dumps(
+        {"marker": "sk-0101-deadbeef0000", "seen": int(time.time()) - 8 * 24 * 3600}))
+    code, out, _ = cli(repo, "start", session="s3")
+    expect(code == 0 and not (repo / ".sako/state/live/deadbeef0000.json").exists() and entry_path(repo, "s1").exists(),
+           "start deletes an entry unseen for a week and keeps a lapsed one")
 
 
 def scenario_next_frontier(ws: Path) -> None:
@@ -409,49 +402,47 @@ def scenario_stop_gate(ws: Path) -> None:
     repo = make_repo(ws / "repo", {
         ".sako/work/TASKS.md": ledger(row("T-1"), row("T-2", touches="`docs/`")),
         ".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "raise SystemExit(0)"], "verify_paths": ["src"]})})
-    pid = fake_agent()
-    cli(repo, "start", session="s1", pid=pid)
+    cli(repo, "start", session="s1")
     claim(repo, "T-1", "s1")
-    code, _, err = hook(repo, "Stop", "s1", pid=pid)
+    code, _, err = hook(repo, "Stop", "s1")
     expect(code == 0, f"nothing closed, nothing to gate: {err!r}")
     write(repo, {"src/app.py": "print(3)\n"})
     close(repo, "T-1", "s1")
-    code, _, err = hook(repo, "Stop", "s1", pid=pid)
+    code, _, err = hook(repo, "Stop", "s1")
     expect(code == 2 and "Proven: T-1 closed after checked content changed" in err and "the check is none" in err, err)
-    code, _, _ = hook(repo, "Stop", "s1", pid=pid, stop_hook_active=True)
+    code, _, _ = hook(repo, "Stop", "s1", stop_hook_active=True)
     expect(code == 0, "the retry guard ends the chain")
     cli(repo, "verify")
-    code, _, err = hook(repo, "Stop", "s1", pid=pid)
+    code, _, err = hook(repo, "Stop", "s1")
     expect(code == 2 and "covered by no task you claimed or closed: src/app.py\n" in err and "Committed:" not in err,
            f"fresh evidence alone does not land work, and a close by hand seals nothing, so its file is unrecorded: {err!r}")
     commit_all(repo, "land checked task")
-    code, _, err = hook(repo, "Stop", "s1", pid=pid)
+    code, _, err = hook(repo, "Stop", "s1")
     expect(code == 0, f"fresh evidence and committed work clear the gate: {err!r}")
     write(repo, {"src/app.py": "print(4)\n"})
-    code, _, err = hook(repo, "Stop", "s1", pid=pid)
+    code, _, err = hook(repo, "Stop", "s1")
     expect(code == 2 and "the check is stale" in err, err)
     cli(repo, "verify")
     commit_all(repo, "land T-1")
-    code, _, err = hook(repo, "Stop", "s1", pid=pid)
+    code, _, err = hook(repo, "Stop", "s1")
     expect(code == 0, f"evidence survives the commit of identical content: {err!r}")
     # documentation-only close never asks for product evidence
-    two = fake_agent()
-    cli(repo, "start", session="s2", pid=two)
+    cli(repo, "start", session="s2")
     claim(repo, "T-2", "s2", touches="`docs/`")
     write(repo, {"docs/notes.md": "notes\n"})
     (repo / ".sako/state/stamp.json").unlink()
     code, out, err = cli(repo, "close", "T-2", "--evidence", "Wrote the notes", session="s2")
     expect(code == 0, f"a documentation-only close needs no product evidence: {out + err!r}")
-    code, _, err = hook(repo, "Stop", "s2", pid=two)
+    code, _, err = hook(repo, "Stop", "s2")
     expect(code == 2 and "Committed: T-2 is closed but its changes are not committed: docs/notes.md" in err,
            f"the close sealed its uncommitted file, so it is the task's to commit: {err!r}")
     commit_all(repo, "land documentation task")
-    code, _, err = hook(repo, "Stop", "s2", pid=two)
+    code, _, err = hook(repo, "Stop", "s2")
     expect(code == 0, f"docs-only close with untouched checked paths: {err!r}")
     # a change outside every task this session claimed is unrecorded work
     write(repo, {".sako/work/TASKS.md": ledger(row("T-3", touches="`docs/`")), "elsewhere/file.txt": "x\n"})
     claim(repo, "T-3", "s2", touches="`docs/`")
-    code, _, err = hook(repo, "Stop", "s2", pid=two)
+    code, _, err = hook(repo, "Stop", "s2")
     expect(code == 2 and "Recorded: changed this session but covered by no task" in err
            and "elsewhere/file.txt" in err, err)
 
@@ -459,8 +450,7 @@ def scenario_stop_gate(ws: Path) -> None:
 def scenario_interruption_recovery(ws: Path) -> None:
     repo = make_repo(ws / "repo", {".sako/config.json": json.dumps(
         {"verify_command": [sys.executable, "-c", "raise SystemExit(0)"], "verify_paths": ["src"]})})
-    pid = fake_agent()
-    cli(repo, "start", session="s1", pid=pid)
+    cli(repo, "start", session="s1")
     claim(repo, "T-1", "s1")
     write(repo, {"src/app.py": "print(5)\n"})
     commit_all(repo, "half the work landed")
@@ -499,8 +489,7 @@ def scenario_init_and_hook_dispatch(ws: Path) -> None:
     expect(seed(repo, "--client", "claude").returncode == 0, "repeat installation succeeds")
     commit_all(repo, "adopt")
     vendored = repo / ".sako/sako.py"
-    pid = fake_agent()
-    env = dict(ENV, SAKO_AGENT_PID=str(pid))
+    env = dict(ENV)
     start = subprocess.run([sys.executable, str(vendored), "hook", "claude"], env=env, cwd=repo,
                            input=json.dumps({"session_id": "x1", "hook_event_name": "SessionStart"}),
                            capture_output=True, text=True)
@@ -516,7 +505,8 @@ def scenario_init_and_hook_dispatch(ws: Path) -> None:
     other = subprocess.run([sys.executable, str(vendored), "hook"], env=env, cwd=repo,
                            input=json.dumps({"session_id": "x1", "hook_event_name": "PreToolUse"}),
                            capture_output=True, text=True)
-    expect(other.returncode == 0, "unknown events are ignored")
+    expect(other.returncode == 0 and not list((repo / ".sako/state/live").glob("*.json")),
+           "unknown events are ignored, and a hook renews an entry but never makes one")
     fresh = subprocess.run([sys.executable, str(vendored), "init"], cwd=repo,
                            capture_output=True, text=True, env=ENV)
     expect(fresh.returncode == 3 and "uvx sako init" in fresh.stderr, "a vendored copy cannot init")
@@ -531,9 +521,8 @@ def scenario_worktrees_share_presence(ws: Path) -> None:
     repo = make_repo(ws / "repo")
     git(repo, "worktree", "add", "-q", str(ws / "repo-b"))
     expect(not (ws / "repo-b/.sako").exists(), "a linked worktree has no kit folder of its own")
-    one, two = fake_agent(), fake_agent()
-    cli(repo, "start", session="s1", pid=one)
-    code, out, _ = cli(ws / "repo-b", "start", session="s2", pid=two)
+    cli(repo, "start", session="s1")
+    code, out, _ = cli(ws / "repo-b", "start", session="s2")
     expect(f"peer {marker('s1')}" in out, "worktrees of one repository share the roster")
     write(repo, {".sako/config.json": json.dumps({"verify_command": ["true"], "verify_paths": ["src"]})})
     code, out, err = cli(ws / "repo-b", "verify")
@@ -573,10 +562,8 @@ def seed(root: Path, *args: str, source: Path = SAKO) -> subprocess.CompletedPro
                           capture_output=True, text=True, env=ENV)
 
 
-def installed(root: Path, *args: str, session: str | None = None, pid: int | None = None):
+def installed(root: Path, *args: str, session: str | None = None):
     env = dict(ENV, PYTHONPATH="")
-    if pid:
-        env["SAKO_AGENT_PID"] = str(pid)
     command = [sys.executable, str(root / ".sako/sako.py"), *with_done_when(args)]
     if session:
         command += ["--session", session]
@@ -599,11 +586,7 @@ def reading() -> tuple[dict[str, int], str]:
         succeeds(seed(root))
         write(root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"], "verify_paths": ["src"]})})
         succeeds(installed(root, "verify"))
-        agent = fake_agent()
-        try:
-            context = succeeds(installed(root, "start", session="budget-session", pid=agent))
-        finally:
-            kill(agent)
+        context = succeeds(installed(root, "start", session="budget-session"))
     texts = {"skill": (HERE.parent / "skills/sako/SKILL.md").read_text(encoding="utf-8"),
              "template": (HERE.parent / "templates/TASKS.md").read_text(encoding="utf-8").split("| ID |")[0],
              "start context": context, "method": "".join(required)}
@@ -611,9 +594,8 @@ def reading() -> tuple[dict[str, int], str]:
 
 
 def scenario_neutral_package_and_shared_host_sessions(ws: Path) -> None:
-    """The same installed CLI serves two conversations without selecting a client."""
-    need(not WINDOWS, LEASE)
-    rules = "# Existing rules\nUse the project brief and preserve observed behavior.\n"
+    """The same installed CLI serves two conversations on one machine without selecting a client."""
+    rules ="# Existing rules\nUse the project brief and preserve observed behavior.\n"
     unrelated = {"CLAUDE.md": rules, ".cursor/hooks.json": '{"version": 1, "hooks": {}}\n',
                  ".agents/skills/existing/SKILL.md": "Existing project workflow\n"}
     repo = make_repo(ws / "project", {**unrelated, "brief.md": "Observe the existing program, then record a follow-up question.\n",
@@ -628,13 +610,13 @@ def scenario_neutral_package_and_shared_host_sessions(ws: Path) -> None:
     expect(not (repo / "AGENTS.md").exists(), "the local footprint writes no instruction pointer")
     expect((repo / ".agents/skills/sako/SKILL.md").is_file(), "shared skill is present")
     commit_all(repo, "connect the shared entry to existing project work")
-    host = fake_agent()
-    succeeds(installed(repo, "start", session="host-first", pid=host))
+    succeeds(installed(repo, "start", session="host-first"))
     succeeds(installed(repo, "claim", "T-1", session="host-first"))
-    peer = succeeds(installed(repo, "start", session="host-second", pid=host))
-    expect(f"peer {marker('host-first')}" in peer, "a shared host retains the earlier conversation")
+    peer = succeeds(installed(repo, "start", session="host-second"))
+    expect(f"peer {marker('host-first')}" in peer, "the second conversation sees the first as a live peer")
     refusal = installed(repo, "claim", "T-1", "--takeover", "Inspect existing work", session="host-second")
-    expect(refusal.returncode == 3 and "held by a live session" in refusal.stderr, "a live conversation keeps its claim")
+    expect(refusal.returncode == 3 and f"T-1 is held by {marker('host-first')}, a live session last seen " in refusal.stderr,
+           "a conversation within its lease keeps its claim, even against a reason")
     second = installed(repo, "claim", "T-2", session="host-second")
     expect(second.returncode == 3 and "a checkout has one writer" in second.stderr
            and "git worktree add ../project-t-2 -b t-2" in second.stderr,
@@ -684,8 +666,7 @@ def scenario_greenfield_adoption_and_fresh_pickup(ws: Path) -> None:
     write(repo, {".sako/config.json": json.dumps(config)})
     succeeds(installed(repo, "add", "A named visitor receives a personal greeting", "--scope", "greeting.py", "--scope", "test_greeting.py"))
     commit_all(repo, "record purpose and first slice")
-    first = fake_agent()
-    succeeds(installed(repo, "start", session="first-session", pid=first))
+    succeeds(installed(repo, "start", session="first-session"))
     succeeds(installed(repo, "claim", "T-1", session="first-session"))
     write(repo, {"greeting.py": "def greet(name):\n    return f'Hello, {name}!'\n",
                  "test_greeting.py": "import unittest\nfrom greeting import greet\nclass Greeting(unittest.TestCase):\n    def test_name(self):\n        self.assertEqual(greet('Visitor'), 'Hello, Visitor!')\n"})
@@ -697,7 +678,7 @@ def scenario_greenfield_adoption_and_fresh_pickup(ws: Path) -> None:
     commit_all(repo, "deliver named greeting and record next slice")
     succeeds(installed(repo, "check", "--gate", session="first-session"))
     succeeds(installed(repo, "end", session="first-session"))
-    fresh = succeeds(installed(repo, "start", session="fresh-session", pid=fake_agent()))
+    fresh = succeeds(installed(repo, "start", session="fresh-session"))
     expect("T-2" in fresh and ".sako/SAKO.md" in fresh, fresh)
     expect("test_greeting checks its exact output" in (repo / ".sako/work/DONE.md").read_text(), "completion proof survives")
     succeeds(installed(repo, "claim", "T-2", session="fresh-session"))
@@ -737,7 +718,7 @@ def scenario_existing_project_reuses_context_and_checks(ws: Path) -> None:
     expect("evidence: none" in succeeds(installed(repo, "check")), "a failing baseline leaves no evidence")
     expect(not (repo / ".sako/state/stamp.json").exists(), "structural readiness never supplies a pass")
     expect(git(repo, "status", "--porcelain") == "?? owner-notes.txt", "adoption changes nothing Git sees")
-    succeeds(installed(repo, "start", session="repair-session", pid=fake_agent()))
+    succeeds(installed(repo, "start", session="repair-session"))
     succeeds(installed(repo, "claim", "T-1", session="repair-session"))
     write(repo, {"src/app.py": "def total(values):\n    return sum(int(value) for value in values)\n"})
     refusal = installed(repo, "close", "T-1", "--evidence", "Not yet checked", session="repair-session")
@@ -749,7 +730,7 @@ def scenario_existing_project_reuses_context_and_checks(ws: Path) -> None:
     succeeds(installed(repo, "check", "--gate", session="repair-session"))
     expect(git(repo, "status", "--porcelain") == "?? owner-notes.txt", "unrelated work is neither staged nor changed")
     succeeds(installed(repo, "end", session="repair-session"))
-    fresh = succeeds(installed(repo, "start", session="pickup-session", pid=fake_agent()))
+    fresh = succeeds(installed(repo, "start", session="pickup-session"))
     expect(".sako/work/NOW.md" in fresh and ".sako/work/FINISHED.md" in fresh, fresh)
     expect("Numeric strings now produce 5" in (repo / ".sako/work/FINISHED.md").read_text(), "new session can inspect the result")
     expect((repo / ".agents/skills/existing/SKILL.md").read_text() == "Existing project skill\n", "existing skill survives")
@@ -812,8 +793,7 @@ def scenario_codex_adapter_uses_the_git_root(ws: Path) -> None:
     succeeds(seed(repo, "--client", "codex"))
     hooks = json.loads((repo / ".codex/hooks.json").read_text())["hooks"]
     command = hooks["SessionStart"][0]["hooks"][0]["command"]
-    result = subprocess.run(["sh", "-c", command], cwd=repo / "src", text=True, capture_output=True,
-                            env=dict(ENV, SAKO_AGENT_PID=str(fake_agent())),
+    result = subprocess.run(["sh", "-c", command], cwd=repo / "src", text=True, capture_output=True, env=ENV,
                             input=json.dumps({"session_id": "adapter-session", "hook_event_name": "SessionStart"}))
     expect(result.returncode == 0 and "your marker" in result.stdout, result.stdout + result.stderr)
     expect(list((repo / ".sako/state/live").glob("*.json")), "generated adapter works from a subdirectory")
@@ -833,7 +813,7 @@ def scenario_greenfield_discovery_without_automated_check(ws: Path) -> None:
     setup = succeeds(installed(repo, "check"))
     expect("evidence: none" in setup and "no verify_command configured" in setup, setup)
     commit_all(repo, "seed a bounded investigation")
-    succeeds(installed(repo, "start", session="discovery-session", pid=fake_agent()))
+    succeeds(installed(repo, "start", session="discovery-session"))
     succeeds(installed(repo, "claim", "T-1", session="discovery-session"))
     with (repo / "README.md").open("a") as brief:
         brief.write("\nFinding: alphabetical preview orders [zeta, alpha] as [alpha, zeta].\n"
@@ -848,7 +828,7 @@ def scenario_greenfield_discovery_without_automated_check(ws: Path) -> None:
     succeeds(installed(repo, "check", "--gate", session="discovery-session"))
     succeeds(installed(repo, "end", session="discovery-session"))
     before = (repo / ".sako/work/TASKS.md").read_bytes()
-    pickup = succeeds(installed(repo, "start", session="build-session", pid=fake_agent()))
+    pickup = succeeds(installed(repo, "start", session="build-session"))
     expect("next: nothing is ready" in pickup and "No planner? Start here" in pickup, pickup)
     expect((repo / ".sako/work/TASKS.md").read_bytes() == before, "pickup does not invent a task")
     succeeds(installed(repo, "check"))
@@ -880,7 +860,7 @@ def scenario_unstructured_project_and_completed_goal(ws: Path) -> None:
     expect(installed(repo, "verify").returncode == 1, "existing behavior exposes the gap")
     succeeds(installed(repo, "check"))
     commit_all(repo, "record the selected outcome and baseline")
-    succeeds(installed(repo, "start", session="listing-session", pid=fake_agent()))
+    succeeds(installed(repo, "start", session="listing-session"))
     succeeds(installed(repo, "claim", "T-1", session="listing-session"))
     write(repo, {"listing.py": "print('\\n'.join(sorted(['zeta', 'alpha'])))\n"})
     succeeds(installed(repo, "verify"))
@@ -890,7 +870,7 @@ def scenario_unstructured_project_and_completed_goal(ws: Path) -> None:
     succeeds(installed(repo, "check", "--gate", session="listing-session"))
     succeeds(installed(repo, "end", session="listing-session"))
     before = (repo / ".sako/work/TASKS.md").read_bytes()
-    pickup = succeeds(installed(repo, "start", session="review-session", pid=fake_agent()))
+    pickup = succeeds(installed(repo, "start", session="review-session"))
     expect("next: nothing is ready" in pickup and "No planner? Start here" in pickup, pickup)
     succeeds(installed(repo, "next"))
     succeeds(installed(repo, "check"))
@@ -917,7 +897,7 @@ def scenario_replanning_preserves_authority_and_blockers(ws: Path) -> None:
     expect("T-2" in ready and "T-3  after T-2" in ready and "No planner? Start here" in ready, ready)
     expect((repo / ".sako/work/TASKS.md").read_bytes() == before, "held work causes no unrelated task generation")
     commit_all(repo, "adopt around current authority and a real blocker")
-    succeeds(installed(repo, "start", session="replan-session", pid=fake_agent()))
+    succeeds(installed(repo, "start", session="replan-session"))
     expect(installed(repo, "claim", "T-1", session="replan-session").returncode == 3, "invalidated work stays parked")
     expect(installed(repo, "claim", "T-3", session="replan-session").returncode == 3, "dependency stays blocked")
     # An explicit fixture answer releases the decision. It is not inferred by SAKO.
@@ -990,7 +970,7 @@ class Discovery(unittest.TestCase):
     expect((repo / ".sako/work/TASKS.md").read_bytes() == original, "repeated intake is read-only")
     succeeds(installed(repo, "check"))
     commit_all(repo, "connect the selected plan and its execution records")
-    succeeds(installed(repo, "start", session="intake-first", pid=fake_agent()))
+    succeeds(installed(repo, "start", session="intake-first"))
     expect(installed(repo, "claim", "T-2", session="intake-first").returncode == 3, "dependency blocks early work")
     succeeds(installed(repo, "claim", "T-1", session="intake-first"))
     expect(installed(repo, "verify").returncode == 1, "record the failing baseline honestly")
@@ -1015,7 +995,7 @@ class Discovery(unittest.TestCase):
     expect("T-1: done" in succeeds(installed(repo, *first)), "completed intake reuses its original task")
     succeeds(installed(repo, *second))
     expect(all((repo / path).read_bytes() == data for path, data in current.items()), "repeat after completion changes no records")
-    pickup = succeeds(installed(repo, "start", session="intake-pickup", pid=fake_agent()))
+    pickup = succeeds(installed(repo, "start", session="intake-pickup"))
     expect("PLAN.md" in pickup and "next, if no task was named for you: T-2 (P2, the only ready task): Print names" in pickup,
            f"pickup exposes the source and next action: {pickup}")
     succeeds(installed(repo, "claim", "T-2", session="intake-pickup"))
@@ -1037,7 +1017,7 @@ def scenario_package_adoption_pickup_and_removal(ws: Path) -> None:
     succeeds(installed(repo, "add", "Local answer is 42 as specified in README.md", "--scope", "answer.py"))
     commit_all(repo, "connect the first useful action")
     shutil.rmtree(ws / "site")
-    succeeds(installed(repo, "start", session="package-first", pid=fake_agent()))
+    succeeds(installed(repo, "start", session="package-first"))
     succeeds(installed(repo, "claim", "T-1", session="package-first"))
     write(repo, {"answer.py": "def answer():\n    return 42\n"})
     succeeds(installed(repo, "verify"))
@@ -1048,7 +1028,7 @@ def scenario_package_adoption_pickup_and_removal(ws: Path) -> None:
     commit_all(repo, "deliver the agreed answer")
     succeeds(installed(repo, "check", "--gate", session="package-first"))
     succeeds(installed(repo, "end", session="package-first"))
-    pickup = succeeds(installed(repo, "start", session="package-pickup", pid=fake_agent()))
+    pickup = succeeds(installed(repo, "start", session="package-pickup"))
     expect("completed work is recorded" in pickup and "No planner? Start here" in pickup, pickup)
     succeeds(installed(repo, "check"))
     succeeds(installed(repo, "end", session="package-pickup"))
@@ -1085,10 +1065,6 @@ def main(argv: list[str]) -> int:
             results.append((name, "SKIP", str(reason)))
         except Exception as error:  # report every failure, keep going
             results.append((name, "FAIL", f"{type(error).__name__}: {error}"))
-    for proc in FAKE_AGENTS:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
     width = max(len(name) for name, _, _ in results)
     print(f"sako selftest · python {sys.version.split()[0]} · workspace {workspace}")
     for name, state, detail in results:

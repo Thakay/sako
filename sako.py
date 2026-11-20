@@ -557,106 +557,41 @@ def holder_key(claim: str) -> str | None:
     return key_of(first) if first.startswith("sk-") else None
 
 
-# the PID namespace a PID means something in;
-# its number is reused, so its first process's start is added
-PID_NS = BOOT = ""
-with suppress(OSError, IndexError):
-    PID_NS = os.readlink("/proc/self/ns/pid")
-    PID_NS += "@" + Path("/proc/1/stat").read_text().rsplit(")", 1)[1].split()[19]
-# Linux names each boot, and a restart ends every session, so the namespace names its boot too
-with suppress(OSError):
-    BOOT = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-    PID_NS += " boot " + BOOT
-# seconds an entry no visible process vouches for counts as live after its last start
-LEASE = 24 * 3600
+# seconds a session counts as live after its last SAKO command or hook, on every platform
+LEASE = 2 * 3600
+# seconds an unseen entry stays on disk, so a session that pauses and returns keeps its start record
+KEPT = 7 * 24 * 3600
 
 
 def presence_dir(roots: Roots) -> Path:
     return roots.state / "live"
 
 
-def parent_of(pid: int) -> tuple[str, int]:
-    """Read a process name and parent, including names containing spaces or parentheses."""
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
-        return stat[stat.index("(") + 1:stat.rindex(")")], \
-            int(stat[stat.rindex(")") + 2:].split()[1])
-    except (OSError, ValueError, IndexError):
-        result = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)],
-                                capture_output=True, text=True)
-        fields = result.stdout.split(None, 1)
-        if result.returncode or len(fields) != 2:
-            raise SakoError(f"process {pid} not found")
-        # macOS shows a login shell as -zsh
-        return Path(fields[1].strip()).name.lstrip("-"), int(fields[0])
-
-
-def agent_pid() -> int:
-    """The long-lived agent process: climb past transient shells. SAKO_AGENT_PID overrides it.
-    0 when the climb ends at PID 1: inside a sandbox (Codex's) no host is visible, and init
-    is never an agent. 0 on Windows, where SAKO reads no process: presence there is the
-    24-hour lease."""
-    if sys.platform == "win32":
-        return 0
-    override = os.environ.get("SAKO_AGENT_PID")
-    if override and override.isdigit():
-        return int(override)
-    pid = os.getppid()
-    for _ in range(6):
-        try:
-            name, parent = parent_of(pid)
-            if name not in ("sh", "bash", "dash", "zsh", "fish"):
-                break
-            pid = parent
-        except (SakoError, OSError, ValueError):
-            break
-    return 0 if pid <= 1 else pid
-
-
-def alive(pid: int) -> bool:
-    """Ask whether a POSIX process exists without sending it a signal."""
-    # on Windows os.kill(pid, 0) sends Ctrl+C to a process group
-    if pid <= 0 or sys.platform == "win32":
-        return False
-    try:
-        os.kill(pid, 0)
-    except (OSError, OverflowError) as error:
-        return isinstance(error, PermissionError)  # it exists, owned by someone else
-    return True
+def last_seen(entry: dict) -> int:
+    """When the entry's session last ran a SAKO command or hook; 0 when the entry does not say."""
+    return entry["seen"] if isinstance(entry.get("seen"), int) else 0
 
 
 def read_presence(roots: Roots) -> list[dict]:
-    """Every live entry. A process visible here judges its entry; a gone or unreadable one is
-    removed. An entry from another PID namespace (a client's sandbox), or with no host, counts as
-    live for LEASE after its last start, marked unverified, and one from an earlier boot has ended.
-    Both stay on disk, so a resume before end keeps its starting facts."""
-    entries, now = [], time.time()
-    for path in sorted(presence_dir(roots).glob("*.json")):
-        entry = read_json(path)
-        pid = entry["pid"] if entry.get("marker") and isinstance(entry.get("pid"), int) else -1
-        # 0.5 recorded no boot
-        judged = pid < 0 \
-            or pid > 1 and entry.get("ns", PID_NS) in (PID_NS, PID_NS.partition(" boot ")[0])
-        # recorded before a restart
-        ended = BOOT and str(entry.get("ns")).partition(" boot ")[2] not in ("", BOOT)
-        if judged and alive(pid) or not (judged or ended) \
-                and isinstance(entry.get("seen"), int) and entry["seen"] + LEASE > now:
-            entries.append(entry if judged else dict(entry, unverified=True))
-        elif judged:
-            with suppress(OSError):
-                path.unlink()
-    return entries
+    """Every live entry, one seen within the lease, an earlier release's too, whose pid and ns
+    mean nothing now. A lapsed entry stays on disk, so its session's next command renews it with
+    its starting facts; write_presence deletes those unseen for KEPT."""
+    entries = [read_json(path) for path in sorted(presence_dir(roots).glob("*.json"))]
+    return [e for e in entries if e.get("marker") and last_seen(e) + LEASE > time.time()]
 
 
 def write_presence(roots: Roots, session_id: str) -> dict:
-    """Write or refresh this session's entry; a resume before end keeps the entry and its starting
-    facts. Raises SakoError when it cannot be written; presence_entry still builds it for
-    rendering."""
+    """Write or refresh this session's entry, once every entry unseen for KEPT is deleted, its own
+    included; a resume before that keeps the entry's starting facts. Raises SakoError when it
+    cannot be written; presence_entry still builds it for rendering."""
     directory = presence_dir(roots)
+    for path in directory.glob("*.json"):
+        if last_seen(read_json(path)) + KEPT < time.time():
+            with suppress(OSError):
+                path.unlink()
     mine = directory / f"{session_key(session_id)}.json"
     entry = presence_entry(roots, session_id, read_json(mine))
     try:
-        read_presence(roots)  # Sweep dead hosts; distinct conversations may share a live host.
         atomic_write(mine, json.dumps(entry, indent=1) + "\n")
     except OSError as error:
         raise SakoError(f"presence not recorded at {directory}: "
@@ -664,21 +599,22 @@ def write_presence(roots: Roots, session_id: str) -> dict:
     return entry
 
 
+def renew(roots: Roots, session_id: str) -> None:
+    """Renew the lease of this session's entry, as every command that names the session and every
+    hook do. It never makes an entry, so an ended session stays ended, and a folder SAKO cannot
+    write leaves the entry as it was."""
+    path = presence_dir(roots) / f"{session_key(session_id)}.json"
+    if entry := read_json(path):
+        with suppress(OSError):
+            atomic_write(path, json.dumps(dict(entry, seen=int(time.time())), indent=1) + "\n")
+
+
 def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) -> dict:
-    """This session's entry as it would be written; a resume before end keeps its starting facts,
-    and one after end starts over."""
+    """This session's entry as it would be written; a resume keeps its starting facts, and one
+    after end, or after its entry was deleted unseen, starts over."""
     previous = previous or {}
-    pid = agent_pid()
-    # a host hidden from here, such as SAKO_AGENT_PID inside a sandbox, is none
-    pid = pid if alive(pid) else 0
-    # a restart ended its host
-    hook = {} if BOOT and str(previous.get("ns")).partition(" boot ")[2] not in ("", BOOT) \
-        else previous
-    # with no host visible (a sandbox), keep the one the hook recorded in this boot:
-    # better evidence than none
     return {
         "marker": previous.get("marker") or marker_for(session_id), "session_id": session_id,
-        "pid": pid or hook.get("pid", 0), "ns": PID_NS if pid else hook.get("ns", PID_NS),
         "seen": int(time.time()),
         "started": previous.get("started") or time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "started_at": previous.get("started_at") or int(time.time()),
@@ -922,16 +858,12 @@ def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
         where = "; ".join(f"{r.id} (claimed) touches {', '.join(r.touches) or '?'}"
                           for r in held) + \
             "  [from the claim column]" if held else "no claim"
-        until = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry["seen"] + LEASE)) \
-            if entry.get("unverified") else ""
         root = str(entry.get("work_root") or "")  # none in a hand-made entry
         place = "; in this checkout" if root == str(roots.work) \
             else f"; in {Path(root).as_posix()}" if root else ""
         lines.append(f"  peer {entry.get('marker')} "
                      f"(session ID ends {str(entry.get('session_id', '?'))[-8:]}) on "
-                     f"{entry.get('branch')} since {entry.get('started')}"
-                     + (f", unverified from here (counts as live until {until})" if until else "")
-                     + f"{place} -> {where}")
+                     f"{entry.get('branch')} since {entry.get('started')}{place} -> {where}")
     return ["live peers (a checkout has one writer, the peer whose product claim was made in it; "
             "to write product files beside one, work in your own worktree):"] + lines \
         if lines else []
@@ -2009,7 +1941,7 @@ def overlap_note(rows: list[Row], row: Row) -> str:
 
 
 def overlapping_claim(rows: list[Row], row: Row, mine: str, replaced: str | None,
-                      live: set[str], seen: set[str]) -> str:
+                      live: dict) -> str:
     """Claim's overlap rule: the first row another session claimed whose scope overlaps this
     row's, with its scope, its holder and the way past it, or "". The claimant's own rows pass,
     and so do those of a holder a takeover replaces, so it can move them one by one."""
@@ -2017,14 +1949,11 @@ def overlapping_claim(rows: list[Row], row: Row, mine: str, replaced: str | None
         peer = holder_key(other.claim)
         if other.id != row.id and other.status == "claimed" \
                 and peer not in (mine, replaced) and scopes_overlap(row, other):
-            # a live holder, seen or unverified from here
-            wait = "wait for it to close, or " if peer in live else ""
             return (f"{other.id} ({', '.join(other.touches)}), claimed by "
                     f"{other.claim.split()[0]}; "
-                    + (wait if peer in seen
-                       else f"neither claim can be taken over while they overlap, so {wait}"
-                       if replaced
-                       else f"{wait}if it stopped, inspect its handoff and take it over first "
+                    + ("wait for it to close, or " if peer in live
+                       else "neither claim can be taken over while they overlap, so " if replaced
+                       else "if it stopped, inspect its handoff and take it over first "
                             f"(claim {other.id} --takeover REASON), or "))
     return ""
 
@@ -2081,7 +2010,7 @@ def add_task(rows: list[Row], active: Path, text: str, records: str,
 
 
 def edit_task(rows: list[Row], row: Row, active: Path, text: str, args: argparse.Namespace,
-              mine: str, live: set[str], seen: set[str], writer: str = "") -> int:
+              mine: str, live: dict, writer: str = "") -> int:
     """Change a row's Scope, After, Done when or Status in place; Task and Pri stay hand edits.
     Only its holder edits a claimed row, and nothing is written unless the edited row passes the
     row checks, waits for no task that waits for it and, while it stays claimed, passes claim's
@@ -2093,7 +2022,7 @@ def edit_task(rows: list[Row], row: Row, active: Path, text: str, args: argparse
     owner = holder_key(row.claim) if row.status == "claimed" else None
     if owner and owner != mine:
         raise SakoError(f"{row.id} is claimed by {row.claim.split()[0]}; its holder edits it"
-                        + ("" if owner in seen else ", or if it stopped, inspect its handoff and "
+                        + ("" if owner in live else ", or if it stopped, inspect its handoff and "
                            f"take it over first (claim {row.id} --takeover REASON)"))
     cells = dict(row.cells)
     if args.scope or args.widen:
@@ -2135,7 +2064,7 @@ def edit_task(rows: list[Row], row: Row, active: Path, text: str, args: argparse
     if edited.status == "claimed":
         for touch in [t for t in edited.touches if not within(t, row)]:
             new = Row(row.id, "tasks", 0, [], {}, touches=[touch])
-            if clash := overlapping_claim(rows, new, mine, None, live, seen):
+            if clash := overlapping_claim(rows, new, mine, None, live):
                 raise SakoError(f"{row.id}'s new path {touch} overlaps {clash}edit without {touch}")
         # a claim on records only that grows into product files makes its holder a writer
         if writer and records_only(row) and not records_only(edited):
@@ -2160,15 +2089,13 @@ def cmd_task(args: argparse.Namespace) -> int:
         return add_task(rows, active, text,
                         text + (read_text(closed, "done") if closed.exists() else ""), args)
     session, present = need_session(args), read_presence(roots)
-    live = {key_of(e["marker"]) for e in present}
-    # judged by a process visible here
-    seen = {key_of(e["marker"]) for e in present if not e.get("unverified")}
+    live = {key_of(e["marker"]): e for e in present}  # each live session's entry by its key
+    # this session's own entry counts however long ago it was seen, since main renewed it
     entry = my_entry(roots, session)
-    if not entry or key_of(entry["marker"]) not in live:
+    if not entry:
         raise SakoError(f"session {session!r} has not started here; "
                         "pass --session with the ID the start context printed, "
-                        "or run start first (presence SAKO cannot verify, as in a sandbox, "
-                        "lasts 24 hours after a start)")
+                        "or run start first")
     mine, done = key_of(entry["marker"]), {r.id for r in rows if r.doc == DONE}
     if args.command == "edit" and args.task_id in done:
         raise SakoError(f"{args.task_id} is done, and its done row stays as history; "
@@ -2179,7 +2106,7 @@ def cmd_task(args: argparse.Namespace) -> int:
     row = matches[0]
     if args.command == "edit":
         other = writer_here(roots, rows, present, entry["marker"])
-        return edit_task(rows, row, active, text, args, mine, live, seen,
+        return edit_task(rows, row, active, text, args, mine, live,
                          second_writer(roots, row, other) if other else "")
     if faults := row_faults(row, {r.id for r in rows}):
         raise SakoError(faults[0])
@@ -2195,17 +2122,21 @@ def cmd_task(args: argparse.Namespace) -> int:
             raise SakoError(f"{row.id} is parked; once its reason is resolved, "
                             f"open it (edit {row.id} --open), then claim it")
         if row.status == "claimed" and owner != mine:
-            if owner in seen:
-                raise SakoError(f"{row.id} is held by a live session; choose another task")
+            if owner in live:
+                seen, holder = live[owner]["seen"], live[owner].get("session_id") or "ID"
+                at = lambda moment: time.strftime("%Y-%m-%d %H:%M", time.localtime(moment))
+                raise SakoError(
+                    f"{row.id} is held by {row.claim.split()[0]}, a live session last seen "
+                    f"{at(seen)}, whose lease ends {at(seen + LEASE)}. Choose another task. "
+                    "After the lease, or once the owner confirms that session stopped and you "
+                    f"end it (end --session {shlex.quote(str(holder))}), take it over with a "
+                    f"reason (claim {row.id} --takeover REASON)")
             if not args.takeover:
-                raise SakoError(f"{row.id} is held by {row.claim.split()[0]}, "
-                                + ("which SAKO cannot verify from here (a sandbox, "
-                                   "or Windows, hides its process); if it stopped,"
-                                   if owner in live else "a stale claim;")
-                                + " inspect its handoff and use --takeover <reason>")
-        # past the checks above, any other owner is not seen running and is taken over
+                raise SakoError(f"{row.id} is held by {row.claim.split()[0]}, a stale claim; "
+                                "inspect its handoff and use --takeover <reason>")
+        # past the checks above, any other owner is not live and is taken over
         replaced = owner if owner != mine else None
-        if clash := overlapping_claim(rows, row, mine, replaced, live, seen):
+        if clash := overlapping_claim(rows, row, mine, replaced, live):
             # in a takeover, neither row is this session's to edit yet
             raise SakoError(f"{row.id}'s scope overlaps {clash}narrow "
                             + (f"a Scope in {runtime_path(roots, active)}" if replaced
@@ -2216,21 +2147,17 @@ def cmd_task(args: argparse.Namespace) -> int:
             raise SakoError(second_writer(roots, row, other))
         moving = [o.id for o in rows if o.status == "claimed" and o.id != row.id
                   and holder_key(o.claim) == replaced and scopes_overlap(row, o)]
-        # its process was hidden from here
-        unverified = ", unverified" if owner != mine and owner in live - seen else ""
         if owner != mine:
-            note = (f" (took over from {row.claim.split()[0]}{unverified}: "
+            note = (f" (took over from {row.claim.split()[0]}: "
                     f"{cell(args.takeover, '--takeover')})") if args.takeover and row.claim else ""
             lines[row.line - 1] = row_line(
                 row.titles, dict(row.cells, status=entry["marker"]
                                  + time.strftime(" since %Y-%m-%dT%H:%M%z") + note))
             atomic_write(active, "\n".join(lines).rstrip() + "\n")
-        print(f"{row.id}: claimed" + ("; its previous holder could not be verified from here"
-                                      if unverified else "")
-              + "; recorded locally, not committed. Working notes go in "
-                f"{shlex.quote(runtime_path(roots, handoff(roots, config, row)))}/. If this "
-                "session ends before closing it, the claim reads as stale and another session may "
-                "take it over with a reason, so write handoff.md there first, with where it stands."
+        print(f"{row.id}: claimed; recorded locally, not committed. Working notes go in "
+              f"{shlex.quote(runtime_path(roots, handoff(roots, config, row)))}/. If this "
+              "session ends before closing it, the claim reads as stale and another session may "
+              "take it over with a reason, so write handoff.md there first, with where it stands."
               + (f" Its previous holder also holds overlapping {', '.join(moving)}; "
                  f"take {'it' if len(moving) == 1 else 'them'} over too before you stop." if moving
                  else ""))
@@ -2305,9 +2232,10 @@ def cmd_hook(args: argparse.Namespace) -> int:
                     print(f"sako: {error}; peers will not see this session")
                     entry = presence_entry(roots, session_id)
                 print(render_start(roots, load_config(roots.kit), entry))
-            elif event == "Stop":
-                if payload.get("stop_hook_active"):
-                    return 0
+                return 0
+            if event != "SessionEnd":  # any other hook renews the session's lease
+                renew(roots, session_id)
+            if event == "Stop" and not payload.get("stop_hook_active"):
                 code, message = gate(roots, load_config(roots.kit), session_id)
                 if code:
                     print(message, file=sys.stderr)
@@ -2433,6 +2361,9 @@ def main(argv: list[str] | None = None) -> int:
             with ledger_lock(args.resolved[0],
                              args.command in ("add", "claim", "edit", "close", "verify"),
                              "verify" if args.command == "verify" else "ledger"):
+                # start writes the session's entry and end removes it; every other verb renews it
+                if args.session and args.command not in ("start", "end"):
+                    renew(args.resolved[0], args.session)
                 return int(args.handler(args) or 0)
         return int(args.handler(args) or 0)
     except SakoError as error:

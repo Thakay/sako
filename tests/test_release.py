@@ -1,4 +1,4 @@
-"""Release boundaries: portable assets, process identity, readiness and compatibility."""
+"""Release boundaries: portable assets, readiness and compatibility."""
 
 import json
 import os
@@ -7,141 +7,13 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
-from unittest.mock import patch
 from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sako
 import selftest as fixture
-
-
-class Presence(unittest.TestCase):
-    def test_proc_names_with_spaces_and_parentheses_keep_the_right_parent(self):
-        with patch.object(Path, "read_text", return_value="57 (a shell) name) S 123 1 0"):
-            self.assertEqual(sako.parent_of(57), ("a shell) name", 123))
-
-    def test_parent_lookup_falls_back_to_ps_and_refuses_missing_process(self):
-        result = subprocess.CompletedProcess([], 0, " 123 /usr/bin/fish\n", "")
-        with patch.object(Path, "read_text", side_effect=FileNotFoundError), \
-                patch.object(sako.subprocess, "run", return_value=result) as run:
-            self.assertEqual(sako.parent_of(57), ("fish", 123))
-            self.assertEqual(run.call_args.args[0], ["ps", "-o", "ppid=,comm=", "-p", "57"])
-            result.returncode, result.stdout = 1, ""
-            with self.assertRaisesRegex(sako.SakoError, "not found"):
-                sako.parent_of(57)
-
-    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
-    def test_shell_climb_includes_fish(self):
-        with patch.dict(os.environ, {"SAKO_AGENT_PID": ""}), \
-                patch.object(os, "getppid", return_value=57), \
-                patch.object(sako, "parent_of", side_effect=[("fish", 123), ("agent", 1)]):
-            self.assertEqual(sako.agent_pid(), 123)
-
-    def test_a_climb_that_ends_at_pid_1_records_no_host(self):
-        for ppid, names in ((57, [("bash", 1), ("bwrap", 0)]), (1, [("codex", 0)])):
-            with patch.dict(os.environ, {"SAKO_AGENT_PID": ""}), patch.object(os, "getppid", return_value=ppid), \
-                    patch.object(sako, "parent_of", side_effect=names):
-                self.assertEqual(sako.agent_pid(), 0, "a sandbox's PID 1, or init, is never an agent")
-
-    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
-    def test_an_entry_is_judged_by_its_process_only_where_that_process_is_visible(self):
-        with tempfile.TemporaryDirectory(prefix="sako-presence-") as folder:
-            base = Path(folder)
-            roots = sako.Roots(base, base, "", base)
-            live = sako.presence_dir(roots)
-            live.mkdir(parents=True)
-            now, gone = int(time.time()), 2 ** 22
-            entries = {"hidden": {"pid": gone, "ns": "pid:[2]", "seen": now},  # a host that a sandbox hides
-                       "expired": {"pid": gone, "ns": "pid:[2]", "seen": now - sako.LEASE - 1},
-                       "no-host": {"pid": 0, "ns": "", "seen": now}, "init": {"pid": 1, "ns": "pid:[1]", "seen": now},
-                       "dead": {"pid": gone, "ns": "pid:[1]", "seen": now}, "older": {"pid": gone},
-                       "mine": {"pid": os.getpid(), "ns": "pid:[1]", "seen": now - sako.LEASE - 1}}
-            for name, entry in entries.items():
-                (live / f"{name}.json").write_text(json.dumps(dict(entry, marker=f"sk-0101-{name}")))
-            (live / "broken.json").write_text("{")
-            with patch.object(sako, "PID_NS", "pid:[1]"):
-                found = {e["marker"][8:]: e.get("unverified", False) for e in sako.read_presence(roots)}
-            self.assertEqual(found, {"hidden": True, "no-host": True, "init": True, "mine": False})
-            self.assertEqual(sorted(p.stem for p in live.glob("*.json")), ["expired", "hidden", "init", "mine", "no-host"],
-                             "only an entry judged by a visible process, or an unreadable one, is removed")
-
-    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
-    def test_an_entry_from_before_a_restart_has_ended_and_keeps_its_file(self):
-        with tempfile.TemporaryDirectory(prefix="sako-presence-") as folder:
-            base = Path(folder)
-            roots = sako.Roots(base, base, "", base)
-            live = sako.presence_dir(roots)
-            live.mkdir(parents=True)
-            now, gone, reused = int(time.time()), 2 ** 22, os.getpid()  # after a restart a PID may name another process
-            entries = {"restarted": {"pid": reused, "ns": "pid:[1]@1 boot earlier"},
-                       "restarted-sandbox": {"pid": gone, "ns": "pid:[2]@1 boot earlier"},
-                       "restarted-gone": {"pid": gone, "ns": "pid:[1]@1 boot earlier"},
-                       "sandbox": {"pid": gone, "ns": "pid:[2]@1 boot this"}, "mine": {"pid": reused, "ns": "pid:[1]@1 boot this"},
-                       "sandbox-expired": {"pid": gone, "ns": "pid:[2]@1 boot this", "seen": now - sako.LEASE - 1},
-                       "older": {"pid": reused, "ns": "pid:[1]@1"}, "older-gone": {"pid": gone, "ns": "pid:[1]@1"},
-                       "older-sandbox": {"pid": gone, "ns": "pid:[2]@1"}}  # written before entries recorded their boot
-            for name, entry in entries.items():
-                (live / f"{name}.json").write_text(json.dumps(dict({"seen": now}, **entry, marker=f"sk-0101-{name}")))
-            with patch.object(sako, "PID_NS", "pid:[1]@1 boot this"), patch.object(sako, "BOOT", "this"):
-                found = {e["marker"][8:]: e.get("unverified", False) for e in sako.read_presence(roots)}
-            self.assertEqual(found, {"sandbox": True, "mine": False, "older": False, "older-sandbox": True},
-                             "a sandbox entry from this boot counts by its lease, and no longer once the lease ends")
-            self.assertEqual(sorted(p.stem for p in live.glob("*.json")), sorted(set(entries) - {"older-gone"}),
-                             "an entry from before a restart, or past its lease, stays on disk, so a resume keeps its starting facts")
-            with patch.object(sako, "PID_NS", "pid:[1]@1"), patch.object(sako, "BOOT", ""):  # no boot ID here
-                found = {e["marker"][8:]: e.get("unverified", False) for e in sako.read_presence(roots)}
-            self.assertEqual(found, {"restarted": True, "restarted-sandbox": True, "restarted-gone": True, "sandbox": True,
-                                     "mine": True, "older": False, "older-sandbox": True},
-                             "with no boot ID to compare, an entry that records one counts by its lease")
-
-    def test_a_start_with_no_visible_host_keeps_the_hooks_pid_from_this_boot_and_refreshes_its_lease(self):
-        with tempfile.TemporaryDirectory(prefix="sako-presence-") as folder:
-            roots = sako.resolve_roots(fixture.make_repo(Path(folder) / "project"))
-            hook = {"marker": "sk-0101-aaaaaaaaaaaa", "pid": 4242, "ns": "pid:[host]", "seen": 1, "started_at": 1,
-                    "started": "2026-01-01T00:00:00+0000", "work_start_rev": "abc", "dirty_at_start": {}}
-            for host in (0, 2 ** 22):  # none visible, or one this namespace cannot see (SAKO_AGENT_PID inherited)
-                with patch.object(sako, "agent_pid", return_value=host), patch.object(sako, "BOOT", "this"), \
-                        patch.object(sako, "PID_NS", "pid:[sandbox] boot this"):
-                    entry, fresh = sako.presence_entry(roots, "thread", hook), sako.presence_entry(roots, "other")
-                    same, earlier = (sako.presence_entry(roots, "thread", dict(hook, ns=f"pid:[host] boot {boot}"))
-                                     for boot in ("this", "earlier"))
-                self.assertEqual((entry["pid"], entry["ns"], entry["started_at"]), (4242, "pid:[host]", 1),
-                                 "an entry written before entries recorded their boot keeps the hook's host")
-                self.assertEqual((same["pid"], same["ns"]), (4242, "pid:[host] boot this"))
-                self.assertEqual((earlier["pid"], earlier["ns"], earlier["started_at"]), (0, "pid:[sandbox] boot this", 1),
-                                 "a restart ended the hook's host, and the starting facts stay")
-                self.assertGreater(entry["seen"], 1, "a start refreshes the lease")
-                self.assertEqual((fresh["pid"], fresh["ns"]), (0, "pid:[sandbox] boot this"),
-                                 "with no host and no earlier entry, no PID, and the boot a restart ends")
-
-    def test_on_windows_presence_is_the_lease_and_no_process_is_signalled(self):
-        with tempfile.TemporaryDirectory(prefix="sako-presence-") as folder:
-            roots = sako.resolve_roots(fixture.make_repo(Path(folder) / "project"))
-            with patch.object(sako.sys, "platform", "win32"), patch.dict(os.environ, {"SAKO_AGENT_PID": str(os.getpid())}), \
-                    patch.object(os, "kill", side_effect=AssertionError("on Windows os.kill(pid, 0) sends Ctrl+C")), \
-                    patch.object(sako, "PID_NS", ""), patch.object(sako, "BOOT", ""):  # Windows has no /proc to read
-                self.assertEqual(sako.agent_pid(), 0, "SAKO_AGENT_PID is inert there")
-                self.assertFalse(sako.alive(os.getpid()))
-                entry = sako.presence_entry(roots, "windows-session")
-                self.assertEqual((entry["pid"], entry["ns"]), (0, ""))
-                sako.presence_dir(roots).mkdir(parents=True)
-                (sako.presence_dir(roots) / "w.json").write_text(json.dumps(entry))
-                self.assertEqual([e.get("unverified") for e in sako.read_presence(roots)], [True], "live for the lease")
-
-    @unittest.skipIf(fixture.WINDOWS, fixture.LEASE)
-    def test_liveness_distinguishes_missing_and_inaccessible_processes(self):
-        self.assertFalse(sako.alive(10**40), "an invalid saved PID is not a live process")
-        with patch.object(os, "kill", side_effect=ProcessLookupError):
-            self.assertFalse(sako.alive(57))
-        with patch.object(os, "kill", side_effect=PermissionError):
-            self.assertTrue(sako.alive(57))
-        with patch.object(os, "kill") as kill:
-            self.assertTrue(sako.alive(57))
-            kill.assert_called_once_with(57, 0)
-            self.assertFalse(sako.alive(0))
 
 
 class Release(unittest.TestCase):
@@ -325,6 +197,21 @@ class Words(unittest.TestCase):
                       self.text("docs/limits.md"))
         for page in Links().pages():  # no page may say the opposite again
             self.assertNotIn("carries its own", " ".join(page.read_text(encoding="utf-8").split()), page)
+
+    def test_presence_is_a_lease_and_the_limits_state_both_ways_it_errs(self):
+        self.assertEqual((sako.LEASE, sako.KEPT), (2 * 3600, 7 * 24 * 3600), "the documents say two hours and a week")
+        pause = self.section("Pause, handoff and takeover")
+        for words in ("A session counts as live for two hours, its lease, after its last SAKO command or hook, on every "
+                      "platform.", "end it with `end --session <its ID>`, then take the claim over",
+                      "`start` deletes the presence of a session unseen for a week"):
+            self.assertIn(words, pause)
+        limits = self.text("docs/limits.md")
+        for words in ("A live session that runs no SAKO command and fires no hook for two hours reads as ended.",
+                      "claim product work in its checkout, which the one-writer rule does not stop, and each session's gate "
+                      "then shows the other's files.", "A crashed session, or one in a client without hooks that never ran "
+                      "`end`, reads as live for two hours after its last command. Under the one-writer rule it locks product "
+                      "claims in its checkout until then"):
+            self.assertIn(words, limits)
 
     def test_a_claim_left_on_purpose_reads_as_stale_until_taken_over(self):
         self.assertIn("A claim left on purpose for another session reads as stale to every other session until it is taken "

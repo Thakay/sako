@@ -33,6 +33,17 @@ file formats can change in any 0.x release.
   close is new work. A task closed by hand, by an earlier release or in another
   checkout has no seal where the gate runs, so its uncommitted files count until they
   are committed. Seals start with the first close after the update.
+- A session counts as live for two hours after its last SAKO command or hook, the
+  same on every platform. Every command that carries a session ID, and every hook,
+  renews that lease, and a session's own command after the lease ran out renews it
+  and goes on. A takeover of a claim whose holder is live is refused. The refusal
+  says when the holder was last seen and when its lease ends, and names
+  `end --session <its ID>` for use once the owner confirms that session stopped.
+  After the lease, a takeover needs a reason. A live session quiet for two hours now
+  reads as ended, and a crashed one reads as live for up to two hours; the limits
+  page says what follows. A lapsed session's presence stays on disk for its return,
+  and `start` deletes presence unseen for a week. An entry an earlier release wrote
+  is judged by its last-seen time alone.
 
 ### Removed
 
@@ -41,6 +52,9 @@ file formats can change in any 0.x release.
 - The notes that excused single paths inside a live peer's claimed or closed scope.
 - The close-minute rule with its time zone handling, and the Recorded fix that offered
   to commit a file rewritten after its close under the closed task's title.
+- Presence by process, with the climb past shells to the agent's process through
+  `/proc` or `ps`, the PID namespace and boot comparisons, `SAKO_AGENT_PID`, and the
+  unverified state with its 24-hour lease. SAKO reads no process.
 
 ## [0.7.1] - 2026-10-19
 

@@ -70,7 +70,7 @@ git diff --check
 ```
 
 Run both suites on Python 3.10 when available; CI runs them on Linux, Windows and
-macOS. Tests use temporary repositories and process stand-ins. They do not establish
+macOS. Tests use temporary repositories and scripted sessions. They do not establish
 live-client behavior or newcomer usability. Add a focused regression for a behavior
 bug.
 

@@ -253,11 +253,6 @@ def _make(scenario):
         try:
             scenario(workspace / scenario.__name__)
         finally:
-            for proc in selftest.FAKE_AGENTS:
-                if proc.poll() is None:
-                    proc.kill()
-                    proc.wait()
-            selftest.FAKE_AGENTS.clear()
             selftest.remove_tree(workspace)
     return test
 

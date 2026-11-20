@@ -40,8 +40,6 @@ evidence (validation).
 - `init` needs this checkout or the package built from it (`pyproject.toml` installs
   `sako.py` as `sako/__init__.py`). The runtime copied into a project cannot seed
   another project.
-- The scenario suite starts `sleep` processes as stand-ins for agent sessions. An
-  interrupted run leaves them until they exit on their own, within an hour.
 
 ## Work from a fork
 

@@ -42,7 +42,6 @@ def main():
             "verify_command": [sys.executable, "-c", "from pathlib import Path; assert Path('src/app.py').read_text() == 'print(1)\\n'"],
             "verify_paths": ["src"]})})
         fixture.commit_all(project, "measurement fixture")
-        pid = fixture.fake_agent()
         samples = {}
         commands = {"start": ["start", "--session", "measurement-session"],
                     "check": ["check"], "next": ["next"], "verify": ["verify"],
@@ -51,9 +50,8 @@ def main():
             samples[name] = []
             for _ in range(7):
                 started = time.perf_counter()
-                fixture.succeeds(fixture.installed(project, *args, pid=pid))
+                fixture.succeeds(fixture.installed(project, *args))
                 samples[name].append((time.perf_counter() - started) * 1000)
-        fixture.kill(pid)
         reading = fixture.reading()[0]  # counted as the budget test counts it
         output = {"python": platform.python_version(), "platform": platform.system(),
                   "git": subprocess.check_output(["git", "--version"], text=True).strip(),
