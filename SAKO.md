@@ -235,9 +235,9 @@ Read this when a gate finding or a check result needs explaining. The stamp of
 `verify` covers the content, paths, symlink text and executable bit of unignored
 files under `verify_paths`. An empty list covers everything outside `.sako/`,
 documentation included, so name product subtrees if documentation-only work should
-not invalidate the check. A pass in another checkout of this repository counts here
-on identical checked content and command. A close lists each fresh named check in
-its receipt, and a named check is evidence, never a gate rule.
+not invalidate the check. A pass in another checkout counts here on identical
+checked content and command. A close lists each fresh named check in its receipt,
+and a named check is evidence, never a gate rule.
 
 The gate judges the checkout it runs in, for a hook the session's current
 checkout. It counts no file under `.sako/`, so a scope there only locks paths
@@ -256,11 +256,11 @@ sealed bytes, so a stash and its pop change nothing.
 
 **Proven** wants a fresh check once checked content moved since your start. A close
 whose receipt shows the gate's check pass stays proven while a claim you still hold
-covers the moved files, or while only others moved them, meaning edits left
-uncommitted before your start or this checkout's writer when you are not. Any other
-commit, merge, pull or checkout here counts as yours. Records work, scoped only
-inside `.sako/`, closes without a fresh check while only others moved checked
-content; its receipt then says "no automated check (records only)".
+covers moved files and your other moved files match the last pass here, or while
+only others moved them, meaning edits left uncommitted before your start or this
+checkout's writer when you are not. Any other commit, merge, pull or checkout counts
+as yours. Records work, scoped only inside `.sako/`, closes without a fresh check on
+the same terms; its receipt says "no automated check (records only)".
 **Committed** skips files inside a claim you still hold.
 
 The first line of `check --gate` is its verdict, and its exit code decides. Exit

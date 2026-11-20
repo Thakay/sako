@@ -5,6 +5,30 @@ Notable changes to SAKO, one entry per release. The format follows
 [Semantic Versioning](https://semver.org/). SAKO is alpha software, so commands and
 file formats can change in any 0.x release.
 
+## [Unreleased]
+
+### Fixed
+
+- A claim you still hold no longer excuses a stale check for checked files outside
+  it. While such a claim covers a moved file, a close whose receipt shows the gate's
+  check pass, and records work, stay proven only when every other checked file you
+  moved still holds what the last pass here checked. A merge of closed changes that
+  passed apart, or an edit or a commit outside your claims, now blocks the stop
+  under Proven even while you hold a claim over other changed files, and the finding
+  names up to three such files. 0.8.0 and 0.7.1 had this gap.
+- `verify` keeps what each checked file held at its last pass beside the stamp, in
+  `.sako/state/passed.json` for the main checkout. A failing run deletes the stamp
+  but leaves this record, so a claim still held keeps explaining its own files after
+  a failing check, and the record never makes the check fresh. A close whose receipt
+  shows a pass, even one from another checkout, makes that the last pass in the
+  checkout where it runs. Without a record, as before the first pass after an update,
+  a claim excuses a stale check only when it covers every checked file you moved.
+- A close of records work asks for the check on the same terms as the gate, so it no
+  longer refuses what the next stop accepts. It needs no fresh check while a claim
+  you still hold covers a moved file and every other checked file you moved still
+  holds what the last pass checked, and its receipt then says "no automated check
+  (records only)". With no such claim it asks for the check as before.
+
 ## [0.8.0] - 2026-11-19
 
 Three rules are simpler. A checkout has one writer, a closed task covers a file by

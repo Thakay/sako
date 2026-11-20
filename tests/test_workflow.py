@@ -985,8 +985,8 @@ class Workflow(unittest.TestCase):
             subprocess.run(["git", "clone", "-q", str(self.root), str(clone)], env=fixture.ENV, umask=mask, check=True)
         self.assertEqual([[(clone / name).stat().st_mode & 0o777 for name in names] for clone in clones],
                          [[0o644, 0o755], [0o600, 0o700]], "the umask sets the group and other bits")
-        self.assertEqual(*[sako.content_id(clone, []) for clone in clones],
-                         "the stamp counts only the owner's executable bit, as Git does")
+        self.assertEqual(*[sako.checked(clone, []) for clone in clones],
+                         "the stamp and the record of a pass count only the owner's executable bit, as Git does")
         self.assertEqual(*[[sako.fingerprint(clone, name) for name in names] for clone in clones], "so does the start record")
 
     def test_a_running_verify_keeps_the_last_pass_until_the_run_fails_or_moves(self):
