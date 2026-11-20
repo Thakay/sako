@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -458,7 +459,7 @@ class Compatibility(unittest.TestCase):
         self.cli("start", session="holder")
         self.cli("claim", "T-1", session="holder")
         self.cli("start", session="taker")
-        holder, seen = sako.marker_for("holder"), json.loads(fixture.entry_path(self.root, "holder").read_text())["seen"]
+        holder, seen = sako.marker_for("holder"), int(fixture.entry_path(self.root, "holder").stat().st_mtime)
         at = lambda moment: time.strftime("%Y-%m-%d %H:%M", time.localtime(moment))
         refusal = (f"sako: T-1 is held by {holder}, a live session last seen {at(seen)}, whose lease ends "
                    f"{at(seen + sako.LEASE)}. Choose another task. After the lease, or once the owner confirms that session "
@@ -485,9 +486,8 @@ class Compatibility(unittest.TestCase):
         self.cli("start", session="paused")
         roots = sako.resolve_roots(self.root)
         started = sako.my_entry(roots, "paused")["started_at"]
-        for args in (("status",), ("check",), ("next",), ("verify",), ("add", "Notes", "--scope", "docs/"), ("claim", "T-10"),
-                     ("edit", "T-10", "--widen", "notes/"), ("close", "T-10", "--evidence", "Recorded"), ("check", "--gate"),
-                     ("start",)):
+        for args in (("verify",), ("add", "Notes", "--scope", "docs/"), ("claim", "T-10"), ("edit", "T-10", "--widen", "notes/"),
+                     ("close", "T-10", "--evidence", "Recorded"), ("check", "--gate"), ("start",)):  # each acts as the session
             with self.subTest(verb=" ".join(args[:2])):
                 lapsed = fixture.lapse(self.root, "paused")["seen"]
                 self.cli(*args, session="paused")
@@ -504,6 +504,23 @@ class Compatibility(unittest.TestCase):
                          "a row taken over in the meantime gets the usual refusal")
         self.assertEqual(fixture.cli(self.root, "edit", "T-11", "--widen", "docs/", session="paused"),
                          (3, "", f"sako: T-11 is claimed by {sako.marker_for('taker')}; its holder edits it\n"))
+
+    def test_status_next_and_a_plain_check_renew_nothing_so_reading_a_crashed_session_before_a_takeover_keeps_it_lapsed(self):
+        """They are also how one session looks at another, as the method says to before a takeover."""
+        self.cli("start", session="crashed")
+        self.cli("claim", "T-1", session="crashed")
+        self.cli("start", session="taker")
+        roots, lapsed = sako.resolve_roots(self.root), fixture.lapse(self.root, "crashed", 9000)["seen"]
+        for args in (("status",), ("next",), ("check",)):
+            with self.subTest(verb=args[0]):
+                fixture.cli(self.root, *args, session="crashed")
+                self.assertEqual(sako.my_entry(roots, "crashed")["seen"], lapsed, "the lease stays lapsed")
+        self.assertIn(f"; work started at {sako.my_entry(roots, 'crashed')['work_start_rev'][:9]}; last seen "
+                      f"{sako.minute(lapsed)}, past the lease, so your claims read as stale to other sessions until you run "
+                      "start, add, claim, edit, close, verify or check --gate\n", self.cli("status", session="crashed"),
+                      "its own status says its lease ran out")
+        self.assertIn("T-1: claimed;", self.cli("claim", "T-1", "--takeover", "it crashed; inspected its work", session="taker"))
+        self.assertNotIn("last seen", self.cli("status", session="taker"), "a live session's status names no lease")
 
     def test_every_hook_but_the_end_renews_the_lease_and_the_end_removes_presence_at_once(self):
         self.assertEqual(fixture.hook(self.root, "SessionStart", "hooked")[0], 0)
@@ -545,13 +562,15 @@ class Compatibility(unittest.TestCase):
         path, marker = fixture.entry_path(self.root, "upgraded"), sako.marker_for("upgraded", "0101")
 
         def older(seen):
-            """The entry an earlier release wrote, with the agent's process, gone now, and its PID namespace and boot."""
+            """The entry an earlier release wrote when it last saw its session, with the agent's process, gone now, its
+            PID namespace and boot, and the last-seen time in the file, which this release reads from the file's time."""
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"marker": marker, "session_id": "upgraded", "pid": 2 ** 22,
                                         "ns": "pid:[4026531836]@1 boot an-earlier-boot", "seen": seen,
                                         "started": "2026-01-01T00:00:00+0000", "started_at": 1, "start_root": str(self.root),
                                         "work_root": str(self.root), "branch": "main",
                                         "work_start_rev": fixture.git(self.root, "rev-parse", "HEAD"), "dirty_at_start": {}}))
+            fixture.seen_at(path, seen)
 
         fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1", status="claimed", claim=marker))})
         older(int(time.time()))
@@ -564,12 +583,71 @@ class Compatibility(unittest.TestCase):
         self.cli("start", session="upgraded")
         entry = json.loads(path.read_text())
         self.assertEqual((entry["marker"], entry["started_at"]), (marker, 1), "a resume keeps its marker and start record")
-        self.assertFalse({"pid", "ns"} & set(entry), "and writes no process")
+        self.assertFalse({"pid", "ns", "seen", "start_root"} & set(entry), "and writes no process, no last-seen field and "
+                                                                           "no second checkout")
         older(int(time.time()) - sako.KEPT - 60)
         self.cli("start", session="reader")
         self.assertFalse(path.exists(), "unseen for a week, the entry is deleted at the next start")
         self.cli("start", session="upgraded")
         self.assertGreater(json.loads(path.read_text())["started_at"], 1, "so its session starts over")
+
+    def test_a_last_seen_time_ahead_of_the_clock_counts_only_within_the_lease_and_far_ahead_is_swept_as_unseen(self):
+        self.cli("start", session="ahead")
+        self.cli("claim", "T-1", session="ahead")
+        self.cli("start", session="taker")
+        path = fixture.entry_path(self.root, "ahead")
+        for ahead, live in ((sako.LEASE - 60, True), (sako.LEASE + 60, False), (30 * 24 * 3600, False)):
+            with self.subTest(ahead=ahead):
+                fixture.seen_at(path, time.time() + ahead)  # as a clock that stepped back after it was seen leaves it
+                self.assertEqual(f"\n  peer {sako.marker_for('ahead')} " in self.cli("status", session="taker"), live)
+        self.assertIn("T-1: claimed;", self.cli("claim", "T-1", "--takeover", "seen a month ahead", session="taker"))
+        self.cli("start", session="taker")
+        self.assertFalse(path.exists(), "more than a week ahead, the next start deletes it as it does one unseen for a week")
+
+    def test_a_renew_never_brings_back_an_entry_that_end_removed_however_the_two_interleave(self):
+        """end and the end hook remove the entry, the hook before it takes any lock, so a command or hook that renews the
+        session can run beside either. Each turn ends the session at another moment of the renew."""
+        roots = sako.resolve_roots(self.root)
+        self.cli("start", session="racing")
+        path = fixture.entry_path(self.root, "racing")
+        written = path.read_bytes()
+        for turn in range(100):
+            path.write_bytes(written)
+            ready = threading.Barrier(2)
+
+            def renewing():
+                ready.wait()
+                sako.renew(roots, "racing")
+
+            def ending(delay=turn % 20 / 4000):
+                ready.wait()
+                time.sleep(delay)
+                sako.remove_presence(roots, "racing")
+
+            threads = [threading.Thread(target=renewing), threading.Thread(target=ending)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertFalse(path.exists(), f"turn {turn}: the renew wrote the ended entry back")
+
+    def test_a_broken_presence_entry_is_no_peer_and_its_session_starts_over_or_it_is_swept_as_unseen(self):
+        live = self.root / ".sako/state/live"
+        self.cli("start", session="reader")
+        for name, text in (("broken", "{ not json"), ("listed", "[1, 2]"), ("empty", "")):
+            with self.subTest(entry=name):
+                path = fixture.entry_path(self.root, name)
+                path.write_text(text)
+                self.assertEqual(self.cli("status", session="reader").count("\n  peer "), 0, "unreadable, it is no peer")
+                self.assertIn(f"session '{name}' has not started here", self.cli("claim", "T-1", session=name, expected=3))
+                self.assertIn(f"your marker: {sako.marker_for(name)}\n", self.cli("start", session=name), "it starts over")
+                self.assertEqual(json.loads(path.read_text())["session_id"], name)
+                self.cli("end", session=name)
+        unseen = live / "0123456789ab.json"
+        unseen.write_text("{ not json")
+        fixture.seen_at(unseen, time.time() - sako.KEPT - 60)
+        self.cli("start", session="reader")
+        self.assertFalse(unseen.exists(), "a broken entry unseen for a week is deleted at the next start")
 
     def test_a_claim_overlapping_another_sessions_claim_offers_to_wait_within_its_lease_and_a_takeover_after_it(self):
         self.cli("start", session="holder")

@@ -13,7 +13,7 @@ guarantee for every environment; the [method](../SAKO.md) defines the behavior.
 | 3 | **A receipt on every finished task.** The completion condition, the evidence, the claim's marker and time, the close time, and what the check said on its own fingerprint, at which commit and, for a pass from another checkout, where, or "no automated check", marked "(records only)" for records work closed without the check; then each fresh named check's pass; never a pass the check did not give | Receipts in each form, records work, a pass from another worktree and named checks included; an interrupted close finishes on repeat; the demo's receipt; scenario `greenfield_discovery_without_automated_check` | None |
 | 4 | **Plain, forgiving records.** Markdown tables with at most eight required columns, read by name; your columns and hand edits survive every write; IDs are never reused while their rows stay; a fault names its file and line | Columns by name in any order, your columns kept through close, hand edits, faults with file and line, a bad value held out of `next`; scenario `ledger_findings`; a test holds the required columns at 8 | None |
 | 5 | **One explainable next.** Priority, then row order, among ready tasks; it names its pick and why, what else is ready and what waits | Ranking tests; scenario `next_frontier`; the demo's pickup | None |
-| 6 | **Writes under one lock, across worktrees.** Parallel adds get distinct IDs, one claim wins, overlaps and live owners are refused, a second writer in a checkout is refused with the worktree command, a stale takeover needs a reason, only a claim's holder edits its row, and repeated intake reuses its task | Concurrent adds from two worktrees, claim races, the one-writer refusal and its printed command, holders within their lease and past it, `edit` refused to a non-holder and for a widening onto another claim, repeat intake; scenarios `presence_peers_and_stale_claims`, `scopes_and_overlap`, `interruption_recovery`, `worktrees_share_presence`, `external_plan_intake_and_completion` | Across machines: one writer at a time, stated, not tested |
+| 6 | **Writes under one lock, across worktrees.** Parallel adds get distinct IDs, one claim wins, overlaps and live owners are refused, a second writer in a checkout is refused with the worktree command and named if one arises anyway, a stale takeover needs a reason, only a claim's holder edits its row, and repeated intake reuses its task | Concurrent adds from two worktrees, claim races, the one-writer refusal and its printed command, two writers named however they arose, holders within their lease and past it, `edit` refused to a non-holder and for a widening onto another claim, repeat intake; scenarios `presence_peers_and_stale_claims`, `scopes_and_overlap`, `interruption_recovery`, `worktrees_share_presence`, `external_plan_intake_and_completion` | Across machines: one writer at a time, stated, not tested |
 | 7 | **One command, nothing tracked changes.** `init` needs no flags, leaves `git status` clean and instructions untouched, names the clients it wired and why, and refuses unsupported platforms and layouts before any write | Detection from each client signal, `--client`, tracked client files left alone, refusals, the package and a checkout installing the same files; scenarios `init_and_hook_dispatch`, `root_refusals`, `invalid_install_has_no_partial_assets`; an offline `uvx` install from the wheel | Live hook delivery beyond the sessions in [compatibility](compatibility.md); Cursor unchecked |
 | 8 | **One method document, any planner.** SAKO.md alone, at most 3,000 words, its required part within the 1,500-word reading budget; intake keeps source references; a default planner serves projects without one | The word-cap, reading-budget and routing tests (measured in [Measured fixture overhead](#measured-fixture-overhead)); scenarios `greenfield_adoption_and_fresh_pickup`, `existing_project_reuses_context_and_checks`, `unstructured_project_and_completed_goal`, `replanning_preserves_authority_and_blockers`; the [intake recipes](intake-recipes.md), each run once | Planning judgment by outside users |
 | 9 | **The whole loop, shown.** The finish-gate and two-session demos use real SAKO output from scripted runs | Both transcripts and the [README storyboard](assets/readme/working-together.svg), regenerated in a test and compared with the files | Live AI collaboration and a newcomer's own timing |
@@ -35,7 +35,7 @@ by setting its last-seen time back. The skill meets the Agent Skills format. No
 independent agent or outside user has validated adoption judgment.
 
 The last local run was on 2026-11-19, on WSL2 (Ubuntu 24.04, Linux 6.18) with Git
-2.43.0. Both suites pass on Python 3.10.20 and 3.12.3, with 274 unit tests and 22
+2.43.0. Both suites pass on Python 3.10.20 and 3.12.3, with 288 unit tests and 22
 scenarios.
 
 ## Native Windows
@@ -52,11 +52,11 @@ adds, UTF-8 output and paths passed.
 
 | File | What it proves |
 |---|---|
-| [test_gate.py](../tests/test_gate.py) | The three rules and their exemptions, a checkout's writer, the seals a close keeps, which ledger findings block, records-only closes, named checks that never block, the rule and fix in every finding, the one-time block, a hook failing on its own, the handoff advisories |
+| [test_gate.py](../tests/test_gate.py) | The three rules and their exemptions, a checkout's writer and two writers named, the start record of the checkout a session last started in, the seals a close keeps, which ledger findings block, records-only closes, named checks that never block, the rule and fix in every finding, the one-time block, a hook failing on its own, the handoff advisories |
 | [test_sako.py](../tests/test_sako.py) | The ledger parser and configuration, hand edits, faults with their file and line, `next` ranking; it also runs the scenarios |
 | [test_workflow.py](../tests/test_workflow.py) | Commands end to end: parallel adds and claims, `edit`, repeat intake, prerequisites, interrupted closes, receipts, named checks, a pass from another worktree, the one-writer rule, peer lines, handoff folders, `--session` on every command |
 | [test_footprint.py](../tests/test_footprint.py) | The three footprints and the switches between them, worktrees, and one regression per defect the reviews found |
-| [test_compatibility.py](../tests/test_compatibility.py) | Client detection and `--client`, both clients' hook commands and session defaults, presence by last seen with its lease and an earlier release's entries, refused older installations, unrelated settings kept |
+| [test_compatibility.py](../tests/test_compatibility.py) | Client detection and `--client`, both clients' hook commands and session defaults, presence by the entry file's time with its lease, the commands that renew it and those that do not, a renew racing an end, a time ahead of the clock, broken entries and an earlier release's, refused older installations, unrelated settings kept |
 | [test_release.py](../tests/test_release.py) | The package's contents, documentation covered by the check, the budgets and word caps, pinned sentences, both demo transcripts and the README storyboard against fresh runs, and the links |
 | [selftest.py](../tests/selftest.py) | 22 scenarios, from adoption to recovery; they supply the planning choices, so they prove the mechanics, not an agent's judgment |
 | [demo.py](../tests/demo.py), [measure.py](../tests/measure.py) | Generate the demo pages, the README storyboard and the measurements |
@@ -73,21 +73,21 @@ with the machine, filesystem, repository, cache and check command.
 
 | Measure | Observed |
 |---|---|
-| No client signal: kit and shared skill, no hooks | 6 files, 150,805 bytes |
-| Codex | 7 files, 152,439 bytes |
-| Claude Code, with its own skill copy | 8 files, 153,515 bytes |
-| Both clients | 9 files, 155,149 bytes |
-| Installed method, one document | 2,992 whitespace-separated words |
-| Reading for a normal task, lone-session fixture | 1,336 words: skill 168, template preamble 46, start context 133, the method's required part 989 |
-| Runtime source | 2,392 lines, one standard-library Python file, within the 4,000-line cap |
-| Initial install with no client signal, one sample | 56.7 ms |
+| No client signal: kit and shared skill, no hooks | 6 files, 155,169 bytes |
+| Codex | 7 files, 156,803 bytes |
+| Claude Code, with its own skill copy | 8 files, 157,879 bytes |
+| Both clients | 9 files, 159,513 bytes |
+| Installed method, one document | 2,990 whitespace-separated words |
+| Reading for a normal task, lone-session fixture | 1,342 words: skill 168, template preamble 46, start context 133, the method's required part 995 |
+| Runtime source | 2,457 lines, one standard-library Python file, within the 4,000-line cap |
+| Initial install with no client signal, one sample | 55.5 ms |
 | Fingerprint fixture | 101 covered files, 409,609 bytes |
 | Trials per command | 7, median reported in the next rows |
-| `start` | 44.6 ms |
-| `check` | 41.4 ms |
-| `next` | 41.1 ms |
-| `verify`, including a small source-content assertion | 78.5 ms |
-| `check --gate`, no completed rows | 50.6 ms |
+| `start` | 45.6 ms |
+| `check` | 42.8 ms |
+| `next` | 42.8 ms |
+| `verify`, including a small source-content assertion | 81.1 ms |
+| `check --gate`, no completed rows | 49.7 ms |
 
 `start` is sampled before verification has established evidence, and the gate
 fixture has no closed rows, so completed-work fingerprinting is not timed. These are

@@ -58,11 +58,11 @@ its fix.
 - **Committed:** closed work is committed; in the repo and shared footprints, its receipt too.
 
 A duplicate ID, a source mapped twice, a faulty row, an overlap with your own
-claim and a footprint finding also block. Claimed, unfinished work, advisories and
-notes, such as another session's stale claim, never block. A clear gate means these
-rules passed, not that the owner accepts the result. With a null `verify_command`,
-the receipt says "no automated check" in place of a pass; do not call that work
-verified.
+claim, a second writer in your checkout and a footprint finding also block.
+Claimed, unfinished work, advisories and notes, such as another session's stale
+claim, never block. A clear gate means these rules passed, not that the owner
+accepts the result. With a null `verify_command`, the receipt says "no automated
+check" in place of a pass; do not call that work verified.
 
 ## Records
 
@@ -165,8 +165,7 @@ anything that widens the agreed outcome to the owner first.
 Read this when you pause unfinished work, leave, resume, or meet a stale claim.
 Before pausing a claimed task, write `handoff.md` in the folder `claim` printed,
 with where the task stands, what landed, what is left, the next step, and traps. The
-folder is never checked content. On close, move its lasting facts to their real home
-and delete it.
+folder is never checked content.
 
 A background subagent that a message can resume is paused, not finished. When the
 next step is the owner's, close what you finished. The owner's act, or deferred
@@ -177,14 +176,16 @@ until it is taken over. Two rows avoid that, the second listing the first in
 After.
 
 To release a claim no agent will resume, open or park it with `edit`. A resume keeps
-the session ID, marker key and claims, but after an end, as when the client exits, it
-takes a new start record and the gate counts only later changes. In Claude Code,
-`/clear` and a fork start a new session with its own ID.
+the session ID, marker key and claims, but after an end, as when the client exits, or
+a start in another checkout, it takes a new start record and the gate counts only
+later changes. In Claude Code, `/clear` and a fork start a new session with its own
+ID.
 
-A session counts as live for two hours, its lease, after its last SAKO command or
-hook, on every platform. Its commands and hooks renew the lease, and `end` or the
-end hook ends it. `start` deletes the presence of a session unseen for a week, so
-that session takes a new start record if it comes back.
+A session counts as live for two hours, its lease, after its last hook or command
+that acts as it, on every platform. `status`, `next` and a plain `check` also show
+other sessions, so they renew nothing. `end` or the end hook ends it. `start` deletes
+the presence of a session unseen for a week, so that session takes a new start record
+if it comes back.
 
 Before a takeover, read the handoff and the Git diff; `status --session <its ID>`,
 not its marker, shows an ended session's rows. After the holder's lease, take the
@@ -207,10 +208,11 @@ subagents. Outside the shared footprint, all worktrees share the main checkout's
   always a peer, since that client's hooks run SAKO for it. A claim refuses a live
   holder and a scope that overlaps another session's claim. A checkout holds one
   check result and one set of uncommitted files, so it has one writer, the live
-  session that started there and holds a product claim. A second session's product
-  claim there is refused with the Git command for a worktree of its own. A claim
-  scoped inside `.sako/` makes no writer, so records work shares a checkout. After a
-  merge, the gate asks for a fresh check.
+  session that last started there and holds a product claim. A second session's
+  product claim there is refused with the Git command for a worktree of its own;
+  `uvx sako init` there wires its hooks. A claim scoped inside `.sako/` makes no
+  writer, so records work shares a checkout. After a merge, the gate asks for a fresh
+  check.
 - **A coordinator with a fleet.** One session coordinates and holds the claims. Its
   workers are subagents in its own client. They run no SAKO command, and nothing
   gates them. Paste each worker its row as the brief and tell it to run no SAKO
@@ -244,20 +246,20 @@ here once merged; until then, `check --gate --session <id>` run there judges it.
 
 **Recorded** counts files edited since the session started or committed since then,
 deletions and both sides of a rename; a file already dirty at start counts only when
-it changes again. While another live session is this checkout's writer and you hold
-no product claim here, the changes here are its to answer for. A change that a task
-another session closed since you started covers does not count either. `close` seals
-each uncommitted file in the task's scope that counts as your change. The closed
-task covers a committed file by its scope and an uncommitted one while it holds the
+it changes again. While another live session is this checkout's writer and you are
+not, the changes here are its to answer for. A change that a task another session
+closed since you started covers does not count either. `close` seals each
+uncommitted file in the task's scope that counts as your change. The closed task
+covers a committed file by its scope and an uncommitted one while it holds the
 sealed bytes, so a stash and its pop change nothing.
 
 **Proven** wants a fresh check once checked content moved since your start. A close
 whose receipt shows the gate's check pass stays proven while a claim you still hold
 covers the moved files, or while only others moved them, meaning edits left
-uncommitted before your start or this checkout's writer when that is another
-session. Any other commit, merge, pull or checkout here counts as yours. Records
-work, scoped only inside `.sako/`, closes without a fresh check while only others
-moved checked content; its receipt then says "no automated check (records only)".
+uncommitted before your start or this checkout's writer when you are not. Any other
+commit, merge, pull or checkout here counts as yours. Records work, scoped only
+inside `.sako/`, closes without a fresh check while only others moved checked
+content; its receipt then says "no automated check (records only)".
 **Committed** skips files inside a claim you still hold.
 
 The first line of `check --gate` is its verdict, and its exit code decides. Exit
@@ -270,9 +272,9 @@ Read this when installing, updating or removing the kit, or wiring a worktree. R
 `uvx sako init`, or `python3 <checkout>/sako.py init` from a reviewed checkout, in
 the project's main checkout. It needs no flags, never edits project instructions,
 and in the default local footprint changes no tracked file. It wires hooks for each
-client it finds a sign of and says why. `--client claude`, `--client codex` (repeat
-for both) or `--client none` replaces that choice for later runs too. In a new
-linked worktree, run `init` there to wire its hooks.
+client it finds a sign of. `--client claude`, `--client codex` (repeat for both) or
+`--client none` replaces that choice for later runs too. In a new linked worktree,
+run `init` there to wire its hooks.
 
 Set the check in `.sako/config.json`. `verify_command` is an argument array run at
 the top of the checkout, such as `["python3", "-B", "-m", "unittest"]`, or
@@ -280,13 +282,13 @@ the top of the checkout, such as `["python3", "-B", "-m", "unittest"]`, or
 covers, and `checks` maps names, such as `browser`, to more arrays that
 `verify NAME` runs.
 
-The records' footprint is local by default, out of Git, so `git clean -dx` deletes
-them. `init --repo [url]` gives them their own Git repository inside `.sako/`, and
-`init --shared` keeps them in the code's repository, one copy per branch. Both print
-the command that commits the records. To go back to local, run `remove`, then
-`init`, which names any Git command to run first.
+The records' footprint is local by default, out of Git. `init --repo [url]` gives
+them their own Git repository inside `.sako/`, and `init --shared` keeps them in the
+code's repository, one copy per branch. Both print the command that commits the
+records. To go back to local, run `remove`, then `init`, which names any Git command
+to run first.
 
 To update, review the new release and run its `init --update` with no active work,
 such as `uvx sako@latest init --update`. `python3 .sako/sako.py remove` in the main
-checkout removes the unmodified kit files, SAKO's hooks in every worktree and the
-disposable state, and keeps `config.json` and `work/`.
+checkout removes the kit and its hooks in every worktree, and keeps `config.json` and
+`work/`.

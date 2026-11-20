@@ -7,9 +7,9 @@ Options: --keep  keep the fixture workspace for inspection.
 Every scenario builds its own repositories under a temporary workspace, drives
 sako.py through its command line exactly as an agent or a hook would, and asserts
 the observable result: exit codes, printed lines, files in the Git directory.
-A session is live because it just ran a command; lapse() sets its last-seen time
-back past the lease, since the command line runs in another process and its clock
-cannot be patched.
+A session is live because it just ran a command; lapse() sets its last-seen time,
+its entry file's modification time, back past the lease, since the command line
+runs in another process and its clock cannot be patched.
 """
 
 from __future__ import annotations
@@ -168,13 +168,26 @@ def entry_path(root: Path, session: str) -> Path:
     return root / ".sako/state/live" / f"{runtime().session_key(session)}.json"
 
 
+def seen_at(path: Path, moment: float) -> None:
+    """Set a presence entry's last-seen time, its file's modification time."""
+    os.utime(path, (moment, moment))
+
+
 def lapse(root: Path, session: str, ago: int | None = None) -> dict:
     """Set a session's last-seen time back, by default just past the lease, as if it had run no
-    SAKO command or hook since; returns the entry as written."""
+    hook or command that acts as it since; returns the entry with that time as seen."""
+    path, moment = entry_path(root, session), int(time.time()) - (ago or runtime().LEASE + 60)
+    seen_at(path, moment)
+    return dict(json.loads(path.read_text()), seen=moment)
+
+
+def started_ago(root: Path, session: str, seconds: int = 60) -> None:
+    """Move a session's start time back a minute, so a task another session closes now counts as
+    closed since it started, as it would in a longer session. A receipt keeps its close to the
+    minute, and that minute counts from its start. Rewriting the entry also renews it."""
     path = entry_path(root, session)
-    entry = dict(json.loads(path.read_text()), seen=int(time.time()) - (ago or runtime().LEASE + 60))
-    path.write_text(json.dumps(entry))
-    return entry
+    entry = json.loads(path.read_text())
+    path.write_text(json.dumps(dict(entry, started_at=entry["started_at"] - seconds)))
 
 
 def claim(root: Path, task_id: str, session: str, touches: str = "`src/`") -> str:
@@ -313,8 +326,9 @@ def scenario_presence_peers_and_stale_claims(ws: Path) -> None:
     expect(entry_path(repo, "s1").exists(), "its entry stays on disk, so its next command finds its start record")
     cli(repo, "end", session="s2")
     expect(not entry_path(repo, "s2").exists() and entry_path(repo, "s1").exists(), "end removes its own entry")
-    (repo / ".sako/state/live" / "deadbeef0000.json").write_text(json.dumps(
-        {"marker": "sk-0101-deadbeef0000", "seen": int(time.time()) - 8 * 24 * 3600}))
+    unseen = repo / ".sako/state/live" / "deadbeef0000.json"
+    unseen.write_text(json.dumps({"marker": "sk-0101-deadbeef0000"}))
+    seen_at(unseen, time.time() - 8 * 24 * 3600)
     code, out, _ = cli(repo, "start", session="s3")
     expect(code == 0 and not (repo / ".sako/state/live/deadbeef0000.json").exists() and entry_path(repo, "s1").exists(),
            "start deletes an entry unseen for a week and keeps a lapsed one")
@@ -613,6 +627,7 @@ def scenario_neutral_package_and_shared_host_sessions(ws: Path) -> None:
     succeeds(installed(repo, "start", session="host-first"))
     succeeds(installed(repo, "claim", "T-1", session="host-first"))
     peer = succeeds(installed(repo, "start", session="host-second"))
+    started_ago(repo, "host-second")  # so the first's close, made in this minute, comes after its start
     expect(f"peer {marker('host-first')}" in peer, "the second conversation sees the first as a live peer")
     refusal = installed(repo, "claim", "T-1", "--takeover", "Inspect existing work", session="host-second")
     expect(refusal.returncode == 3 and f"T-1 is held by {marker('host-first')}, a live session last seen " in refusal.stderr,

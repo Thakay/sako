@@ -11,19 +11,20 @@ checkout, and submodules are refused. In an unborn repository, make a first comm
 before daily work, so the gate has a start revision.
 
 A stock Mac's `python3` is 3.9, so install Python 3.10 or newer. On Windows, check
-that `python --version` in Git Bash shows 3.10 or newer; the python.org installer
-leaves Python off the path unless you tick that box, and the Microsoft Store's
-placeholder only prints a message. From PowerShell, `verify` can find WSL's `bash`,
-so give Git's `bash.exe` by its full path. A failed `init --repo URL` on Windows can
-leave read-only Git files in `.sako/`; delete the folder before trying again.
+that `python --version` in Git Bash shows 3.10 or newer, since the python.org
+installer leaves Python off the path unless you tick that box and the Microsoft
+Store's placeholder only prints a message. From PowerShell, `verify` can find WSL's
+`bash`, so give Git's `bash.exe` by its full path. A failed `init --repo URL` on
+Windows can leave read-only Git files in `.sako/`; delete the folder before trying
+again. WSL and native Windows on one clone count as two checkouts whose locks do not
+interlock, so use one of them per clone.
 
 ## Local coordination
 
 The ledger lock serializes SAKO's own writes across the worktrees, not code edits,
-hand edits of the records, commits, the staging area or other clones. Stage explicit
-paths and run shared Git operations one at a time. On Windows, a read during another
-session's `close` can show the task in both records for a moment, so check again
-before acting.
+hand edits of the records, commits, the staging area or other clones, so run shared
+Git operations one at a time. On Windows, a read during another session's `close`
+can show the task in both records for a moment, so check again before acting.
 
 A pass from another checkout that counts here, even a removed worktree's while its
 folder in `.sako/state/` remains, proves nothing about that checkout's ignored files
@@ -34,14 +35,15 @@ writer is asked about every product change there, whoever made it. Closing a tas
 scoped `.` makes the Committed fix stage every uncommitted change made here between
 your start and its close, a peer's included, so check `git status` first or narrow
 the scope. A close seals what each of its files holds, whoever wrote it, so read
-`git diff` before following a Committed fix. With no live writer, Recorded cannot
-tell who made a commit, so a task another session closed since you started excuses
-your commit in its scope.
+`git diff` before following a Committed fix. Recorded cannot tell who made a commit,
+so a task another session closed since you started excuses your commit in its scope,
+even one closed in another checkout and never merged here.
 
-The one-writer rule is judged only by `claim` and `edit`, so two sessions that hold
-product claims in one checkout after a hand edit of the records are each asked about
-every change there. The rule reads the checkout a session last started in, so after
-moving to another checkout, run `start` there.
+`claim` and `edit` refuse a second writer, but a hand edit, a session back from an
+end or a lapsed lease, or an update from 0.7.1 can leave two in one checkout; the
+ledger check names them, and each gate shows the other's files until one moves.
+Each start in another checkout takes a new start record, so hopping away and back
+takes two.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
 different branches can allocate the same task ID, cannot see each other's claims,
@@ -50,15 +52,13 @@ writer at a time; two machines writing at once collide on numbers and see each
 other's claims as stale. A team that needs more can
 [move to a tracker](move-to-a-tracker.md).
 
-Presence is a two-hour lease from a session's last SAKO command or hook, and it
-errs both ways. A live session that runs no SAKO command and fires no hook for two
-hours reads as ended. Another session can then take over its claims with a reason
-and claim product work in its checkout, which the one-writer rule does not stop, and
-each session's gate then shows the other's files. A crashed session, or one in a
-client without hooks that never ran `end`, reads as live for two hours after its
-last command. Under the one-writer rule it locks product claims in its checkout
-until then, or until the owner confirms it stopped and someone runs
-`end --session <its ID>`.
+Presence is a two-hour lease from a session's last hook or command that acts as it,
+and it errs both ways. A live session that fires no hook and runs no such command
+for two hours reads as ended, and another session can then take over its claims
+with a reason. A crashed session, or one in a client without hooks that never ran
+`end`, reads as live for two hours after its last such command. Under the
+one-writer rule it locks product claims in its checkout until then, or until the
+owner confirms it stopped and someone runs `end --session <its ID>`.
 
 A claim left on purpose for another session reads as stale to every other session
 until it is taken over; close your part and leave the rest as a second row. A
@@ -96,8 +96,8 @@ takes all of `.sako/` but `state/`, handoff folders included.
 
 Hooks are feedback, not a security boundary. The gate refuses a stop once, and a
 repeated stop, a missing session identity or a bug in the handler lets the session
-go. Hook failures and timeouts are the client's to handle, and project policy can
-turn hooks off. A recent hook time in `status` does not prove every stop was gated.
+go. Hook failures and timeouts are the client's to handle. A recent hook time in
+`status` does not prove every stop was gated.
 
 A hook that finds no kit from its folder, as in the repo footprint's `.sako/`, falls
 back to Claude Code's `$CLAUDE_PROJECT_DIR`. A Codex hook there exits 1 and leaves
@@ -107,7 +107,7 @@ while the main checkout's branch has no `.sako/`.
 ## What SAKO does not do
 
 SAKO does not start, direct or message agents, merge their edits, fetch issues,
-create applications or commit; you or your agent make the commit the gate names.
+create applications or commit.
 
 ### Not building yet
 

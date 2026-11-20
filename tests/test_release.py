@@ -148,8 +148,9 @@ class Words(unittest.TestCase):
         done = self.section("Done means")
         for words in ("every file changed in this checkout since the session started, outside `.sako/`, belongs to a task it "
                       "claimed or closed", "in the repo and shared footprints, its receipt too",
-                      "A duplicate ID, a source mapped twice, a faulty row, an overlap with your own claim and a footprint "
-                      "finding also block", "notes, such as another session's stale claim, never block"):
+                      "A duplicate ID, a source mapped twice, a faulty row, an overlap with your own claim, a second writer in "
+                      "your checkout and a footprint finding also block", "notes, such as another session's stale claim, never "
+                      "block"):
             self.assertIn(words, done)
         detail = self.section("The gate and checks in detail")
         self.assertIn("It counts no file under `.sako/`, so a scope there only locks paths against other claims", detail)
@@ -217,17 +218,30 @@ class Words(unittest.TestCase):
     def test_presence_is_a_lease_and_the_limits_state_both_ways_it_errs(self):
         self.assertEqual((sako.LEASE, sako.KEPT), (2 * 3600, 7 * 24 * 3600), "the documents say two hours and a week")
         pause = self.section("Pause, handoff and takeover")
-        for words in ("A session counts as live for two hours, its lease, after its last SAKO command or hook, on every "
-                      "platform.", "end it with `end --session <its ID>`, then take the claim over",
-                      "`start` deletes the presence of a session unseen for a week"):
+        for words in ("A session counts as live for two hours, its lease, after its last hook or command that acts as it, on "
+                      "every platform. `status`, `next` and a plain `check` also show other sessions, so they renew nothing.",
+                      "end it with `end --session <its ID>`, then take the claim over",
+                      "`start` deletes the presence of a session unseen for a week",
+                      "after an end, as when the client exits, or a start in another checkout, it takes a new start record"):
             self.assertIn(words, pause)
         limits = self.text("docs/limits.md")
-        for words in ("A live session that runs no SAKO command and fires no hook for two hours reads as ended.",
-                      "claim product work in its checkout, which the one-writer rule does not stop, and each session's gate "
-                      "then shows the other's files.", "A crashed session, or one in a client without hooks that never ran "
-                      "`end`, reads as live for two hours after its last command. Under the one-writer rule it locks product "
-                      "claims in its checkout until then"):
+        for words in ("A live session that fires no hook and runs no such command for two hours reads as ended",
+                      "the ledger check names them, and each gate shows the other's files until one moves.",
+                      "Each start in another checkout takes a new start record",
+                      "A crashed session, or one in a client without hooks that never ran `end`, reads as live for two hours "
+                      "after its last such command. Under the one-writer rule it locks product claims in its checkout until "
+                      "then"):
             self.assertIn(words, limits)
+
+    def test_a_writer_is_the_session_that_last_started_in_a_checkout_and_a_new_worktree_is_wired_by_init(self):
+        beside = self.section("Working beside other sessions")
+        for words in ("so it has one writer, the live session that last started there and holds a product claim.",
+                      "refused with the Git command for a worktree of its own; `uvx sako init` there wires its hooks."):
+            self.assertIn(words, beside)
+        self.assertIn("While another live session is this checkout's writer and you are not, the changes here are its to "
+                      "answer for.", self.section("The gate and checks in detail"))
+        self.assertIn("WSL and native Windows on one clone count as two checkouts whose locks do not interlock",
+                      self.text("docs/limits.md"))
 
     def test_a_claim_left_on_purpose_reads_as_stale_until_taken_over(self):
         self.assertIn("A claim left on purpose for another session reads as stale to every other session until it is taken "

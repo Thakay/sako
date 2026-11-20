@@ -9,20 +9,41 @@ file formats can change in any 0.x release.
 
 ### Changed
 
-- A checkout has one writer. A product claim is refused while another live session
-  that started in the same checkout holds one, and the refusal names the Git command
-  for a worktree of its own (`git worktree add ../<project>-t-<n> -b t-<n>`). A claim
-  scoped inside `.sako/` makes no writer, so records work still shares a checkout.
-  Sessions that shared one checkout with disjoint product scopes now take a worktree
-  each.
+- A checkout has one writer, the live session that last started there and holds a
+  product claim. A product claim is refused while another live session that last
+  started in the same checkout holds one, and the refusal names the Git command for a
+  worktree of its own (`git worktree add ../<project>-t-<n> -b t-<n>`) and
+  `uvx sako init` there to wire its hooks, since a new worktree has none and the copy
+  in `.sako/` cannot run `init`. A product claim run in a checkout the session did not
+  last start in is refused too, and the refusal says to run it where the session last
+  started or to run `start` here first. A claim scoped inside `.sako/` makes no
+  writer, so records work still shares a checkout. Sessions that shared one checkout
+  with disjoint product scopes now take a worktree each.
+- Two writers in one checkout, however they arose, are a ledger finding in `check`,
+  the gate and the start context. A hand edit, a session back from an end or a lapsed
+  lease, or an update from 0.7.1 can leave them. The finding names each writer with
+  its tasks and the two ways out, releasing one writer's product claims or committing
+  and moving that session to a worktree of its own. It blocks each writer's stop,
+  before Recorded, and is a note for any other session.
 - The gate counts a checkout's product changes for its writer, in its scope or out of
-  it. A session that holds no product claim there is not asked about them, and the
-  note says whose they are.
+  it. Another session there is not asked about them, and the note says whose they
+  are. A session is a writer only in the checkout it last started in, so a gate run in
+  the main checkout for a session that holds a product claim in its own worktree
+  leaves the main checkout's changes to the writer there.
+- A start in a checkout other than the one the session last started in takes a new
+  start record there, with its start revision, files dirty at start and start time,
+  so the commits already in a new worktree's base are not the session's. Where the
+  session did not last start, the gate applies no start record, counts every
+  uncommitted file, checks no commit, and says so in a note.
 - A change is not counted when a task another session closed since you started covers
   it, by commit or not. This replaces the rule that compared a commit's day with the
   day of the close, so a merged branch whose task is closed no longer counts against
-  the session that merges it, and no time zone is read.
-- A peer's line in `start` and `status` names its claims and its checkout.
+  the session that merges it. Whether a task closed since you started is read from
+  its receipt's close time, to the minute and in the receipt's own offset, and the
+  minute counts from its start, so a task closed in the minute a session started
+  counts as closed before it.
+- A peer's line in `start` and `status` names its claims and the checkout it last
+  started in, under a shorter header.
 - The two-session demo and the README illustration show the second session in its own
   worktree, a merge, and the gate asking for a fresh check after it.
 - A closed task covers an uncommitted file by what the file holds, not by when it was
@@ -32,18 +53,30 @@ file formats can change in any 0.x release.
   bytes, no longer lists closed work under Recorded, and an edit in the minute of the
   close is new work. A task closed by hand, by an earlier release or in another
   checkout has no seal where the gate runs, so its uncommitted files count until they
-  are committed. Seals start with the first close after the update.
-- A session counts as live for two hours after its last SAKO command or hook, the
-  same on every platform. Every command that carries a session ID, and every hook,
-  renews that lease, and a session's own command after the lease ran out renews it
-  and goes on. A takeover of a claim whose holder is live is refused. The refusal
-  says when the holder was last seen and when its lease ends, and names
+  are committed. When such a file, or one rewritten after the close, lies in the
+  scope of a task the session closed, the Recorded fix first offers to commit it
+  under that task, then to record new work. Seals start with the first close after
+  the update.
+- A session counts as live for two hours after its last hook or command that acts as
+  it, the same on every platform. `start`, `add`, `claim`, `edit`, `close`, `verify`,
+  `check --gate` and every hook but the end renew that lease, and a session's own such
+  command after the lease ran out renews it and goes on. `status`, `next` and a plain
+  `check` renew nothing, since they also show other sessions, so reading a crashed
+  session before a takeover no longer keeps it live, and a session's own `status`
+  says when its lease ran out. A takeover of a claim whose holder is live is refused.
+  The refusal says when the holder was last seen and when its lease ends, and names
   `end --session <its ID>` for use once the owner confirms that session stopped.
   After the lease, a takeover needs a reason. A live session quiet for two hours now
   reads as ended, and a crashed one reads as live for up to two hours; the limits
-  page says what follows. A lapsed session's presence stays on disk for its return,
-  and `start` deletes presence unseen for a week. An entry an earlier release wrote
-  is judged by its last-seen time alone.
+  page says what follows. A last-seen time ahead of the clock, as a clock that steps
+  back leaves it, counts only within the lease, and more than a week ahead it is
+  deleted as unseen. A lapsed session's presence stays on disk for its return, and
+  `start` deletes presence unseen for a week.
+- The last-seen time is the presence entry's file time, which only `start` and a
+  renew set, so a renew is a touch that cannot bring back an entry that `end` or the
+  end hook removed, however the two interleave. An entry an earlier release wrote is
+  judged by its file time alone, which that release set whenever it recorded the
+  session as seen.
 - The method names three ways of working. A solo session and a coordinator are gated
   by the Stop hook, peers each run SAKO in a worktree of their own, and a
   coordinator's workers are subagents that run no SAKO command, which the skill now
@@ -58,11 +91,19 @@ file formats can change in any 0.x release.
 - A peer's commits and uncommitted paths in `start` and `status`, with the 2-second
   budget for reading them. SAKO reads no peer's Git state.
 - The notes that excused single paths inside a live peer's claimed or closed scope.
-- The close-minute rule with its time zone handling, and the Recorded fix that offered
-  to commit a file rewritten after its close under the closed task's title.
+- The close-minute rule, with its time zone handling, that decided which uncommitted
+  files a closed task covers, and the long Recorded fix for a file rewritten after its
+  close, which the short one above replaces.
 - Presence by process, with the climb past shells to the agent's process through
   `/proc` or `ps`, the PID namespace and boot comparisons, `SAKO_AGENT_PID`, and the
   unverified state with its 24-hour lease. SAKO reads no process.
+
+### Fixed
+
+- A plain folder in the place of a file, as when a module becomes a package of the
+  same name, was fingerprinted by the repository's HEAD, so any later commit made it
+  read as changed since the start or since its close. Only a folder that is its own
+  repository is fingerprinted by its commit now.
 
 ## [0.7.1] - 2026-10-19
 

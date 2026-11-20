@@ -532,7 +532,8 @@ class Workflow(unittest.TestCase):
         printed = shlex.split(re.search(r"\((edit [^)]*)\)", err)[1])
         self.assertEqual(fixture.cli(linked, *printed, session="session-a"), (0, "T-1: open; recorded locally, not committed\n", ""),
                          "the command runs as printed there")
-        self.assertIn("T-1: claimed", self.assert_ok(fixture.cli(linked, "claim", "T-1", session="session-a")))
+        self.assertIn("T-1: claimed", self.assert_ok(self.run_cli("claim", "T-1", session="session-a")),
+                      "a product claim is made where the session last started")
         ledger = (self.root.resolve() / ".sako/work/TASKS.md").as_posix()
         self.assertIn(f"T-99 needs exactly one row in {ledger}", fixture.cli(linked, "claim", "T-99", session="session-a")[2],
                       "from a linked worktree, a path to the records is absolute")
@@ -612,7 +613,8 @@ class Workflow(unittest.TestCase):
         self.assertEqual(code, 3, refusal)
         self.assertEqual(refusal, f"sako: T-10 would make a second writer in this checkout: {fixture.marker('session-a')} holds "
                                   "T-1 (src/) here, and a checkout has one writer. Work in your own worktree (git worktree add "
-                                  "../project-t-10 -b t-10, then start your session there and claim), or wait for it to close\n",
+                                  "../project-t-10 -b t-10, then run uvx sako init in it to wire its hooks, and start a session "
+                                  "there to claim), or wait for it to close\n",
                          "disjoint scopes too: one checkout holds one check result and one set of uncommitted files")
         self.assertEqual(active.read_bytes(), before, "nothing is written")
         self.assertIn("T-11: claimed", self.assert_ok(self.run_cli("claim", "T-11", session="session-b")),
@@ -798,8 +800,8 @@ class Workflow(unittest.TestCase):
         context = self.assert_ok(fixture.cli(self.root, "start", session="reader"))
         for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
             with self.subTest(view=view):
-                self.assertIn("live peers (a checkout has one writer, the peer whose product claim was made in it; to write "
-                              "product files beside one, work in your own worktree):", out)
+                self.assertIn("\nlive peers (a checkout has one writer; to write product files beside one, work in your own "
+                              "worktree):\n", out)
                 self.assertEqual(out.count("a checkout has one writer"), 1, out)
                 line = next(line for line in out.splitlines() if sako.marker_for(holder) in line)
                 self.assertTrue(line.startswith(f"  peer {sako.marker_for(holder)} (session ID ends 0000a1b2) on main"), line)

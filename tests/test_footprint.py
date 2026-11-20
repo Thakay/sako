@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -276,9 +277,43 @@ class Footprint(KitCase):
         fixture.write(linked, {"src/app.py": "print(2)\n"})
         stop = self.hook(self.root, "claude", "Stop", session, cwd=linked, project=self.root)
         self.assertEqual(stop.returncode, 2, stop.stderr)
-        self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: src/app.py",
-                      stop.stderr)
+        self.assertIn(f"Recorded: no start record here, since you last started in {self.root.resolve().as_posix()}, so every "
+                      "uncommitted file here counts and commits were not checked: uncommitted and covered by no task you "
+                      "claimed or closed: src/app.py", stop.stderr, "the start record of the main checkout does not apply there")
         self.assertEqual(fixture.git(self.root, "status", "--porcelain"), "", "the main checkout itself is clean")
+
+    def test_the_second_writer_refusal_leads_to_a_worktree_that_init_wires_so_a_session_there_is_gated(self):
+        self.install("--client", "claude")
+
+        def run(*args, cwd=None):
+            return subprocess.run([sys.executable, str(self.root / ".sako/sako.py"), *args], cwd=cwd or self.root,
+                                  env=fixture.ENV, capture_output=True, text=True)
+
+        for task, path in (("App", "src/"), ("Guide", "README.md")):
+            fixture.succeeds(run("add", task, "--done-when", "Read back", "--scope", path))
+        for session in ("writer", "second"):
+            fixture.succeeds(self.hook(self.root, "claude", "SessionStart", session))
+        fixture.succeeds(run("claim", "T-1", "--session", "writer"))
+        refusal = run("claim", "T-2", "--session", "second")
+        self.assertEqual(refusal.returncode, 3, refusal.stderr)
+        printed = re.search(r"\((git worktree add [^,]*), then run (uvx sako init) in it to wire its hooks, and start a "
+                            r"session there to claim\)", refusal.stderr)
+        self.assertTrue(printed, refusal.stderr)
+        subprocess.run(shlex.split(printed[1]), cwd=self.root, env=fixture.ENV, check=True, capture_output=True)
+        side = self.base / "app-t-2"
+        self.assertFalse((side / sako.hook_file("claude")).exists(), "a new worktree has no hooks of its own")
+        copy = run("init", cwd=side)
+        self.assertEqual(copy.returncode, 3, "the installed copy cannot run init, so the refusal names the package")
+        self.assertIn("the copy in a project cannot seed one. Run: uvx sako init", copy.stderr)
+        wired = fixture.succeeds(fixture.seed(side))  # the package's init, which uvx sako init runs, from this checkout
+        self.assertIn("Hooks: Claude Code (.claude/settings.local.json), chosen from the main checkout's record.", wired)
+        fixture.succeeds(self.hook(side, "claude", "SessionStart", "there"))  # a session the client starts there
+        fixture.succeeds(run("claim", "T-2", "--session", "there", cwd=side))
+        fixture.write(side, {"notes.txt": "a draft\n"})
+        stop = self.hook(side, "claude", "Stop", "there")
+        self.assertEqual(stop.returncode, 2, stop.stderr)
+        self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: notes.txt", stop.stderr,
+                      "the gate runs there")
 
 
 class ReviewRegressions(KitCase):
