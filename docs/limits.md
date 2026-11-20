@@ -24,7 +24,7 @@ interlock, so use one of them per clone.
 The ledger lock serializes SAKO's own writes across the worktrees, not code edits,
 hand edits of the records, commits, the staging area or other clones, so run shared
 Git operations one at a time. On Windows, a read during another session's `close`
-can show the task in both records for a moment, so check again before acting.
+can show the task in both records for a moment, so check again.
 
 A pass from another checkout that counts here, even a removed worktree's while its
 folder in `.sako/state/` remains, proves nothing about that checkout's ignored files
@@ -39,11 +39,12 @@ the scope. A close seals what each of its files holds, whoever wrote it, so read
 so a task another session closed since you started excuses your commit in its scope,
 even one closed in another checkout and never merged here.
 
-`claim` and `edit` refuse a second writer, but a hand edit, a session back from an
-end or a lapsed lease, or an update from 0.7.1 can leave two in one checkout; the
-ledger check names them, and each gate shows the other's files until one moves.
-Each start in another checkout takes a new start record, so hopping away and back
-takes two.
+`claim` and `edit` refuse a second writer, but a hand edit, a writer's start in
+another checkout, a session back from an end or a lapsed lease, or an update from
+0.7.1 can leave two in one; the ledger check names them, and each gate shows the
+other's files until one moves. Each start in another checkout takes a new start
+record, so hopping away and back takes two. A task a peer closes in the minute you
+started excuses nothing.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
 different branches can allocate the same task ID, cannot see each other's claims,
@@ -52,13 +53,13 @@ writer at a time; two machines writing at once collide on numbers and see each
 other's claims as stale. A team that needs more can
 [move to a tracker](move-to-a-tracker.md).
 
-Presence is a two-hour lease from a session's last hook or command that acts as it,
-and it errs both ways. A live session that fires no hook and runs no such command
-for two hours reads as ended, and another session can then take over its claims
-with a reason. A crashed session, or one in a client without hooks that never ran
-`end`, reads as live for two hours after its last such command. Under the
-one-writer rule it locks product claims in its checkout until then, or until the
-owner confirms it stopped and someone runs `end --session <its ID>`.
+Presence is a two-hour lease from a session's last hook or command that acts as it.
+A live session quiet for two hours reads as ended, and another session can then
+take over its claims with a reason. A crashed session, or one without hooks that
+never ran `end`, reads as live for two hours and locks product claims in its
+checkout until then, or until the owner confirms it stopped and someone runs
+`end --session <its ID>`. A copy of `.sako/state/` with new file times revives its
+sessions.
 
 A claim left on purpose for another session reads as stale to every other session
 until it is taken over; close your part and leave the rest as a second row. A
@@ -80,8 +81,9 @@ the start makes the check stale without counting as the session's change, so run
 large-repository benchmark exists; narrow `verify_paths` if they are slow.
 
 Whether a closed task still covers an uncommitted file goes by what the file holds,
-not by when it was written. A task closed by hand, by an earlier release, in another
-checkout or before `.sako/state/` was deleted has no seal here, so it covers its
+not by when it was written. A task closed by hand, by an earlier release, in or
+from another checkout or before `.sako/state/` was deleted has no seal here, so it
+covers its
 uncommitted files only once they are committed. A file stashed while another task
 closes in the checkout loses its seal and counts as unrecorded once popped.
 

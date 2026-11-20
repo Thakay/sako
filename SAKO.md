@@ -242,7 +242,8 @@ its receipt, and a named check is evidence, never a gate rule.
 The gate judges the checkout it runs in, for a hook the session's current
 checkout. It counts no file under `.sako/`, so a scope there only locks paths
 against other claims. Work in another linked worktree, even a nested one, counts
-here once merged; until then, `check --gate --session <id>` run there judges it.
+here once merged; until then, a gate run there judges its uncommitted files, and its
+commits if you last started there.
 
 **Recorded** counts files edited since the session started or committed since then,
 deletions and both sides of a rename; a file already dirty at start counts only when

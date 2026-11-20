@@ -225,12 +225,14 @@ class Words(unittest.TestCase):
                       "after an end, as when the client exits, or a start in another checkout, it takes a new start record"):
             self.assertIn(words, pause)
         limits = self.text("docs/limits.md")
-        for words in ("A live session that fires no hook and runs no such command for two hours reads as ended",
+        for words in ("A live session quiet for two hours reads as ended",
+                      "a writer's start in another checkout, a session back from an end or a lapsed lease",
                       "the ledger check names them, and each gate shows the other's files until one moves.",
                       "Each start in another checkout takes a new start record",
-                      "A crashed session, or one in a client without hooks that never ran `end`, reads as live for two hours "
-                      "after its last such command. Under the one-writer rule it locks product claims in its checkout until "
-                      "then"):
+                      "A task a peer closes in the minute you started excuses nothing.",
+                      "A crashed session, or one without hooks that never ran `end`, reads as live for two hours and locks "
+                      "product claims in its checkout until then",
+                      "A copy of `.sako/state/` with new file times revives its sessions."):
             self.assertIn(words, limits)
 
     def test_a_writer_is_the_session_that_last_started_in_a_checkout_and_a_new_worktree_is_wired_by_init(self):

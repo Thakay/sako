@@ -35,7 +35,7 @@ by setting its last-seen time back. The skill meets the Agent Skills format. No
 independent agent or outside user has validated adoption judgment.
 
 The last local run was on 2026-11-19, on WSL2 (Ubuntu 24.04, Linux 6.18) with Git
-2.43.0. Both suites pass on Python 3.10.20 and 3.12.3, with 288 unit tests and 22
+2.43.0. Both suites pass on Python 3.10.20 and 3.12.3, with 292 unit tests and 22
 scenarios.
 
 ## Native Windows
@@ -73,13 +73,13 @@ with the machine, filesystem, repository, cache and check command.
 
 | Measure | Observed |
 |---|---|
-| No client signal: kit and shared skill, no hooks | 6 files, 155,169 bytes |
-| Codex | 7 files, 156,803 bytes |
-| Claude Code, with its own skill copy | 8 files, 157,879 bytes |
-| Both clients | 9 files, 159,513 bytes |
-| Installed method, one document | 2,990 whitespace-separated words |
+| No client signal: kit and shared skill, no hooks | 6 files, 156,221 bytes |
+| Codex | 7 files, 157,855 bytes |
+| Claude Code, with its own skill copy | 8 files, 158,931 bytes |
+| Both clients | 9 files, 160,565 bytes |
+| Installed method, one document | 2,998 whitespace-separated words |
 | Reading for a normal task, lone-session fixture | 1,342 words: skill 168, template preamble 46, start context 133, the method's required part 995 |
-| Runtime source | 2,457 lines, one standard-library Python file, within the 4,000-line cap |
+| Runtime source | 2,469 lines, one standard-library Python file, within the 4,000-line cap |
 | Initial install with no client signal, one sample | 55.5 ms |
 | Fingerprint fixture | 101 covered files, 409,609 bytes |
 | Trials per command | 7, median reported in the next rows |

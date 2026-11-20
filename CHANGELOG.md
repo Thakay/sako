@@ -22,13 +22,19 @@ To update from 0.7.1, follow these steps:
 1. Commit the files of every closed task first. A task closed before the update has
    no seal, so its uncommitted files count again until they are committed.
 2. Update with no active work, in the main checkout. The hook command is the same
-   as in 0.7.1, so Codex keeps its trust in SAKO's hooks.
+   as in 0.7.1, so Codex keeps its trust in SAKO's hooks. In the shared footprint,
+   each branch has its own copy of the kit, so commit the updated files under
+   `.sako/` and bring that commit into every branch before a session works there.
+   A 0.7.1 copy deletes the presence that 0.8.0 writes.
 3. End any session left open across the update, then start it again with the same
    ID, which keeps its claims and takes a new start record, or start a new one.
 4. Where two sessions held product claims in one checkout, give each but one a
    worktree of its own with `git worktree add ../<project>-t-<n> -b t-<n>`, then
    run `uvx sako init` and start the session there. Until then, `check` names both
-   as writers and the gate blocks their stops.
+   as writers and the gate blocks their stops. In the shared footprint, the new
+   branch takes its own copy of the records, so commit the records before making
+   the worktree, then release the moved claim in the first branch with
+   `edit T-<n> --open --session <its ID>`.
 5. Remove `SAKO_AGENT_PID` wherever it is set. SAKO no longer reads it.
 6. Run `verify` when a check is configured. The new version makes every recorded
    pass stale.
@@ -41,8 +47,9 @@ To update from 0.7.1, follow these steps:
   worktree of its own (`git worktree add ../<project>-t-<n> -b t-<n>`) and
   `uvx sako init` there to wire its hooks, since a new worktree has none and the copy
   in `.sako/` cannot run `init`. A product claim run in a checkout the session did not
-  last start in is refused too, and the refusal says to run it where the session last
-  started or to run `start` here first. A claim scoped inside `.sako/` makes no
+  last start in is refused too. The refusal says to run it where the session last
+  started or, for a session that holds no product claim, to run `start` here first.
+  A claim scoped inside `.sako/` makes no
   writer, so records work still shares a checkout. Sessions that shared one checkout
   with disjoint product scopes now take a worktree each.
 - Two writers in one checkout, however they arose, are a ledger finding in `check`,
@@ -60,7 +67,9 @@ To update from 0.7.1, follow these steps:
   start record there, with its start revision, files dirty at start and start time,
   so the commits already in a new worktree's base are not the session's. Where the
   session did not last start, the gate applies no start record, counts every
-  uncommitted file, checks no commit, and says so in a note.
+  uncommitted file, checks no commit, and `check --gate` says so in a note. Proven
+  there counts only uncommitted checked content as changed, and a close there seals
+  nothing.
 - A change is not counted when a task another session closed since you started covers
   it, by commit or not. This replaces the rule that compared a commit's day with the
   day of the close, so a merged branch whose task is closed no longer counts against
@@ -75,7 +84,8 @@ To update from 0.7.1, follow these steps:
 - A closed task covers an uncommitted file by what the file holds, not by when it was
   written. `close` seals each uncommitted file in the task's scope that counts as the
   session's change, keeping its fingerprint in the checkout's state, and the task
-  covers the file while it still matches. A stash and its pop, or a save of the same
+  covers the file while it still matches. A close reads only the task's own files
+  and those sealed before. A stash and its pop, or a save of the same
   bytes, no longer lists closed work under Recorded, and an edit in the minute of the
   close is new work. A task closed by hand, by an earlier release or in another
   checkout has no seal where the gate runs, so its uncommitted files count until they
@@ -130,16 +140,21 @@ To update from 0.7.1, follow these steps:
   same name, was fingerprinted by the repository's HEAD, so any later commit made it
   read as changed since the start or since its close. Only a folder that is its own
   repository is fingerprinted by its commit now.
+- A file name with ` (` in it was cut short in the scope that the Recorded fix
+  suggests. The gate now carries the whole path.
 
 ### Known issues
 
 - A session's own commit is not counted when a task another session closed since it
   started covers the path, since Recorded cannot tell who made a commit. 0.7.1 had
   the same gap for commits made on the day of the close. The limits page states it.
+- A stale check does not block under Proven while the session holds an unfinished
+  claim over any changed checked file, even when other checked content changed too,
+  as after a merge. 0.7.1 has the same gap.
 
 ### Validation
 
-- Both suites pass on Python 3.10 and 3.12 locally, with 288 tests and 22 scenarios;
+- Both suites pass on Python 3.10 and 3.12 locally, with 292 tests and 22 scenarios;
   these counts overlap.
 - This release was not run by hand on native Windows. The last such run was of
   0.7.1.

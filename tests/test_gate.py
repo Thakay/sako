@@ -393,7 +393,7 @@ class Gate(unittest.TestCase):
         """A claim makes its session a writer where it last started, so one run elsewhere would name the wrong checkout."""
         fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
             fixture.row("T-1", touches="`src/`"), fixture.row("T-2", touches="`docs/`"),
-            fixture.row("T-3", touches="`.sako/work/`"))})
+            fixture.row("T-3", touches="`.sako/work/`"), fixture.row("T-4", touches="`lib/`"))})
         side = self.base / "side"
         fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
         self.start("s1")
@@ -414,6 +414,79 @@ class Gate(unittest.TestCase):
                 fixture.succeeds(fixture.installed_copy(where, "edit", "T-3", "--open", "--session", "s2"))
                 self.assertNotIn("writers", self.run_in(self.root, "check")[1], "so no second writer arises")
         fixture.succeeds(fixture.installed_copy(side, "claim", "T-2", "--session", "s2"))  # where it last started
+        refusal = fixture.installed_copy(self.root, "claim", "T-4", "--session", "s2")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertIn(f"not here. Run the command there, where T-2 keeps it a writer\n", refusal.stderr,
+                      "with a product claim it is not sent to start here, which would make a second writer beside s1")
+
+    def test_a_close_run_where_the_session_did_not_last_start_seals_nothing_there(self):
+        """Another session writes there, so a file of its own in the closed task's scope stays its own to record."""
+        side = self.base / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        self.start("s2", where=side)
+        fixture.started_ago(self.root, "s2")
+        fixture.succeeds(fixture.installed_copy(side, "claim", "T-2", "--session", "s2"))
+        fixture.write(side, {"src/util.py": "x = 1\n"})  # the writer there, outside its claim
+        for args in (("verify",), ("close", "T-1", "--evidence", "Prints 1")):
+            code, out, err = self.run_in(side, *args, session="s1")
+            self.assertEqual(code, 0, out + err)
+        sealed = [json.loads(path.read_text()) for path in (self.root / ".sako/state").rglob("seals.json")]
+        self.assertEqual(sealed, [{}], "the close wrote that checkout's seals, with nothing in them")
+        code, _, err = self.stop("s2", where=side)
+        self.assertEqual(code, 2, err)
+        self.assertIn("covered by no task you claimed or closed: src/util.py\n", err)
+
+    def test_a_file_name_with_a_bracket_in_it_is_named_whole_and_still_blocks(self):
+        """The gate carries the path itself, not the text it prints, which ends in a bracketed label."""
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {"src/app (v2).py": "print(2)\n"})
+        for args in (("verify",), ("close", "T-1", "--evidence", "Prints 2")):
+            code, out, err = self.run_in(self.root, *args, session="s1")
+            self.assertEqual(code, 0, out + err)
+        fixture.write(self.root, {"src/app (v2).py": "print(3)\n", "zeta (draft).txt": "later\n"})
+        for code, _, err in (self.stop("s1"), self.run_in(self.root, "check", "--gate", session="s1")):
+            self.assertEqual(code, 2, err)
+            self.assertIn("covered by no task you claimed or closed: src/app (v2).py (changed after you closed T-1), "
+                          "zeta (draft).txt\n", err)
+            self.assertIn("(git add -- 'src/app (v2).py', then git commit -m 'Invented task'); for new work: ", err)
+            self.assertIn("--scope 'zeta (draft).txt', then claim it", err,
+                          "the fix for new work names a file no closed task covers")
+
+    def test_where_a_session_has_no_start_record_only_uncommitted_checked_content_counts_as_moved(self):
+        """A session's hooks can run in a checkout it did not last start in, where its start revision does not apply."""
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", touches="`.sako/work/`"), fixture.row("T-2", touches="`.sako/work/`"))})
+        linked = self.base / "linked"
+        fixture.git(self.root, "worktree", "add", "-q", str(linked))
+        self.start("s1")
+        for task in ("T-1", "T-2"):
+            fixture.succeeds(fixture.installed_copy(self.root, "claim", task, "--session", "s1"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Planned", "--session", "s1"))
+        self.assertEqual(self.stop("s1", where=linked), (0, "", ""), "no checked content is uncommitted there, so nothing moved")
+        closing = fixture.installed_copy(linked, "close", "T-2", "--evidence", "Planned", "--session", "s1")
+        self.assertEqual(closing.returncode, 0, closing.stdout + closing.stderr)
+        self.assertIn("no automated check (records only)", (self.root / ".sako/work/DONE.md").read_text())
+        fixture.write(linked, {"src/app.py": "print(2)\n"})
+        code, _, err = self.stop("s1", where=linked)
+        self.assertEqual(code, 2, err)
+        self.assertIn("Proven: T-1, T-2 closed after checked content changed since you started, and the check is none", err,
+                      "an uncommitted change to checked content there still asks for a pass")
+
+    @unittest.skipIf(os.name == "nt" or os.geteuid() == 0, "needs a file its owner cannot read")
+    def test_a_close_reads_only_its_own_files_and_those_sealed_before(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", touches="`src/`"), fixture.row("T-2", touches="`.sako/work/`"))})
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s1"))
+        fixture.write(self.root, {"docs/draft.md": "another writer's\n"})
+        (self.root / "docs/draft.md").chmod(0)
+        closing = fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Planned", "--session", "s1")
+        (self.root / "docs/draft.md").chmod(0o644)
+        self.assertEqual(closing.returncode, 0, closing.stdout + closing.stderr)
+        self.assertEqual(self.seals(), {}, "a records task seals no product file")
 
     def test_two_writers_in_one_checkout_are_named_however_they_arose(self):
         finding = (f"this checkout has 2 writers, {sako.marker_for('s1')} with T-1 and {sako.marker_for('s2')} with T-2, but a "
@@ -536,11 +609,14 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.stop("s1"), (0, "", ""), "the gate judges the checkout it runs in, and a clear stop is silent")
         elsewhere = (f"no start record here, since you last started in {here}, so every uncommitted file here counts "
                      "and commits were not checked")
-        self.assertIn(f"changed this session in {there}: 1 ({elsewhere})", self.run_in(linked, "check", session="s1")[1])
+        self.assertIn(f"changed this session in {there}: 1; unrecorded: src/app.py ({elsewhere})",
+                      self.run_in(linked, "check", session="s1")[1])
         code, _, err = self.run_in(linked, "check", "--gate", session="s1")
         self.assertEqual(code, 2, err)
-        self.assertIn("SAKO gate: 1 problem(s) before you stop:\n  Committed: T-1 is closed but its changes are not committed: "
-                      "src/app.py", err, "run there, only Committed blocks, since the change is recorded and that stamp is fresh")
+        self.assertIn(f"SAKO gate: 1 problem(s) before you stop:\n  Recorded: {elsewhere}: uncommitted and covered by no task "
+                      "you claimed or closed: src/app.py\n    fix: if the content is still T-1's work, commit it under that "
+                      "task once commits are allowed (git add -- src/app.py, then git commit -m 'Invented task'); ", err,
+                      "a close seals nothing where its session did not last start, so the file counts until it is committed")
         fixture.commit_all(linked, "Invented task")
         self.assertEqual(self.run_in(linked, "check", "--gate", session="s1"),
                          (0, f"SAKO gate: clear in {there}\nnote: {elsewhere}.\n", ""),
