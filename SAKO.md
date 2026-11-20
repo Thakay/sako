@@ -330,12 +330,13 @@ it changes again. A commit after the start revision dated in the minute before t
 start counts too, since a wall clock can step back. While another live session is
 this checkout's writer, the changes here are not counted for you, with a note; its
 own gate answers for them, in its scope or out of it. Nor is a change counted that a
-task another session closed since you started covers. A closed task no longer covers
-an uncommitted file written in a later minute than its close. The gate labels such a
-file "changed after you closed T-1", and its fix first offers a commit under that
-task's title, for content that is still its work, only rewritten by a stash, a Git
-hook, a formatter or an editor save. Without a start record, every uncommitted
-change counts and commits go unchecked; the gate says so.
+task another session closed since you started covers. `close` seals each uncommitted
+file in the task's scope that counts as your change, keeping its fingerprint in this
+checkout's state. A closed task covers a committed file by its scope and a sealed
+one while it matches, so a stash and its pop changes nothing. A task closed by hand
+or in another checkout sealed nothing here, so its uncommitted files count until
+they are committed. Without a start record, every uncommitted change counts and
+commits go unchecked; the gate says so.
 
 **Proven:** while a claim you still hold covers changed checked files, a stale check
 is that claim's work in progress, and a close whose receipt shows the gate's check

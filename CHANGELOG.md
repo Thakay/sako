@@ -25,12 +25,22 @@ file formats can change in any 0.x release.
 - A peer's line in `start` and `status` names its claims and its checkout.
 - The two-session demo and the README illustration show the second session in its own
   worktree, a merge, and the gate asking for a fresh check after it.
+- A closed task covers an uncommitted file by what the file holds, not by when it was
+  written. `close` seals each uncommitted file in the task's scope that counts as the
+  session's change, keeping its fingerprint in the checkout's state, and the task
+  covers the file while it still matches. A stash and its pop, or a save of the same
+  bytes, no longer lists closed work under Recorded, and an edit in the minute of the
+  close is new work. A task closed by hand, by an earlier release or in another
+  checkout has no seal where the gate runs, so its uncommitted files count until they
+  are committed. Seals start with the first close after the update.
 
 ### Removed
 
 - A peer's commits and uncommitted paths in `start` and `status`, with the 2-second
   budget for reading them. SAKO reads no peer's Git state.
 - The notes that excused single paths inside a live peer's claimed or closed scope.
+- The close-minute rule with its time zone handling, and the Recorded fix that offered
+  to commit a file rewritten after its close under the closed task's title.
 
 ## [0.7.1] - 2026-10-19
 

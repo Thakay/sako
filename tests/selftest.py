@@ -422,8 +422,8 @@ def scenario_stop_gate(ws: Path) -> None:
     expect(code == 0, "the retry guard ends the chain")
     cli(repo, "verify")
     code, _, err = hook(repo, "Stop", "s1", pid=pid)
-    expect(code == 2 and "Committed: T-1 is closed but its changes are not committed: src/app.py" in err,
-           f"fresh evidence alone does not land work: {err!r}")
+    expect(code == 2 and "covered by no task you claimed or closed: src/app.py\n" in err and "Committed:" not in err,
+           f"fresh evidence alone does not land work, and a close by hand seals nothing, so its file is unrecorded: {err!r}")
     commit_all(repo, "land checked task")
     code, _, err = hook(repo, "Stop", "s1", pid=pid)
     expect(code == 0, f"fresh evidence and committed work clear the gate: {err!r}")
@@ -439,8 +439,12 @@ def scenario_stop_gate(ws: Path) -> None:
     cli(repo, "start", session="s2", pid=two)
     claim(repo, "T-2", "s2", touches="`docs/`")
     write(repo, {"docs/notes.md": "notes\n"})
-    close(repo, "T-2", "s2", touches="`docs/`")
     (repo / ".sako/state/stamp.json").unlink()
+    code, out, err = cli(repo, "close", "T-2", "--evidence", "Wrote the notes", session="s2")
+    expect(code == 0, f"a documentation-only close needs no product evidence: {out + err!r}")
+    code, _, err = hook(repo, "Stop", "s2", pid=two)
+    expect(code == 2 and "Committed: T-2 is closed but its changes are not committed: docs/notes.md" in err,
+           f"the close sealed its uncommitted file, so it is the task's to commit: {err!r}")
     commit_all(repo, "land documentation task")
     code, _, err = hook(repo, "Stop", "s2", pid=two)
     expect(code == 0, f"docs-only close with untouched checked paths: {err!r}")

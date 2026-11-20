@@ -24,6 +24,7 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Presence | SAKO's record of which sessions are live, which protects live claims |
 | Receipt | What `close` writes for a finished task: the completion condition, the evidence, the claim's marker and time, the close time and what the check said |
 | Scope | The path prefixes a task may change |
+| Seal | A fingerprint of each uncommitted file in a task's scope that counts as the session's change, which `close` keeps in the checkout's state. The closed task covers such a file while it still matches |
 | Session | A conversation opened in an agent client; `start` registers it with SAKO and `end` removes its presence record |
 | Source | The exact reference to the planner item a task came from, such as `PLAN.md#N1` |
 | Stamp | The record of a passing check on a fingerprint of the checked content |

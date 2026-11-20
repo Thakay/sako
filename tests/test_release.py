@@ -281,8 +281,9 @@ class Words(unittest.TestCase):
         for words in ("The gate judges only the checkout it runs in", "In a shared checkout the gate sees what changed, not who "
                       "changed it.", "Closing a task scoped `.` makes the Committed fix stage every uncommitted change made "
                       "here between your start and its close, a peer's included", "Recorded cannot tell who made a commit",
-                      "A closed task still covers edits made in the minute it closed, so read `git diff` before following a "
-                      "Committed fix."):
+                      "A close seals what each of its files holds, whoever wrote it, so read `git diff` before following a "
+                      "Committed fix.", "Whether a closed task still covers an uncommitted file goes by what the file "
+                      "holds, not by when it was written."):
             self.assertIn(words, limits)
         self.assertIn("and against faults in the records. It refuses a stop once and names the fix; findings about other "
                       "sessions are only notes", self.text("docs/glossary.md"))

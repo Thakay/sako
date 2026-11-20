@@ -13,7 +13,7 @@ Everything SAKO writes in the default local footprint:
 | `.sako/sako.py`, `.sako/SAKO.md`, `.sako/install.json` | The runtime, the method, and the installed version, file hashes, client choice and footprint | No: `.sako/` is listed in `.git/info/exclude` | Deleted |
 | `.sako/config.json` | Your check command and the paths it covers | No | Kept |
 | `.sako/work/` | The records: `TASKS.md`, `DONE.md` and handoff folders | No | Kept |
-| `.sako/state/` | Locks, presence, check stamps and the check's logs | No | Deleted |
+| `.sako/state/` | Locks, presence, check stamps, the check's logs and the seals `close` writes | No | Deleted |
 | `.git/info/exclude` | The lines that keep `.sako/` and the client files out of Git | Git's own file, never committed | The lines stay until you delete them |
 | `.claude/settings.local.json`, `.claude/skills/sako/` | Claude Code's hooks and its copy of the skill | No | SAKO's hook entries and the skill copy removed; a settings file that held nothing else is deleted |
 | `.agents/skills/sako/` | The shared skill, for Codex and other clients | No | Deleted |

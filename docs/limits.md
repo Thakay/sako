@@ -89,8 +89,8 @@ With no live writer, Recorded cannot tell who made a commit, so a task another
 session closed since you started can excuse your commit in its scope, while a commit
 under a task closed before you started, or still claimed, counts against you.
 Recorded reads the commits after your start revision from a minute before your
-start, since a wall clock can step back. A closed task still covers edits made in
-the minute it closed, so read `git diff` before following a Committed fix.
+start, since a wall clock can step back. A close seals what each of its files holds,
+whoever wrote it, so read `git diff` before following a Committed fix.
 
 The one-writer rule is judged at `claim`, and at an `edit` that grows a records
 claim into product files, among sessions that count as live, which is up to 24 hours
@@ -100,7 +100,7 @@ there. Two sessions that already hold product claims in one checkout, as after a
 hand edit of the records, are each asked about every change there. Once a writer
 closes its last product claim, another session can claim in that checkout, over the
 first one's closed files too. Committed still names the first one's uncommitted
-closed files, except one written again in a later minute than its close.
+closed files while they hold what its close sealed.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
 different branches keep separate ledgers. They can allocate the same task ID and
@@ -147,13 +147,13 @@ Git ignores the executable bit. A change to only that bit, on a file with no
 uncommitted changes at the start, then makes the check stale without counting as the
 session's change. Run `verify` after such a change.
 
-Whether a closed task still covers an uncommitted file goes by when the file was
-last written, not by what it holds. A stash and its pop, a Git hook, a formatter or
-an editor save that rewrites the file in a later minute than the close makes
-Recorded list it as "changed after you closed T-n"; the fix then starts with
-committing it under that task's title when the content is still its work. Deletions
-and renames after the close stay the closed task's, since a missing file has no
-write time and a rename keeps the old one.
+Whether a closed task still covers an uncommitted file goes by what the file holds,
+not by when it was written. Seals live in the checkout's disposable state, so a task
+closed by hand, by an earlier release or in another checkout, or whose seal went with
+`.sako/state/`, covers its uncommitted files only once they are committed. A close
+keeps an earlier seal only while its file stays uncommitted with the sealed bytes,
+so a file stashed while another task closes there counts as unrecorded once popped.
+A committed file counts as a closed task's by its scope alone.
 
 The before/after fingerprint detects persistent changes during a check, not an
 edit that changes and returns to identical bytes during the run. Verification in a
