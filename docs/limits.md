@@ -1,222 +1,113 @@
 # Limits
 
-The boundaries of the runtime and its evidence, and what SAKO does not build.
-Behavior is defined in [the method](../SAKO.md); observed results are in
-[validation](validation.md).
+What SAKO cannot do or can get wrong, and what to do about it. Behavior is defined
+in [the method](../SAKO.md); evidence is in [validation](validation.md).
 
 ## Environment
 
-The runtime runs in local Git worktrees on Linux, WSL, macOS and Windows, with
-Python 3.10+ and Git 2.31+; other platforms refuse. The evidence differs by
-platform:
+SAKO runs in local Git worktrees on Linux, WSL, macOS and Windows, with Python 3.10+
+and Git 2.31+. Other platforms, bare repositories, a Git folder kept apart from its
+checkout, and submodules are refused. In an unborn repository, make a first commit
+before daily work, so the gate has a start revision.
 
-- **Linux and WSL:** both test suites on Python 3.10 and 3.12, on a WSL2 host
-  (Ubuntu 24.04), and live Claude Code and Codex sessions
-  ([compatibility](compatibility.md)).
-- **Windows:** both test suites natively from Git Bash, with tests whose premise
-  Windows lacks skipped by name ([validation](validation.md#native-windows)). In Git
-  Bash, `python --version` must show 3.10 or newer. The python.org installer leaves
-  Python off the path unless you tick that box, and the Microsoft Store's
-  placeholder only prints a message. A failed `init --repo URL` there can leave
-  read-only Git files in `.sako/`; delete the folder before trying again. `verify`
-  finds a bare command on the path, so from PowerShell `bash` can be WSL's; give
-  Git's `bash.exe` by its full path there. How Claude Code and Codex run hooks on
-  Windows is in [compatibility](compatibility.md#windows).
-- **macOS:** both test suites in CI on GitHub's macOS runner with Python 3.10 and
-  3.14, on the same POSIX code as Linux; tests whose premise macOS lacks skip by
-  name, each saying why. No live client session has run on a Mac. A stock Mac's
-  `python3` is 3.9, below the floor; install Python 3.10 or newer.
-
-Commands run from any folder of the repository or its linked worktrees. Git finds
-the main checkout, whose `.sako/` holds the kit. Bare repositories, a Git folder kept
-apart from its checkout, and submodules are refused. `init` can seed an unborn Git
-repository; establish an initial commit before daily work so revision comparisons
-have a meaningful baseline.
-
-SAKO writes client files only inside the repository, judged by their real paths; a
-client file whose folder leads outside it is skipped with a note. Record paths stay
-inside `.sako/`, outside `state/`, including through symlinks. In the local
-footprint the records are not in Git; `.sako/` is listed in `.git/info/exclude`, so
-`git clean -dx` deletes them.
+A stock Mac's `python3` is 3.9, so install Python 3.10 or newer. On Windows, check
+that `python --version` in Git Bash shows 3.10 or newer; the python.org installer
+leaves Python off the path unless you tick that box, and the Microsoft Store's
+placeholder only prints a message. From PowerShell, `verify` can find WSL's `bash`,
+so give Git's `bash.exe` by its full path. A failed `init --repo URL` on Windows can
+leave read-only Git files in `.sako/`; delete the folder before trying again.
 
 ## Local coordination
 
-`add`, `claim`, `edit` and `close` share an advisory file lock in `.sako/state/`,
-which every worktree of the repository uses. This prevents duplicate allocations and
-competing successful claims among cooperating SAKO commands. Complete file
-replacements avoid partial rows. A busy lock refuses after two seconds so the
-caller can retry. On Windows, whose locks are exclusive, only writes take the lock;
-reads see whole files, and a read or replacement refused while another process holds
-the file is retried. A read during another session's `close` there can show the task
-in both records for a moment; check again before merging anything. SAKO keeps no
-state under `.git/`, which a client's sandbox can make read-only for agent commands.
+The ledger lock serializes SAKO's own writes across the worktrees, not code edits,
+hand edits of the records, commits, the staging area or other clones. Stage explicit
+paths and run shared Git operations one at a time. On Windows, a read during another
+session's `close` can show the task in both records for a moment, so check again
+before acting.
 
-It does not isolate code edits, arbitrary record edits, commits, the staging area,
-or other clones. A Git push is not a task lock. Keep one writer for shared files,
-avoid overlapping scopes, and serialize shared Git operations. Use separate
-worktrees when you need that isolation.
+A pass from another checkout that counts here, even a removed worktree's while its
+folder in `.sako/state/` remains, proves nothing about that checkout's ignored files
+and dependencies. The gate judges only the checkout it runs in.
 
-`edit` changes a task's Scope, After, Done when and Status, and only its holder
-edits a claimed task. Task and Pri stay hand edits, as does untangling two ended
-sessions' overlapping claims, since neither can be taken over while they overlap.
-`edit --park` replaces the whole Status cell, a takeover note included.
+In a shared checkout the gate sees what changed, not who changed it. The checkout's
+writer is asked about every product change there, whoever made it. Closing a task
+scoped `.` makes the Committed fix stage every uncommitted change made here between
+your start and its close, a peer's included, so check `git status` first or narrow
+the scope. A close seals what each of its files holds, whoever wrote it, so read
+`git diff` before following a Committed fix. With no live writer, Recorded cannot
+tell who made a commit, so a task another session closed since you started excuses
+your commit in its scope.
 
-Worktrees share one ledger, one numbering, one ledger lock and one presence roster.
-Each keeps its own stamps and verify lock, so one checkout runs one check at a time,
-named or not. A pass from another checkout counts here on identical checked content
-and the same command, and the receipt names that checkout and its commit; that
-checkout's ignored files and dependencies are not proven here. A failing run removes
-only its own checkout's stamp, so another's pass still counts, even a removed
-worktree's while its folder in `.sako/state/` remains. The gate judges only the
-checkout it runs in; work in another worktree counts once merged, or when
-`check --gate --session <id>` runs there. How Codex's sandbox treats linked
-worktrees is in [compatibility](compatibility.md#client-behavior-worth-knowing).
-
-In a shared checkout the gate sees what changed, not who changed it. A checkout has
-one writer, the live session that made a product claim in it, and the gate counts
-the product changes there for that session, in its scope or out of it. So a session
-that holds no product claim is not asked about a writer's files, and a writer is
-asked about every change in its checkout, whoever made it. Closing a task scoped `.`
-makes the Committed fix stage every uncommitted change made here between your start
-and its close, a peer's included; check `git status` first, or narrow the scope.
-With no live writer, Recorded cannot tell who made a commit, so a task another
-session closed since you started can excuse your commit in its scope, while a commit
-under a task closed before you started, or still claimed, counts against you.
-Recorded reads the commits after your start revision from a minute before your
-start, since a wall clock can step back. A close seals what each of its files holds,
-whoever wrote it, so read `git diff` before following a Committed fix.
-
-The one-writer rule is judged at `claim`, and at an `edit` that grows a records
-claim into product files, among sessions that count as live, those seen in the last
-two hours. It reads the checkout a session last started in, so a session that moves
-to another checkout runs `start` there. Two sessions that already hold product
-claims in one checkout, as after a hand edit of the records, are each asked about
-every change there. Once a writer closes its last product claim, another session
-can claim in that checkout, over the first one's closed files too. Committed still
-names the first one's uncommitted closed files while they hold what its close
-sealed.
+The one-writer rule is judged only by `claim` and `edit`, so two sessions that hold
+product claims in one checkout after a hand edit of the records are each asked about
+every change there. The rule reads the checkout a session last started in, so after
+moving to another checkout, run `start` there.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
-different branches keep separate ledgers. They can allocate the same task ID and
-cannot see each other's claims, and merging branches can conflict in the records
-like any tracked file. In the repo and shared footprints, clones and colleagues
-share records through Git, one writer at a time. Numbering and claims are judged
-locally, so two machines writing at once collide on numbers and see each other's
-claims as stale. A team that needs more moves to a tracker; see
-[move the task authority to a tracker](move-to-a-tracker.md).
+different branches can allocate the same task ID, cannot see each other's claims,
+and can conflict in the records at a merge. Clones share records through Git one
+writer at a time; two machines writing at once collide on numbers and see each
+other's claims as stale. A team that needs more can
+[move to a tracker](move-to-a-tracker.md).
 
-Presence only estimates liveness. SAKO reads no process, so on every platform a
-session counts as live for two hours after its last SAKO command or hook, as the
-method explains ([how it works](../SAKO.md#pause-handoff-and-takeover)), and that
+Presence is a two-hour lease from a session's last SAKO command or hook, and it
 errs both ways. A live session that runs no SAKO command and fires no hook for two
 hours reads as ended. Another session can then take over its claims with a reason
 and claim product work in its checkout, which the one-writer rule does not stop, and
 each session's gate then shows the other's files. A crashed session, or one in a
-client without hooks that never ran `end`, reads as live for two hours after its last
-command. Under the one-writer rule it locks product claims in its checkout until
-then, or until the owner confirms it stopped and someone runs
-`end --session <its ID>`. A peer's line names its claims and its checkout, and SAKO
-reads no peer's Git state. A claim left on purpose for another session reads as
-stale to every other session until it is taken over; close your part and leave the
-rest as a second row. Do not give concurrent workers the same session ID. A helper
-on its parent's ID is the parent, so the ledger shows no separate holder for it.
+client without hooks that never ran `end`, reads as live for two hours after its
+last command. Under the one-writer rule it locks product claims in its checkout
+until then, or until the owner confirms it stopped and someone runs
+`end --session <its ID>`.
+
+A claim left on purpose for another session reads as stale to every other session
+until it is taken over; close your part and leave the rest as a second row. A
+helper on its parent's ID is the parent, so the ledger shows no separate holder for
+it.
 
 ## Records and evidence
 
-This is a deliberately narrow Markdown table parser. It recognizes `T-<number>`
-rows in tables whose header names the required columns, and fenced examples. It
-detects task-like malformed IDs and shapes; it cannot recognize arbitrary prose
-as a lost task. Task cells can contain references; they are not a full issue
-schema. SAKO does not check the commits, paths or links a receipt cites, and keeps
-no lasting map from a marker to its session.
+The ledger parser reads only `T-<number>` rows in tables with the required columns,
+so it cannot find a task lost in prose. SAKO does not check the commits, paths or
+links a receipt cites.
 
-Of a file's mode, the [fingerprint](../SAKO.md#the-gate-and-checks-in-detail)
-counts only the owner's executable bit, the one Git tracks. It leaves out ignored
-artifacts, submodule internals, symlink target content outside the covered files,
-services, secrets, environment, and dependencies not represented there. Include
-relevant tests, manifests, and lockfiles; independently check external behavior when
-needed. A check that writes files where the fingerprint looks, such as Python's
-`__pycache__` or a build folder, changes the content it checks. `verify` names those
-files, and the gate says to delete or ignore generated ones. List them in
-`.gitignore`, or keep the check from writing them (`python3 -B -m unittest`).
-
-The gate and `close` read a session's changes from Git, and from the start record for
-files already uncommitted when the session started. With `core.fileMode` set to false,
-Git ignores the executable bit. A change to only that bit, on a file with no
-uncommitted changes at the start, then makes the check stale without counting as the
-session's change. Run `verify` after such a change.
+The fingerprint leaves out ignored files, submodule internals, symlink targets
+outside the covered files, services, secrets and the environment, so cover
+manifests and lockfiles, and check external behavior yourself. With
+`core.fileMode` set to false, a change to only the executable bit of a file clean at
+the start makes the check stale without counting as the session's change, so run
+`verify` after one. Large trees slow hashing, `start` and the gate, and no
+large-repository benchmark exists; narrow `verify_paths` if they are slow.
 
 Whether a closed task still covers an uncommitted file goes by what the file holds,
-not by when it was written. Seals live in the checkout's disposable state, so a task
-closed by hand, by an earlier release or in another checkout, or whose seal went with
-`.sako/state/`, covers its uncommitted files only once they are committed. A close
-keeps an earlier seal only while its file stays uncommitted with the sealed bytes,
-so a file stashed while another task closes there counts as unrecorded once popped.
-A committed file counts as a closed task's by its scope alone.
+not by when it was written. A task closed by hand, by an earlier release, in another
+checkout or before `.sako/state/` was deleted has no seal here, so it covers its
+uncommitted files only once they are committed. A file stashed while another task
+closes in the checkout loses its seal and counts as unrecorded once popped.
 
-The before/after fingerprint detects persistent changes during a check, not an
-edit that changes and returns to identical bytes during the run. Verification in a
-checkout is serialized with other SAKO verification there, not with application
-editors. Large trees increase hashing and start/gate cost. Narrow coverage
-responsibly; no large-repository benchmark has been established.
-
-`check` can be consistent while evidence is absent or stale. It checks the
-ledger's structure and reports automated evidence separately. Its exit status does
-not require a passing baseline or judge the project's direction or a task's
-acceptance condition; planning and those judgments belong to the agent and owner.
-The finish gate checks only recorded ownership, scoped changes, and its evidence
-conditions, judging ownership at the stop, not at each write, so a late claim covers
-earlier edits. A named check, run by `verify NAME`, is evidence, not a gate rule,
-since `close` and the Proven rule read only the pass of `verify_command`; a receipt
-lists a named check's pass only while it is fresh. The gate cannot prove the
-requested behavior, honest task wording, complete scope declarations, test quality,
-deployment health, or that another process will not edit after the check.
-
-The Committed fix for receipts stages only the two ledger files, whole, so it can
-carry another session's pending rows and leaves other files you keep in `.sako/` to
-you.
+The gate judges ownership at the stop, not at each write, so a late claim covers
+earlier edits. It cannot prove the requested behavior, honest task wording,
+complete scopes, test quality or deployment health, nor that nothing edits after the
+check. The Committed fix for receipts stages the two ledger files whole, so it can
+carry another session's pending rows, and the first commit of the shared footprint
+takes all of `.sako/` but `state/`, handoff folders included.
 
 ## Hooks
 
-Hooks are feedback, not a security boundary. The gate refuses a stop once and names
-the fix, and a session can still stop after saying why; a missing session identity or
-a bug in the handler also lets it go. Hook failures and timeouts are the client's to
-handle, and project policy can turn hooks off.
+Hooks are feedback, not a security boundary. The gate refuses a stop once, and a
+repeated stop, a missing session identity or a bug in the handler lets the session
+go. Hook failures and timeouts are the client's to handle, and project policy can
+turn hooks off. A recent hook time in `status` does not prove every stop was gated.
 
-A hook that finds no kit from its folder, as in a nested repository such as the repo
-footprint's `.sako/`, falls back to `$CLAUDE_PROJECT_DIR`, where the Claude Code
-session started, and judges that checkout. A Codex hook there exits 1 instead,
-naming the folder it searched, and that stop goes ungated, as does any hook in a
-linked worktree of the shared footprint while the main checkout's branch has no
-`.sako/`. A hook runs the `.sako/sako.py` of the repository its folder is in, so a
-nested clone that holds one runs its own.
-
-Written hook settings do not prove that hooks run, so `status` says when each
-client's hook last ran, or "not seen yet"; a recent time does not prove every stop
-was gated. Each client's hook reference
-([Codex](https://learn.chatgpt.com/docs/hooks),
-[Claude Code](https://code.claude.com/docs/en/hooks)) has its current configuration
-rules; [compatibility](compatibility.md) says what each client needs.
-
-## Why a Python file in your project
-
-Each project gets its own pinned, readable runtime, `.sako/sako.py`, with no package
-installed in the project and no service to run. Daily commands and hooks use that
-copy, offline. The cost is an explicit update step and one folder in the project.
-Python's standard library handles the structured records, atomic writes, locks and
-fingerprints in one file; your application can use any language, and its check can
-be any command. The [principles](../README.md#simple-not-small) give the reasoning.
-
-That copy cannot install SAKO into another project; installing and updating need
-the package or a checkout. SAKO has no update service; review what you install, and
-update on purpose ([update and removal](update-and-remove.md)).
+A hook that finds no kit from its folder, as in the repo footprint's `.sako/`, falls
+back to Claude Code's `$CLAUDE_PROJECT_DIR`. A Codex hook there exits 1 and leaves
+that stop ungated, as does any hook in a linked worktree of the shared footprint
+while the main checkout's branch has no `.sako/`.
 
 ## What SAKO does not do
 
-Beyond [how SAKO works](../README.md#how-it-works), SAKO does not start,
-direct or message subagents, merge their edits, fetch issues, sync trackers, create
-applications, or make branches, worktrees, commits, pushes or deployments. The gate
-names the commit a finished task needs, and you or your agent make it.
+SAKO does not start, direct or message agents, merge their edits, fetch issues,
+create applications or commit; you or your agent make the commit the gate names.
 
 ### Not building yet
 
@@ -236,11 +127,10 @@ names the commit a finished task needs, and you or your agent make it.
 | User-level hooks for worktrees a harness creates | Harness-made worktrees need the gate and a per-worktree `init` is not possible |
 | Sync through a hidden ref on the code's remote | Sharing through a second remote proves too heavy |
 | Hooks in tracked client settings, for the shared footprint | A shared clone needs the gate before its own `init`, and both clients' review of committed hooks is verified |
-| Bare-repository layouts | Someone with a bare or separate-Git-folder layout asks for it; until then `init` refuses plainly |
+| Bare-repository layouts | Someone with a bare or separate-Git-folder layout asks for it |
 | A `sako` command on your PATH that runs the project's copy | People often type `uvx sako <verb>` or install the package as a tool |
 | Liveness read from the agent's process, or a lease length you set | The two-hour lease misjudges live or ended sessions in real use |
 | Hooks for Codex on Windows, which runs them in PowerShell | Codex for Windows can be tried, or a Windows Codex user asks |
 | Python 3.9, which a stock Mac ships | A macOS user on Apple's `python3` asks for it |
 
-A proposal for more machinery should show the observed need and its ownership and
-recovery rules; see [contributing](../CONTRIBUTING.md#propose-a-change).
+A [proposal](../CONTRIBUTING.md#propose-a-change) for one shows the observed need.

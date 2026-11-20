@@ -47,12 +47,12 @@ The installer checks for conflicts and invalid hook settings before writing any
 file. It replaces unmodified kit files, keeps the records and the configuration,
 and merges only the chosen integrations. Linked worktrees with SAKO's hooks get the
 new ones, keeping their other entries; one without them gets none until you run
-`uvx sako@latest init` there. The client choice from the first install is
-kept; `--client claude`, `--client codex` or `--client none` replaces it. Dropping a
-client removes only SAKO's hook entries and deletes its unmodified skill copy; an
-edited copy refuses until you keep what you need and delete it. A different
-installed version refuses a plain `init`; review the change and pass `--update`.
-Repeating the same install changes nothing.
+`uvx sako@latest init` there. The client choice from the first install is kept, or
+found again when that install found no client; `--client claude`, `--client codex`
+or `--client none` replaces it. Dropping a client removes only SAKO's hook entries
+and deletes its unmodified skill copy; an edited copy refuses until you keep what
+you need and delete it. A different installed version refuses a plain `init`;
+review the change and pass `--update`. Repeating the same install changes nothing.
 
 On a refusal over a local change, keep the change in project conventions or a
 patch, restore that file from the installed release, then retry. After an

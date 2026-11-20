@@ -134,14 +134,15 @@ python3 .sako/sako.py add "Export skips hidden notes" --done-when "Exporting a f
 For an act on a shared thing that is not a file, such as landing work on `main` or
 restarting a demo server.
 
-- Give the act its own row, which does nothing else, scoped by a path no file uses,
-  such as `@land/main` or `@server/8080`, and claim it when the act starts. While
-  it is claimed, no other session can claim a row scoped to that path or to `.`,
-  which overlaps every path. The path covers no file, so it only locks the act
-  against other claims.
+- Give the act its own row, which does nothing else, scoped by a path inside
+  `.sako/` that no file uses, such as `.sako/act/land-main` or
+  `.sako/act/server-8080`, and claim it when the act starts. While it is claimed,
+  no other session can claim a row scoped to that path or to `.`, which overlaps
+  every path. A scope inside `.sako/` covers no checked file and makes no writer, so
+  the row only locks the act against other claims, from any checkout.
 - A session that only uses the server claims nothing. SAKO does not schedule, so
   agreeing on a safe moment with the sessions that use it stays a message.
 
 ```sh
-python3 .sako/sako.py add "Restart the demo server on the new build" --done-when "The server on port 8080 answers with the new version" --scope @server/8080
+python3 .sako/sako.py add "Restart the demo server on the new build" --done-when "The server on port 8080 answers with the new version" --scope .sako/act/server-8080
 ```

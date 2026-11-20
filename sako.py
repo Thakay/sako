@@ -3,8 +3,7 @@
 
 Run from anywhere in the repository or one of its worktrees; --help lists the commands.
 
-Standard library only, in one file. Python 3.10 or newer. Runs on Linux, WSL and Windows;
-macOS is allowed, untested.
+Standard library only, in one file. Python 3.10 or newer. Runs on Linux, WSL, macOS and Windows.
 Git finds the repository from the current directory. Everything SAKO keeps lives
 in the main checkout's .sako/ folder, shared by its worktrees and listed in
 .git/info/exclude, so nothing tracked changes.

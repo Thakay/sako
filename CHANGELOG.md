@@ -44,6 +44,14 @@ file formats can change in any 0.x release.
   page says what follows. A lapsed session's presence stays on disk for its return,
   and `start` deletes presence unseen for a week. An entry an earlier release wrote
   is judged by its last-seen time alone.
+- The method names three ways of working. A solo session and a coordinator are gated
+  by the Stop hook, peers each run SAKO in a worktree of their own, and a
+  coordinator's workers are subagents that run no SAKO command, which the skill now
+  tells a worker handed a row as its brief. `SAKO.md` is at most
+  3,000 words and the limits page at most 1,500, and a test holds both.
+- The intake recipe for an act only one session may do at a time scopes its row
+  inside `.sako/`, since a row scoped elsewhere makes its holder a writer and is
+  refused in a checkout that has one.
 
 ### Removed
 

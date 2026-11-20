@@ -35,6 +35,7 @@ maintainer.
 |---|---|
 | Install | One command, no required flags |
 | Reading for a normal task | About 1,500 words: the skill, the task template's preamble, a start context and the method's required part |
+| Method and limits | `SAKO.md` at most 3,000 words and `docs/limits.md` at most 1,500, counted with `wc -w` |
 | Required ledger columns | 8 at most |
 | Runtime | One standard-library file of at most 4,000 lines, counted with `wc -l sako.py`, none over 100 columns |
 

@@ -15,12 +15,13 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Handoff | A paused task's notes, in `.sako/work/T-<n>-<slug>/handoff.md` |
 | Hook | A client's automatic call into SAKO when a session starts, stops or ends |
 | Kit | The files SAKO owns and updates: the runtime `.sako/sako.py`, the method `.sako/SAKO.md`, `.sako/install.json` and the skill copies |
-| Lease | The two hours a session counts as live after its last SAKO command or hook; each command that carries its session ID, and each hook, renews it |
+| Lease | The two hours a session counts as live after its last SAKO command or hook; its commands and hooks renew it, and `end` or the end hook ends it |
 | Ledger | The task records in `.sako/work/`: `TASKS.md` for active work, `DONE.md` for finished work |
 | Marker | A session's name in claims and receipts, such as `sk-0115-7a281dacac30`, made of the month and day of its start and a key derived from its session ID; the start context prints yours |
 | Method | `SAKO.md`, the instructions agents follow in a project |
 | Owner | The person the agent works for, who sets direction, allows commits and accepts results |
 | Parked | A task held on purpose, with its reason in Status; `next` skips it |
+| Peer | Another live session that runs SAKO in this repository, shown with its claims and checkout in `start` and `status` |
 | Planner | Whatever decides what to build: a spec, a plan, an issue tracker, or the method's default planner |
 | Presence | SAKO's record of which sessions are live, which protects live claims |
 | Receipt | What `close` writes for a finished task: the completion condition, the evidence, the claim's marker and time, the close time and what the check said |
@@ -33,3 +34,4 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Task | One ledger row: an outcome, its completion condition, a scope, prerequisites and a source |
 | Task authority | The one place that decides which tasks exist and their status: the ledger, or a tracker after a move |
 | Task intake | Turning a planner's items into tasks, each keeping its item as the source |
+| Writer | The live session that last started in a checkout and holds a product claim, one scoped outside `.sako/`. A checkout has one writer |

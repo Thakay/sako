@@ -19,7 +19,7 @@ as the method says.
 | Hooks | `.claude/settings.local.json`, untracked | `.codex/hooks.json`, untracked; Codex runs them only after you trust them in `/hooks`, and again after each change | None; the agent runs the commands |
 | How the agent finds SAKO | The start context, and the `sako` skill in `.claude/skills/` | The start context, and the `sako` skill in `.agents/skills/` | Point its instructions at `.sako/SAKO.md`; a client that reads `.agents/skills/` finds the skill |
 | A command without `--session` | Uses `CLAUDE_CODE_SESSION_ID`, the ID its hooks use, in a subagent too | Uses `CODEX_SESSION_ID`, the ID its hooks use, in a subagent too; before Codex 0.148, `CODEX_THREAD_ID` | Pass `--session`, or set `SAKO_SESSION` |
-| Where agent commands run | On the host; Claude Code's own sandbox is optional and unchecked | In Codex's sandbox (checked in its workspace-write mode): their own process namespace, writes only in the checkout and the roots you add | Where the client runs them |
+| Where agent commands run | On the host; Claude Code's own sandbox is optional and unchecked | In Codex's sandbox (checked in its workspace-write mode), with writes only in the checkout and the roots you add | Where the client runs them |
 
 `init` prints which clients it wired and why, and `status` says when each client's
 hook last ran, or "not seen yet". A tracked client settings file is left unchanged,
@@ -117,11 +117,12 @@ the other, a command without `--session` uses neither, so pass `--session`.
 
 In Claude Code, as in Codex, a subagent's shell carries its parent's session ID, so a
 command there without `--session` acts as the parent, and its `end` ends the parent's
-presence. A [helper](../SAKO.md#working-beside-other-sessions) that holds its own
-claim passes its own `--session` on every command, `end` included. Claude Code sends
-a subagent's stop to SubagentStop, which SAKO does not wire; in use, subagents ran no
-session hooks, so a worktree only they use needs no `init`. Seen in use with Claude
-Code 2.1.280 to 2.1.302 on WSL2, last on 2026-10-18.
+presence. That is why a coordinator's workers run no SAKO command
+([working beside other sessions](../SAKO.md#working-beside-other-sessions)). Claude
+Code sends a subagent's stop to SubagentStop, which SAKO does not wire, so nothing
+gates a worker; in use, subagents ran no session hooks, so a worktree only they use
+needs no `init`. Seen in use with Claude Code 2.1.280 to 2.1.302 on WSL2, last on
+2026-10-18.
 
 ## Try it in your client
 

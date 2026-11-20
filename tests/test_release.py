@@ -74,10 +74,15 @@ class Release(unittest.TestCase):
 
 class Budgets(unittest.TestCase):
     """The product's budgets: one runtime file of at most 4,000 lines, each at most 100 columns
-    wide, and at most about 1,500 words of reading for a normal task."""
+    wide, at most about 1,500 words of reading for a normal task, and caps on the method and
+    the limits page."""
 
     def test_runtime_line_budget(self):
         self.assertLessEqual(fixture.SAKO.read_text().count("\n"), 4000)
+
+    def test_the_method_and_the_limits_page_stay_within_their_word_caps(self):
+        for name, cap in (("SAKO.md", 3000), ("docs/limits.md", 1500)):  # words as wc -w counts them
+            self.assertLessEqual(len((fixture.SAKO.parent / name).read_text(encoding="utf-8").split()), cap, name)
 
     def test_runtime_lines_fit_in_100_columns(self):
         lines = fixture.SAKO.read_text(encoding="utf-8").splitlines()
@@ -185,11 +190,11 @@ class Words(unittest.TestCase):
 
     def test_a_subagent_carries_its_parents_session_id(self):
         beside = self.section("Working beside other sessions")
-        for words in ("a subagent's shell carries its parent's session ID, so a command there without `--session` acts as "
-                      "the parent", "uses the parent's ID as the same holder and never runs `end`",
-                      "the parent's close evidence names it with its commits",
-                      "An agent holding its own claim gets its own ID in its brief and passes `--session` on every command, "
-                      "`end` included", "a worktree only they use needs no `init`"):
+        for words in ("Workers run no SAKO command because a subagent's shell carries its parent's session ID, so a command "
+                      "there without `--session` acts as the parent, and its `end` would end the coordinator's presence.",
+                      "Paste each worker its row as the brief and tell it to run no SAKO command.",
+                      "When you close work you did not build, name its builder in the receipt.",
+                      "a worktree only they use needs no `init`"):
             self.assertIn(words, beside)
         self.assertIn("a subagent's shell carries its parent's session ID, so a command there without `--session` acts as the "
                       "parent, and its `end` ends the parent's presence", self.text("docs/compatibility.md"))
@@ -197,6 +202,17 @@ class Words(unittest.TestCase):
                       self.text("docs/limits.md"))
         for page in Links().pages():  # no page may say the opposite again
             self.assertNotIn("carries its own", " ".join(page.read_text(encoding="utf-8").split()), page)
+
+    def test_the_method_names_three_ways_of_working_and_what_gates_each(self):
+        beside = self.section("Working beside other sessions")
+        for words in ("- **Solo.** One session in one checkout. Its Stop hook gates it.",
+                      "- **Peers.** Two or more sessions that each run SAKO, each under its own claims in its own worktree",
+                      "A session in another client is always a peer, since that client's hooks run SAKO for it.",
+                      "- **A coordinator with a fleet.** One session coordinates and holds the claims.",
+                      "They run no SAKO command", "and nothing gates them.", "The Stop hook gates the coordinator.",
+                      "Start with one worker. The most writers at once is the number of ready rows whose scopes do not overlap",
+                      "Workers that only read can fan out freely. You read every diff, so you are the cap."):
+            self.assertIn(words, beside)
 
     def test_presence_is_a_lease_and_the_limits_state_both_ways_it_errs(self):
         self.assertEqual((sako.LEASE, sako.KEPT), (2 * 3600, 7 * 24 * 3600), "the documents say two hours and a week")
