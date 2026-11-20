@@ -46,7 +46,7 @@ In the already open code session, run `start` to register with SAKO and get cont
 
 ```text
 $ python3 .sako/sako.py start --session demo-code
-sako 0.7.1 · work /work/greeting (main, started at 996438bd1)
+sako 0.8.0 · work /work/greeting (main, started at 996438bd1)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-code
@@ -70,7 +70,7 @@ The already open docs session checks in while the code session is still active. 
 
 ```text
 $ python3 .sako/sako.py start --session demo-docs
-sako 0.7.1 · work /work/greeting (main, started at 996438bd1)
+sako 0.8.0 · work /work/greeting (main, started at 996438bd1)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-docs
@@ -104,7 +104,7 @@ $ cd /work/greeting-t-2
 
 ```text
 $ python3 /work/greeting/.sako/sako.py start --session demo-docs
-sako 0.7.1 · work /work/greeting-t-2 (t-2, started at 996438bd1)
+sako 0.8.0 · work /work/greeting-t-2 (t-2, started at 996438bd1)
 This project uses SAKO for task execution. Before a project task, read /work/greeting/.sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method /work/greeting/.sako/SAKO.md; records /work/greeting/.sako/work/TASKS.md and /work/greeting/.sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-docs
@@ -234,7 +234,7 @@ A fresh agent session is opened in the coding tool. It runs `start` to check in 
 
 ```text
 $ python3 .sako/sako.py start --session demo-next
-sako 0.7.1 · work /work/greeting (main, started at 5459a9fc2)
+sako 0.8.0 · work /work/greeting (main, started at 5459a9fc2)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next

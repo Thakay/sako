@@ -5,7 +5,33 @@ Notable changes to SAKO, one entry per release. The format follows
 [Semantic Versioning](https://semver.org/). SAKO is alpha software, so commands and
 file formats can change in any 0.x release.
 
-## [Unreleased]
+## [0.8.0] - 2026-11-19
+
+Three rules are simpler. A checkout has one writer, a closed task covers a file by
+what the file holds, and a session counts as live for two hours after it was last
+seen. They replace reading peers' Git state, the close-minute comparison and
+presence by process, so SAKO reads no process and no peer's files. The method names
+three ways of working and is a third shorter. Task records from 0.7.1 still parse.
+SAKO remains alpha software.
+
+From your project's Git repository, install with `uvx sako@0.8.0 init`, or update an
+existing installation with `uvx sako@0.8.0 init --update`.
+
+To update from 0.7.1, follow these steps:
+
+1. Commit the files of every closed task first. A task closed before the update has
+   no seal, so its uncommitted files count again until they are committed.
+2. Update with no active work, in the main checkout. The hook command is the same
+   as in 0.7.1, so Codex keeps its trust in SAKO's hooks.
+3. End any session left open across the update, then start it again with the same
+   ID, which keeps its claims and takes a new start record, or start a new one.
+4. Where two sessions held product claims in one checkout, give each but one a
+   worktree of its own with `git worktree add ../<project>-t-<n> -b t-<n>`, then
+   run `uvx sako init` and start the session there. Until then, `check` names both
+   as writers and the gate blocks their stops.
+5. Remove `SAKO_AGENT_PID` wherever it is set. SAKO no longer reads it.
+6. Run `verify` when a check is configured. The new version makes every recorded
+   pass stale.
 
 ### Changed
 
@@ -104,6 +130,19 @@ file formats can change in any 0.x release.
   same name, was fingerprinted by the repository's HEAD, so any later commit made it
   read as changed since the start or since its close. Only a folder that is its own
   repository is fingerprinted by its commit now.
+
+### Known issues
+
+- A session's own commit is not counted when a task another session closed since it
+  started covers the path, since Recorded cannot tell who made a commit. 0.7.1 had
+  the same gap for commits made on the day of the close. The limits page states it.
+
+### Validation
+
+- Both suites pass on Python 3.10 and 3.12 locally, with 288 tests and 22 scenarios;
+  these counts overlap.
+- This release was not run by hand on native Windows. The last such run was of
+  0.7.1.
 
 ## [0.7.1] - 2026-10-19
 
@@ -525,3 +564,4 @@ Install from your project's Git repository with `uvx sako init`. To update later
 [0.6.0]: https://github.com/Thakay/sako/releases/tag/v0.6.0
 [0.7.0]: https://github.com/Thakay/sako/releases/tag/v0.7.0
 [0.7.1]: https://github.com/Thakay/sako/releases/tag/v0.7.1
+[0.8.0]: https://github.com/Thakay/sako/releases/tag/v0.8.0

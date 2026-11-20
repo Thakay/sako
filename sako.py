@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "0.7.1"
+VERSION = "0.8.0"
 
 TASK_ID = re.compile(r"\bT-\d+\b")
 MARKER = re.compile(r"sk-\d{4}-[0-9a-f]{12}")
