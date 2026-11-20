@@ -133,7 +133,8 @@ the result.
 2. Make an unrecorded change and try to stop. The gate refuses once and names the
    fix.
 3. Open a second conversation with its own ID. Confirm that each sees the other in
-   `status` and that a live claim cannot be taken over; use disjoint scopes. From
+   `status` and that a live claim cannot be taken over; give the second one its
+   own worktree before it claims product files. From
    inside Codex's sandbox a peer shows as unverified, and its claim can be taken
    over only with a reason.
 4. End one conversation and confirm that only its presence disappears.

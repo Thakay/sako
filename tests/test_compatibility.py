@@ -292,7 +292,7 @@ class Compatibility(unittest.TestCase):
         refusal = self.cli("claim", "T-1", "--takeover", "Inspect earlier work",
                            session="conversation-two", expected=3)
         self.assertIn("held by a live session", refusal)
-        self.cli("add", "Record the sample", "--scope", "docs/")
+        self.cli("add", "Record the sample", "--scope", ".sako/work/sample.md")  # records work, beside the checkout's writer
         self.cli("claim", "T-10", session="conversation-two")
         self.cli("start", session="conversation-one", pid=host.pid)
         resumed = sako.my_entry(roots, "conversation-one")
@@ -478,7 +478,8 @@ class Compatibility(unittest.TestCase):
         self.assertIn(f"T-10  claimed by {sako.marker_for('sandboxed')}", waiting)
         self.assertNotIn("(not live)", waiting)
         fixture.write(self.root, {"docs/sample.md": "the sandboxed session's edit\n"})
-        self.assertIn("in T-10's scope, claimed by unverified peer", self.cli("check", "--gate", session="host-session"))
+        self.assertIn(f"this checkout's writer, {sako.marker_for('sandboxed')} with T-1, records the product changes here",
+                      self.cli("check", "--gate", session="host-session"), "an unverified writer counts within its lease")
         (self.root / "docs/sample.md").unlink()
         refusal = self.cli("claim", "T-1", session="host-session", expected=3)
         self.assertIn("which SAKO cannot verify from here (a sandbox, or Windows, hides its process); if it stopped", refusal)

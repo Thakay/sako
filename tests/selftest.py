@@ -631,7 +631,10 @@ def scenario_neutral_package_and_shared_host_sessions(ws: Path) -> None:
     expect(f"peer {marker('host-first')}" in peer, "a shared host retains the earlier conversation")
     refusal = installed(repo, "claim", "T-1", "--takeover", "Inspect existing work", session="host-second")
     expect(refusal.returncode == 3 and "held by a live session" in refusal.stderr, "a live conversation keeps its claim")
-    succeeds(installed(repo, "claim", "T-2", session="host-second"))
+    second = installed(repo, "claim", "T-2", session="host-second")
+    expect(second.returncode == 3 and "a checkout has one writer" in second.stderr
+           and "git worktree add ../project-t-2 -b t-2" in second.stderr,
+           "a second product claim in the checkout is refused, with the worktree command")
     observed = succeeds(subprocess.run([sys.executable, "src/app.py"], cwd=repo,
                                       capture_output=True, text=True, env=ENV))
     expect(observed == "1\n", "observe the fixture's actual output")
@@ -640,6 +643,7 @@ def scenario_neutral_package_and_shared_host_sessions(ws: Path) -> None:
                        session="host-first"))
     commit_all(repo, "record the observed program behavior")
     succeeds(installed(repo, "check", "--gate", session="host-first"))
+    succeeds(installed(repo, "claim", "T-2", session="host-second"))  # the writer closed its task, so the checkout is free
     succeeds(installed(repo, "end", session="host-first"))
     live = [json.loads(p.read_text())["session_id"] for p in (repo / ".sako/state/live").glob("*.json")]
     expect(live == ["host-second"], "ending one conversation preserves the other")

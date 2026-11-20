@@ -82,10 +82,11 @@ explains setup and how to confirm the hooks ran.
   helps you and your agent choose a useful first task.
 - **Bring an existing project.** Turn your notes, issues, or plan into
   [clear tasks](https://github.com/Thakay/sako/blob/main/docs/intake-recipes.md).
-- **Add parallel work.** Use separate task scopes to coordinate sessions in
+- **Add parallel work.** Give each writing session its own worktree and task scope in
   [one repository and its worktrees](https://github.com/Thakay/sako/blob/main/SAKO.md#working-beside-other-sessions),
-  and widen one with the `edit` command before the work outgrows it. Each session
-  sees its live peers' claims, commits and uncommitted files, and a check that
+  and widen a scope with the `edit` command before the work outgrows it. A checkout
+  has one writer, and SAKO names the Git command when a second session claims
+  there. Each session sees its live peers' claims and checkouts, and a check that
   passed in one worktree counts in another with identical checked content. For
   work across machines, follow the
   [tracker migration guide](https://github.com/Thakay/sako/blob/main/docs/move-to-a-tracker.md).

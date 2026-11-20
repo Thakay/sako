@@ -37,15 +37,21 @@ class Workflow(unittest.TestCase):
                 proc.wait()
         self.workspace.cleanup()
 
-    def start(self, session):
+    def start(self, session, where=None):
         proc = subprocess.Popen(["sleep", "60"])
         self.agents.append(proc)
-        code, out, err = fixture.cli(self.root, "start", session=session, pid=proc.pid)
+        code, out, err = fixture.cli(where or self.root, "start", session=session, pid=proc.pid)
         self.assertEqual(code, 0, out + err)
         return proc
 
-    def run_cli(self, *args, session=None):
-        return fixture.cli(self.root, *args, session=session)
+    def run_cli(self, *args, session=None, where=None):
+        return fixture.cli(where or self.root, *args, session=session)
+
+    def linked(self, name="side"):
+        """A linked worktree, where a second writer works, since a checkout has one."""
+        path = Path(self.workspace.name) / name
+        fixture.git(self.root, "worktree", "add", "-q", "-b", name, str(path))
+        return path
 
     def assert_ok(self, result):
         code, out, err = result
@@ -548,48 +554,51 @@ class Workflow(unittest.TestCase):
                       "from a linked worktree, a path to the records is absolute")
 
     def test_claims_refusals_print_an_edit_command_that_runs_once_its_path_is_filled_in(self):
+        side = self.linked()
         self.start("session-a")
-        self.start("session-b")
+        self.start("session-b", where=side)
         self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
         self.assert_ok(self.run_cli("add", "Guide and code", "--scope", "src/", "docs/guide/"))
 
         def refused(task_id, path=""):
             """claim's refusal, and the output of the edit command it prints, run with PATH filled in"""
-            code, _, err = self.run_cli("claim", task_id, session="session-b")
+            code, _, err = self.run_cli("claim", task_id, session="session-b", where=side)
             self.assertEqual(code, 3, err)
             printed = shlex.split(re.search(r"\((edit [^)]*)\)", err)[1])
-            return err, self.assert_ok(self.run_cli(*[path if word == "PATH" else word for word in printed], session="session-b"))
+            return err, self.assert_ok(self.run_cli(*[path if word == "PATH" else word for word in printed],
+                                                    session="session-b", where=side))
 
         err, out = refused("T-10", "docs/guide/")
         self.assertIn("narrow T-10's scope (edit T-10 --scope PATH)\n", err)
         self.assertEqual(out, "T-10: open; scope docs/guide/; recorded locally, not committed\n", "now clear of T-1's src/")
-        self.assertIn("T-10: claimed", self.assert_ok(self.run_cli("claim", "T-10", session="session-b")))
+        self.assertIn("T-10: claimed", self.assert_ok(self.run_cli("claim", "T-10", session="session-b", where=side)))
         err, out = refused("T-9", "notes/")  # the stock parked row, which has no scope
         self.assertEqual(err, "sako: T-9 needs a Scope before claiming; give it one (edit T-9 --scope PATH)\n")
         self.assertEqual(out, "T-9: parked; scope notes/; recorded locally, not committed\n")
         err, out = refused("T-9")
         self.assertEqual(err, "sako: T-9 is parked; once its reason is resolved, open it (edit T-9 --open), then claim it\n")
         self.assertEqual(out, "T-9: open; recorded locally, not committed\n")
-        self.assertIn("T-9: claimed", self.assert_ok(self.run_cli("claim", "T-9", session="session-b")))
+        self.assertIn("T-9: claimed", self.assert_ok(self.run_cli("claim", "T-9", session="session-b", where=side)))
         tasks = self.root / ".sako/work/TASKS.md"  # a claim without a scope, as only a hand edit leaves it
         tasks.write_text(tasks.read_text() + fixture.row("T-20", status="claimed", claim="sk-0101-aaaaaaaaaaaa", touches="-") + "\n")
-        self.assertEqual(self.run_cli("claim", "T-20", "--takeover", "its session ended", session="session-b"),
+        self.assertEqual(self.run_cli("claim", "T-20", "--takeover", "its session ended", session="session-b", where=side),
                          (3, "", "sako: T-20 needs a Scope before claiming\n"),
                          "edit leaves another session's claim to its holder, so no edit command is offered")
 
     def test_a_narrowed_claim_frees_a_second_sessions_claim_and_a_widening_onto_a_claim_is_refused(self):
+        side = self.linked()
         self.start("session-a")
-        self.start("session-b")
+        self.start("session-b", where=side)
         active, holder = self.root / ".sako/work/TASKS.md", fixture.marker("session-b")
         self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
         self.assert_ok(self.run_cli("add", "Nested work", "--scope", "src/nested/"))
-        self.assertEqual(self.run_cli("claim", "T-10", session="session-b")[0], 3, "T-1's src/ overlaps it")
+        self.assertEqual(self.run_cli("claim", "T-10", session="session-b", where=side)[0], 3, "T-1's src/ overlaps it")
         self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--scope", "src/app.py", "tests/", session="session-a")),
                          "T-1: claimed; scope src/app.py, tests/; recorded locally, not committed\n")
         row = next(r for r in sako.parse_rows({"tasks": active.read_text()}) if r.id == "T-1")
         self.assertEqual((row.touches, row.claim.split()[0]), (["src/app.py", "tests/"], fixture.marker("session-a")),
                          "the claim stays with its holder")
-        self.assert_ok(self.run_cli("claim", "T-10", session="session-b"))
+        self.assert_ok(self.run_cli("claim", "T-10", session="session-b", where=side))
         before = active.read_bytes()
         code, _, err = self.run_cli("edit", "T-1", "--widen", "docs/", "src/", session="session-a")
         self.assertEqual(code, 3, err)
@@ -600,13 +609,46 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.assert_ok(self.run_cli("edit", "T-1", "--widen", "src/app.py", "src/lib/", session="session-a")),
                          "T-1: claimed; scope src/app.py, tests/, src/lib/; recorded locally, not committed\n",
                          "a path already in the scope is kept once, and a new one clear of other claims is added")
-        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-10", "--scope", "src/nested/", session="session-b")),
+        self.assertEqual(self.assert_ok(self.run_cli("edit", "T-10", "--scope", "src/nested/", session="session-b", where=side)),
                          "T-10: claimed; records unchanged\n")
         self.assert_ok(self.run_cli("add", "Docs", "--scope", "docs/"))
         out = self.assert_ok(self.run_cli("edit", "T-11", "--widen", "src/nested/deep/", session="session-a"))
         self.assertEqual(out, f"T-11: open; scope docs/, src/nested/deep/; recorded locally, not committed; its scope overlaps "
                               f"claimed T-10 ({holder}), so a claim of it by another session is refused until that closes or a "
                               "scope narrows\n", "an open row may overlap a claim, and the line says so as add's does")
+
+    def test_a_checkout_has_one_writer_and_the_refusal_names_the_worktree_command(self):
+        self.start("session-a")
+        self.start("session-b")
+        self.assert_ok(self.run_cli("claim", "T-1", session="session-a"))
+        self.assert_ok(self.run_cli("add", "Guide", "--scope", "docs/guide/"))
+        self.assert_ok(self.run_cli("add", "Plan", "--scope", ".sako/work/plan.md"))
+        active = self.root / ".sako/work/TASKS.md"
+        before = active.read_bytes()
+        code, _, refusal = self.run_cli("claim", "T-10", session="session-b")
+        self.assertEqual(code, 3, refusal)
+        self.assertEqual(refusal, f"sako: T-10 would make a second writer in this checkout: {fixture.marker('session-a')} holds "
+                                  "T-1 (src/) here, and a checkout has one writer. Work in your own worktree (git worktree add "
+                                  "../project-t-10 -b t-10, then start your session there and claim), or wait for it to close\n",
+                         "disjoint scopes too: one checkout holds one check result and one set of uncommitted files")
+        self.assertEqual(active.read_bytes(), before, "nothing is written")
+        self.assertIn("T-11: claimed", self.assert_ok(self.run_cli("claim", "T-11", session="session-b")),
+                      "records work makes no writer")
+        code, _, err = self.run_cli("edit", "T-11", "--widen", "docs/plan/", session="session-b")
+        self.assertEqual(code, 3, err)
+        self.assertIn("T-11 would make a second writer in this checkout", err, "nor can it grow into product files here")
+        command = shlex.split(re.search(r"\((git worktree add .*?),", refusal)[1])
+        subprocess.run(command, cwd=self.root, env=fixture.ENV, check=True, capture_output=True)
+        side = Path(self.workspace.name) / "project-t-10"
+        self.start("session-b", where=side)
+        self.assertIn("T-10: claimed", self.assert_ok(self.run_cli("claim", "T-10", session="session-b", where=side)),
+                      "the printed command gives the second writer a checkout of its own")
+        self.assert_ok(self.run_cli("add", "Library", "--scope", "lib/"))
+        self.start("session-c")
+        self.assertEqual(self.run_cli("claim", "T-12", session="session-c")[0], 3, "the main checkout still has its writer")
+        self.assert_ok(self.run_cli("close", "T-1", "--evidence", "Recorded", session="session-a"))
+        self.assertIn("T-12: claimed", self.assert_ok(self.run_cli("claim", "T-12", session="session-c")),
+                      "a checkout is free once its writer holds no product claim")
 
     def test_a_narrowing_inside_the_old_scope_never_faces_the_overlap_rule(self):
         fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(  # an overlap a hand edit left between two claims
@@ -785,9 +827,9 @@ class Workflow(unittest.TestCase):
         context = self.assert_ok(fixture.cli(self.root, "start", session="reader", pid=agent.pid))
         for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
             with self.subTest(view=view):
-                self.assertIn("live peers (disjoint: share the tree; overlap: wait or negotiate; no claim: ask before "
-                              "touching shared paths):", out)
-                self.assertEqual(out.count("ask before touching shared paths"), 1, out)
+                self.assertIn("live peers (a checkout has one writer, the peer whose product claim was made in it; to write "
+                              "product files beside one, work in your own worktree):", out)
+                self.assertEqual(out.count("a checkout has one writer"), 1, out)
                 line = next(line for line in out.splitlines() if sako.marker_for(holder) in line)
                 self.assertTrue(line.startswith(f"  peer {sako.marker_for(holder)} (session ID ends 0000a1b2) on main"), line)
                 self.assertTrue(line.endswith(" -> T-10 (claimed) touches docs/  [from the claim column]"), line)
@@ -825,44 +867,31 @@ class Workflow(unittest.TestCase):
                 self.assertTrue(context.split("\n", 1)[0].endswith(f"{header}{since})"),
                                 "the start revision, which a resume before end keeps")
 
-    def test_a_peer_line_shows_its_commits_and_uncommitted_paths_in_its_own_checkout_even_once_removed(self):
-        side = Path(self.workspace.name) / "side"
-        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+    def test_a_peer_line_names_its_checkout_and_reads_no_git_state_there(self):
+        side = self.linked()
         far = subprocess.Popen(["sleep", "60"])
         self.agents.append(far)
         self.assert_ok(fixture.cli(side, "start", session="peer-side", pid=far.pid))
         fixture.write(side, {"lib/one.py": "one\n"})
         fixture.commit_all(side, "Side work")
-        fixture.write(side, {f"lib/{name}.py": "draft\n" for name in "abcd"})
+        fixture.write(side, {"lib/a.py": "draft\n"})
         self.start("peer-here")
-        fixture.write(self.root, {"notes.txt": "draft\n"})
         agent = subprocess.Popen(["sleep", "60"])
         self.agents.append(agent)
         context = self.assert_ok(fixture.cli(self.root, "start", session="reader", pid=agent.pid))
         for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
             with self.subTest(view=view):
-                self.assertIn(f"; in {side.as_posix()}: 1 commit(s) since its start, 4 uncommitted path(s) "
-                              "(lib/a.py, lib/b.py, lib/c.py and 1 more) -> no claim\n", out)
-                self.assertIn("; in this checkout: 0 commit(s) since its start, 1 uncommitted path(s) (notes.txt) -> no claim\n", out)
+                self.assertIn(f" on side since ", out)
+                self.assertRegex(out, rf"(?m)^  peer {sako.marker_for('peer-side')} .*; in {re.escape(side.as_posix())} -> no claim$")
+                self.assertRegex(out, rf"(?m)^  peer {sako.marker_for('peer-here')} .*; in this checkout -> no claim$")
+                self.assertNotIn("commit(s) since its start", out)
+                self.assertNotIn("uncommitted path(s)", out, "a peer's commits and edits are its own checkout's business")
         shutil.rmtree(side)  # its registration stays behind until git worktree prune
         for view in ("start", "status"):
             with self.subTest(view=view, removed=True):
                 code, out, err = fixture.cli(self.root, view, session="reader", pid=agent.pid)
                 self.assertEqual((code, err), (0, ""), out)
-                self.assertIn(f"; in {side.as_posix()}: the checkout is gone -> no claim\n", out)
-
-    def test_reading_the_peers_checkouts_stops_after_two_seconds_and_a_slow_one_says_so(self):
-        self.start("slow-peer")
-        roots, waits = sako.resolve_roots(self.root), []
-
-        def slow(root, timeout=None):
-            waits.append(timeout)
-            raise subprocess.TimeoutExpired("git status", timeout)
-
-        with patch.object(sako, "dirty_paths", slow):
-            lines = sako.peer_lines(roots, sako.read_ledger(roots, sako.load_config(roots.kit)), None)
-        self.assertTrue(lines[1].endswith("; in this checkout: not read in time -> no claim"), lines)
-        self.assertTrue(0 < waits[0] <= 2, waits)
+                self.assertIn(f"; in {side.as_posix()} -> no claim\n", out, "no peer's checkout is read, so a removed one costs nothing")
 
     def test_one_scope_flag_takes_several_paths_and_a_task_text_after_them_fails(self):
         active = self.root / ".sako/work/TASKS.md"

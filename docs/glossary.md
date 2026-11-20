@@ -9,7 +9,7 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Claim | A session's ownership of a task, in the task's Status. A live claim cannot be replaced |
 | Client | The program an agent runs in. SAKO wires hooks for Claude Code and Codex; with others, the agent runs the commands |
 | Completion condition | The observable result that makes a task done: its "Done when" cell |
-| Coordinate | Keep sessions someone else started from colliding, with claims, scope checks and a shared lock, in one repository and its worktrees |
+| Coordinate | Keep sessions someone else started from colliding, with claims, scope checks, one writer per checkout and a shared lock, in one repository and its worktrees |
 | Finish gate | The check at a session's stop against three rules, Recorded, Proven and Committed, and against faults in the records. It refuses a stop once and names the fix; findings about other sessions are only notes |
 | Footprint | Where the records live: **local** (out of Git, the default), **repo** (their own Git repository inside `.sako/`) or **shared** (committed with the code, one copy per branch) |
 | Handoff | A paused task's notes, in `.sako/work/T-<n>-<slug>/handoff.md` |

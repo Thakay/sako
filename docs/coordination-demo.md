@@ -8,15 +8,16 @@ or measure parallel speed. Every command output comes from SAKO or Git. Paths,
 dates and times are normalized, and a test checks this transcript for drift.
 
 The request: "Add a greeting by name and show how to use it."
-One session handles the code; another handles the usage guide. After the
-checks pass and the work is committed, a fresh session sees the next task.
-The [README illustration](assets/readme/working-together.svg) uses results
-captured from this run.
+One session handles the code in the main checkout. Another handles the usage
+guide in a worktree of its own, since a checkout has one writer. Both use one
+task file. After the checks pass and the work is merged, a fresh session sees
+the next task. The [README illustration](assets/readme/working-together.svg)
+uses results captured from this run.
 
 
 ## 1. Prepare the work
 
-Install without hooks so every session command is visible. The project supplies a check for the greeting and its usage guide.
+Install without hooks so every session command is visible. The project supplies a check for the greeting.
 
 ```text
 $ python3 ../sako/sako.py init --client none
@@ -30,7 +31,7 @@ Hooks: none, your choice. Agents read .agents/skills/sako/SKILL.md; run start, c
 Set `"verify_command": ["python3", "check.py"]` in `.sako/config.json`. The two tasks cover different files in the same repository.
 
 ```text
-$ python3 .sako/sako.py add "Greet a visitor by name" --done-when "The greeting prints Hello, Ada!" --scope greeting.py
+$ python3 .sako/sako.py add "Greet a visitor by name" --done-when "The greeting prints Hello, Ada!" --scope greeting.py check.py
 T-1: open; recorded locally, not committed
 ```
 
@@ -45,7 +46,7 @@ In the already open code session, run `start` to register with SAKO and get cont
 
 ```text
 $ python3 .sako/sako.py start --session demo-code
-sako 0.7.1 · work /work/greeting (main, started at 53a59d8b5)
+sako 0.7.1 · work /work/greeting (main, started at 996438bd1)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-code
@@ -56,7 +57,7 @@ evidence: none; no passing check recorded; run sako.py verify, which runs python
 ledger: consistent
 next, if no task was named for you: T-1 (P2, first in row order): Greet a visitor by name
   done when: The greeting prints Hello, Ada!
-  scope: greeting.py
+  scope: greeting.py, check.py
 also ready: T-2 (P2)
 ```
 
@@ -65,18 +66,18 @@ $ python3 .sako/sako.py claim T-1 --session demo-code
 T-1: claimed; recorded locally, not committed. Working notes go in .sako/work/T-1-greet-a-visitor-by/. If this session ends before closing it, the claim reads as stale and another session may take it over with a reason, so write handoff.md there first, with where it stands.
 ```
 
-The already open docs session checks in while the code session is still active. Its context shows the peer and points to the remaining task.
+The already open docs session checks in while the code session is still active. Its context shows the peer and points to the remaining task. A checkout has one writer, so its claim here is refused, and the refusal names the Git command for a worktree.
 
 ```text
 $ python3 .sako/sako.py start --session demo-docs
-sako 0.7.1 · work /work/greeting (main, started at 53a59d8b5)
+sako 0.7.1 · work /work/greeting (main, started at 996438bd1)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-docs
 your marker: sk-0115-0d70912d790f
 session: "demo-docs" (use this ID with --session)
-live peers (disjoint: share the tree; overlap: wait or negotiate; no claim: ask before touching shared paths):
-  peer sk-0115-3c0f5f721a4a (session ID ends emo-code) on main since 2026-01-15T09:30:00+0000; in this checkout: 0 commit(s) since its start, 0 uncommitted path(s) -> T-1 (claimed) touches greeting.py  [from the claim column]
+live peers (a checkout has one writer, the peer whose product claim was made in it; to write product files beside one, work in your own worktree):
+  peer sk-0115-3c0f5f721a4a (session ID ends emo-code) on main since 2026-01-15T09:30:00+0000; in this checkout -> T-1 (claimed) touches greeting.py, check.py  [from the claim column]
 evidence: none; no passing check recorded; run sako.py verify, which runs python3 check.py
 ledger: consistent
 next, if no task was named for you: T-2 (P2, the only ready task): Show how to use the greeting
@@ -87,22 +88,81 @@ waiting: 1; run next for the reasons
 
 ```text
 $ python3 .sako/sako.py claim T-2 --session demo-docs
-T-2: claimed; recorded locally, not committed. Working notes go in .sako/work/T-2-show-how-to-use/. If this session ends before closing it, the claim reads as stale and another session may take it over with a reason, so write handoff.md there first, with where it stands.
+sako: T-2 would make a second writer in this checkout: sk-0115-3c0f5f721a4a holds T-1 (greeting.py, check.py) here, and a checkout has one writer. Work in your own worktree (git worktree add ../greeting-t-2 -b t-2, then start your session there and claim), or wait for it to close
+(exit 3)
 ```
 
-Both claims now live in the shared task file. Each session edits its own file: the code prints `Hello, Ada!`, and the guide shows the command and output.
+The docs session makes that worktree, checks in from it and claims its task. Every worktree uses the main checkout's `.sako/`, so both claims live in one task file.
 
-## 3. Check and finish together
+```text
+$ git worktree add -q ../greeting-t-2 -b t-2
+```
+
+```text
+$ cd /work/greeting-t-2
+```
+
+```text
+$ python3 /work/greeting/.sako/sako.py start --session demo-docs
+sako 0.7.1 · work /work/greeting-t-2 (t-2, started at 996438bd1)
+This project uses SAKO for task execution. Before a project task, read /work/greeting/.sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
+kit: /work/greeting/.sako; method /work/greeting/.sako/SAKO.md; records /work/greeting/.sako/work/TASKS.md and /work/greeting/.sako/work/DONE.md
+commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-docs
+your marker: sk-0115-0d70912d790f
+session: "demo-docs" (use this ID with --session)
+live peers (a checkout has one writer, the peer whose product claim was made in it; to write product files beside one, work in your own worktree):
+  peer sk-0115-3c0f5f721a4a (session ID ends emo-code) on main since 2026-01-15T09:30:00+0000; in /work/greeting -> T-1 (claimed) touches greeting.py, check.py  [from the claim column]
+evidence: none; no passing check recorded; run sako.py verify, which runs python3 check.py
+ledger: consistent
+next, if no task was named for you: T-2 (P2, the only ready task): Show how to use the greeting
+  done when: The guide shows a command and its output
+  scope: USAGE.md
+waiting: 1; run next for the reasons
+```
+
+```text
+$ python3 /work/greeting/.sako/sako.py claim T-2 --session demo-docs
+T-2: claimed; recorded locally, not committed. Working notes go in /work/greeting/.sako/work/T-2-show-how-to-use/. If this session ends before closing it, the claim reads as stale and another session may take it over with a reason, so write handoff.md there first, with where it stands.
+```
+
+## 3. Check and finish
+
+The docs session writes the command and its output into the guide, runs the project's check in its worktree, closes its task and commits on its branch.
+
+```text
+$ python3 /work/greeting/.sako/sako.py verify
+greeting check passed
+check: PASS in 0s; covered 3 file(s); stamp 1e62e3b94a97acdf -> /work/greeting/.sako/state/worktrees/greeting-t-2/stamp.json; output in /work/greeting/.sako/state/worktrees/greeting-t-2/verify.log
+```
+
+```text
+$ python3 /work/greeting/.sako/sako.py close T-2 --session demo-docs --evidence "USAGE.md shows the command and expected greeting; check.py passes"
+T-2: done; recorded locally, not committed
+```
+
+```text
+$ git add -- USAGE.md
+```
+
+```text
+$ git commit -qm "Show how to use the greeting"
+```
+
+```text
+$ python3 /work/greeting/.sako/sako.py check --gate --session demo-docs
+SAKO gate: clear in /work/greeting-t-2
+```
+
+In the main checkout, the code session makes the greeting print `Hello, Ada!`, has the check ask for exactly that, and finishes the same way.
+
+```text
+$ cd /work/greeting
+```
 
 ```text
 $ python3 .sako/sako.py verify
-greeting and usage checks passed
-check: PASS in 0s; covered 3 file(s); stamp e23d67d0c54d813b -> /work/greeting/.sako/state/stamp.json; output in /work/greeting/.sako/state/verify.log
-```
-
-```text
-$ python3 .sako/sako.py close T-2 --session demo-docs --evidence "USAGE.md shows the command and expected greeting; check.py passes"
-T-2: done; recorded locally, not committed
+greeting check passed
+check: PASS in 0s; covered 3 file(s); stamp def4522f695194ee -> /work/greeting/.sako/state/stamp.json; output in /work/greeting/.sako/state/verify.log
 ```
 
 ```text
@@ -110,14 +170,32 @@ $ python3 .sako/sako.py close T-1 --session demo-code --evidence "greeting.py pr
 T-1: done; recorded locally, not committed
 ```
 
-Both sessions use the same passing check of the final files. The scripted code session commits the agreed changes. SAKO never commits for it.
-
 ```text
-$ git add -- greeting.py USAGE.md
+$ git add -- greeting.py check.py
 ```
 
 ```text
-$ git commit -qm "Add the named greeting and usage guide"
+$ git commit -qm "Greet a visitor by name"
+```
+
+The scripted code session merges the docs branch. SAKO never commits or merges for it. The merge moves the checked content, so the gate asks for a fresh check before this session stops.
+
+```text
+$ git merge -q --no-edit t-2
+```
+
+```text
+$ python3 .sako/sako.py check --gate --session demo-code
+SAKO gate: 1 problem(s) before you stop:
+  Proven: T-1 closed after checked content changed since you started, and the check is stale: checked content moved since the last pass (was def4522f695194ee, now d88520af32737bfb)
+    fix: python3 .sako/sako.py verify, fix what it reports, then stop again.
+(exit 2)
+```
+
+```text
+$ python3 .sako/sako.py verify
+greeting check passed
+check: PASS in 0s; covered 3 file(s); stamp d88520af32737bfb -> /work/greeting/.sako/state/stamp.json; output in /work/greeting/.sako/state/verify.log
 ```
 
 ```text
@@ -125,17 +203,12 @@ $ python3 .sako/sako.py check --gate --session demo-code
 SAKO gate: clear in /work/greeting
 ```
 
-```text
-$ python3 .sako/sako.py check --gate --session demo-docs
-SAKO gate: clear in /work/greeting
-```
-
 Each completed task leaves a receipt with its evidence and check result.
 
 ```text
 $ tail -2 .sako/work/DONE.md
-| T-2 | Show how to use the greeting | The guide shows a command and its output | USAGE.md shows the command and expected greeting; check.py passes [sk-0115-0d70912d790f since 2026-01-15T09:30+0000; closed 2026-01-15T09:30+0000; check pass 2026-01-15T09:30:00+0000 on e23d67d0c54d813b at 53a59d8b584f plus uncommitted changes] | `USAGE.md` | - |
-| T-1 | Greet a visitor by name | The greeting prints Hello, Ada! | greeting.py prints Hello, Ada!; check.py passes [sk-0115-3c0f5f721a4a since 2026-01-15T09:30+0000; closed 2026-01-15T09:30+0000; check pass 2026-01-15T09:30:00+0000 on e23d67d0c54d813b at 53a59d8b584f plus uncommitted changes] | `greeting.py` | - |
+| T-2 | Show how to use the greeting | The guide shows a command and its output | USAGE.md shows the command and expected greeting; check.py passes [sk-0115-0d70912d790f since 2026-01-15T09:30+0000; closed 2026-01-15T09:30+0000; check pass 2026-01-15T09:30:00+0000 on 1e62e3b94a97acdf at 996438bd1249 plus uncommitted changes] | `USAGE.md` | - |
+| T-1 | Greet a visitor by name | The greeting prints Hello, Ada! | greeting.py prints Hello, Ada!; check.py passes [sk-0115-3c0f5f721a4a since 2026-01-15T09:30+0000; closed 2026-01-15T09:30+0000; check pass 2026-01-15T09:30:00+0000 on def4522f695194ee at 996438bd1249 plus uncommitted changes] | `greeting.py`, `check.py` | - |
 ```
 
 ## 4. Pick up in a fresh session
@@ -161,14 +234,14 @@ A fresh agent session is opened in the coding tool. It runs `start` to check in 
 
 ```text
 $ python3 .sako/sako.py start --session demo-next
-sako 0.7.1 · work /work/greeting (main, started at 3e00c7d5c)
+sako 0.7.1 · work /work/greeting (main, started at 5459a9fc2)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next
 your marker: sk-0115-a5133dc77184
 session: "demo-next" (use this ID with --session)
 peers: none recorded
-evidence: fresh; last pass 2026-01-15T09:30:00+0000 on content e23d67d0c54d813b
+evidence: fresh; last pass 2026-01-15T09:30:00+0000 on content d88520af32737bfb
 ledger: consistent
 next, if no task was named for you: T-3 (P2, the only ready task): Handle a missing name
   done when: A missing name prints a usage hint

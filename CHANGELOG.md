@@ -5,6 +5,33 @@ Notable changes to SAKO, one entry per release. The format follows
 [Semantic Versioning](https://semver.org/). SAKO is alpha software, so commands and
 file formats can change in any 0.x release.
 
+## [Unreleased]
+
+### Changed
+
+- A checkout has one writer. A product claim is refused while another live session
+  that started in the same checkout holds one, and the refusal names the Git command
+  for a worktree of its own (`git worktree add ../<project>-t-<n> -b t-<n>`). A claim
+  scoped inside `.sako/` makes no writer, so records work still shares a checkout.
+  Sessions that shared one checkout with disjoint product scopes now take a worktree
+  each.
+- The gate counts a checkout's product changes for its writer, in its scope or out of
+  it. A session that holds no product claim there is not asked about them, and the
+  note says whose they are.
+- A change is not counted when a task another session closed since you started covers
+  it, by commit or not. This replaces the rule that compared a commit's day with the
+  day of the close, so a merged branch whose task is closed no longer counts against
+  the session that merges it, and no time zone is read.
+- A peer's line in `start` and `status` names its claims and its checkout.
+- The two-session demo and the README illustration show the second session in its own
+  worktree, a merge, and the gate asking for a fresh check after it.
+
+### Removed
+
+- A peer's commits and uncommitted paths in `start` and `status`, with the 2-second
+  budget for reading them. SAKO reads no peer's Git state.
+- The notes that excused single paths inside a live peer's claimed or closed scope.
+
 ## [0.7.1] - 2026-10-19
 
 The method, the reference pages, the recipes, the glossary, the skill and the README

@@ -266,17 +266,21 @@ refused; never delete completed evidence blindly.
 Read this when another session or a subagent works in this repository. Every
 worktree uses the main checkout's `.sako/`, so sessions share one ledger, one
 numbering and one lock. A claim refuses a live owner and a scope that overlaps
-another session's claim. The lock serializes `add`, `claim`, `edit` and `close`
-only, not application edits, hand edits of the records, Git's index or other
-clones. Only a claim's holder edits its row. A path `edit` adds to a claimed scope
-meets the same overlap rule as a claim; a narrowing never does, and files already
-changed in the dropped paths then read as unrecorded. Keep scopes disjoint,
-coordinate direct record edits, and stage explicit paths. SAKO does not schedule
-agents or merge their edits.
+another session's claim. A checkout has one writer, the live session that made a
+product claim in it, since one checkout holds one check result and one set of
+uncommitted files. A second session's product claim there is refused with the Git
+command for a worktree of its own, where it starts and claims; a claim scoped inside
+`.sako/` makes no writer, so records work shares a checkout. The lock serializes
+`add`, `claim`, `edit` and `close` only, not application edits, hand edits of the
+records, Git's index or other clones. Only a claim's holder edits its row. A path
+`edit` adds to a claimed scope meets the same overlap rule as a claim; a narrowing
+never does, and files already changed in the dropped paths then read as unrecorded.
+Keep scopes disjoint across worktrees too, since they meet at the merge, coordinate
+direct record edits, and stage explicit paths. SAKO does not schedule agents or
+merge their edits.
 
-`start` and `status` show each live peer's claims, its commits since its start and
-the uncommitted paths in its checkout, yours included when you share one. In the
-repo footprint, `status` also lists the records commits made since your start.
+`start` and `status` show each live peer's claims and the checkout it works in. In
+the repo footprint, `status` also lists the records commits made since your start.
 
 In Claude Code, as in Codex, a subagent's shell carries its parent's session ID, so
 a command there without `--session` acts as the parent. A helper inside the
@@ -323,29 +327,27 @@ here once merged; until then, `check --gate --session <id>` run there judges it.
 **Recorded** counts files edited since the session started or committed since then,
 deletions and both sides of a rename; a file already dirty at start counts only when
 it changes again. A commit after the start revision dated in the minute before the
-start counts too, since a wall clock can step back. A live peer's claimed scope in
-this checkout is not counted, with a note, nor are uncommitted files in a task it
-closed. A closed task no longer covers an uncommitted file written in a later minute
-than its close. The gate labels such a file "changed after you closed T-1", or
-names the live peer here that closed it, and its fix first offers a commit under
-that task's title, for content that is still its work, only rewritten by a stash, a
-Git hook, a formatter or an editor save. A commit is not counted when a task
-another session closed on or after the commit's day, in local time, covers it.
-Without a start record, every uncommitted change counts and commits go unchecked;
-the gate says so.
+start counts too, since a wall clock can step back. While another live session is
+this checkout's writer, the changes here are not counted for you, with a note; its
+own gate answers for them, in its scope or out of it. Nor is a change counted that a
+task another session closed since you started covers. A closed task no longer covers
+an uncommitted file written in a later minute than its close. The gate labels such a
+file "changed after you closed T-1", and its fix first offers a commit under that
+task's title, for content that is still its work, only rewritten by a stash, a Git
+hook, a formatter or an editor save. Without a start record, every uncommitted
+change counts and commits go unchecked; the gate says so.
 
 **Proven:** while a claim you still hold covers changed checked files, a stale check
 is that claim's work in progress, and a close whose receipt shows the gate's check
 pass stays proven. Such a close also stays proven while only others moved checked
 content since your start, by edits left uncommitted before it, even once committed,
-or by edits and commits in the scope of a task a live peer in this checkout
-claimed, or closed no earlier than the minute the file was last written. Any other
-commit, merge, pull or checkout here counts as yours. Records work, a task whose
-every scope entry lies in `.sako/`, closes without a fresh check while only others
-moved checked content; its receipt then says "no automated check (records only)",
-and Proven skips it while that holds. A named check's pass never stands in for the
-gate's check pass. **Committed** skips files inside a claim you still hold; its fix
-applies only when the owner allows commits, otherwise say the work awaits approval.
+or by this checkout's writer when that is another session. Any other commit, merge,
+pull or checkout here counts as yours. Records work, a task whose every scope entry
+lies in `.sako/`, closes without a fresh check while only others moved checked
+content; its receipt then says "no automated check (records only)", and Proven skips
+it while that holds. A named check's pass never stands in for the gate's check pass.
+**Committed** skips files inside a claim you still hold; its fix applies only when
+the owner allows commits, otherwise say the work awaits approval.
 
 The first line of `check --gate` is its verdict, and its exit code decides. Two
 advisories never block: a claimed, unfinished task without a `handoff.md`, and a

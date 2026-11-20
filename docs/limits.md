@@ -78,24 +78,29 @@ checkout it runs in; work in another worktree counts once merged, or when
 `check --gate --session <id>` runs there. How Codex's sandbox treats linked
 worktrees is in [compatibility](compatibility.md#client-behavior-worth-knowing).
 
-In a shared checkout the gate sees what changed, not who changed it. Closing a task
-scoped `.` makes the Committed fix stage every uncommitted change made here between
-your start and its close, a peer's included; check `git status` first, or narrow the
-scope. Recorded cannot tell who made a commit either, so another session's closed
-task can excuse your commit, while a peer's commit of its closed work on a later
-day, even just after midnight or in another time zone, counts against you. Recorded
-reads the commits after your start revision from a minute before your start, since
-a wall clock can step back. A closed task still covers edits made in the minute it
-closed, so read `git diff` before following a Committed fix. A peer's edits to
-checked content also make your check stale.
+In a shared checkout the gate sees what changed, not who changed it. A checkout has
+one writer, the live session that made a product claim in it, and the gate counts
+the product changes there for that session, in its scope or out of it. So a session
+that holds no product claim is not asked about a writer's files, and a writer is
+asked about every change in its checkout, whoever made it. Closing a task scoped `.`
+makes the Committed fix stage every uncommitted change made here between your start
+and its close, a peer's included; check `git status` first, or narrow the scope.
+With no live writer, Recorded cannot tell who made a commit, so a task another
+session closed since you started can excuse your commit in its scope, while a commit
+under a task closed before you started, or still claimed, counts against you.
+Recorded reads the commits after your start revision from a minute before your
+start, since a wall clock can step back. A closed task still covers edits made in
+the minute it closed, so read `git diff` before following a Committed fix.
 
-Claim refuses overlap only with claimed rows, so a live peer in your checkout can
-claim a scope over your closed files, and `.` covers them all. While that peer is
-live, which is up to 24 hours after its last start when SAKO cannot verify it, edits
-and commits in its scope count as its own under Recorded and Proven, whoever made
-them. Committed still names your uncommitted closed files, except one written again
-in a later minute than your close. The backstop is the peer's own close, which needs
-a fresh check.
+The one-writer rule is judged at `claim`, and at an `edit` that grows a records
+claim into product files, among sessions that count as live, which is up to 24 hours
+after a session's last start when SAKO cannot verify it. It reads the checkout a
+session last started in, so a session that moves to another checkout runs `start`
+there. Two sessions that already hold product claims in one checkout, as after a
+hand edit of the records, are each asked about every change there. Once a writer
+closes its last product claim, another session can claim in that checkout, over the
+first one's closed files too. Committed still names the first one's uncommitted
+closed files, except one written again in a later minute than its close.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
 different branches keep separate ledgers. They can allocate the same task ID and
@@ -106,17 +111,16 @@ locally, so two machines writing at once collide on numbers and see each other's
 claims as stale. A team that needs more moves to a tracker; see
 [move the task authority to a tracker](move-to-a-tracker.md).
 
-Presence only estimates liveness; the method explains
-[how it works](../SAKO.md#pause-handoff-and-takeover). PID reuse, containers and
-unexpected wrappers, such as a `timeout` around the command, can misrepresent it,
-and a session without an end event can appear live until its host exits or its 24
-hours pass. On Linux and WSL a restart ends presence. SAKO reads all peers'
-progress for `start` and `status` within 2 seconds, so a slow checkout's line says
-"not read in time". A peer in your own checkout lists your uncommitted paths too. A
-claim left on purpose for another session reads as stale to every other session
-until it is taken over; close your part and leave the rest as a second row. Do not
-give concurrent workers the same session ID. A helper on its parent's ID is the
-parent, so the ledger shows no separate holder for it.
+Presence only estimates liveness; the method explains [how it
+works](../SAKO.md#pause-handoff-and-takeover). PID reuse, containers and unexpected
+wrappers, such as a `timeout` around the command, can misrepresent it, and a session
+without an end event can appear live until its host exits or its 24 hours pass. On
+Linux and WSL a restart ends presence. A peer's line names its claims and its
+checkout, and SAKO reads no peer's Git state. A claim left on purpose for another
+session reads as stale to every other session until it is taken over; close your
+part and leave the rest as a second row. Do not give concurrent workers the same
+session ID. A helper on its parent's ID is the parent, so the ledger shows no
+separate holder for it.
 
 ## Records and evidence
 
@@ -146,10 +150,10 @@ session's change. Run `verify` after such a change.
 Whether a closed task still covers an uncommitted file goes by when the file was
 last written, not by what it holds. A stash and its pop, a Git hook, a formatter or
 an editor save that rewrites the file in a later minute than the close makes
-Recorded list it as "changed after you closed T-n", or after a live peer in your
-checkout closed it; the fix then starts with committing it under that task's title
-when the content is still its work. Deletions and renames after the close stay the
-closed task's, since a missing file has no write time and a rename keeps the old one.
+Recorded list it as "changed after you closed T-n"; the fix then starts with
+committing it under that task's title when the content is still its work. Deletions
+and renames after the close stay the closed task's, since a missing file has no
+write time and a rename keeps the old one.
 
 The before/after fingerprint detects persistent changes during a check, not an
 edit that changes and returns to identical bytes during the run. Verification in a

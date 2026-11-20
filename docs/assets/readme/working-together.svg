@@ -33,7 +33,7 @@
   <path d="M 150 378 V 401 H 280 V 420" class="flow"/>
   <path d="M 410 378 V 401 H 280" fill="none" stroke="#74b8ad" stroke-width="1.5"/>
   <text x="32" y="452" class="label">03 / A RESULT YOU CAN REVIEW</text>
-  <text x="32" y="490" class="body mint">greeting and usage checks passed</text>
+  <text x="32" y="490" class="body mint">greeting check passed</text>
   <text x="32" y="522" class="small">2 task receipts. Changes committed.</text>
   <path d="M 32 548 H 528" stroke="#37525b"/>
   <text x="32" y="581" class="label">NEXT SESSION</text>

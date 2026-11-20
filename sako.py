@@ -26,6 +26,7 @@ import time
 import tempfile
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 VERSION = "0.7.1"
@@ -397,7 +398,7 @@ def within(touch: str, row: Row) -> bool:
 def records_only(row: Row) -> bool:
     """True when every scope entry lies in the kit folder, which the project's check never covers.
     Close and the Proven rule ask no check of such records work while only others moved checked
-    content (others_moved)."""
+    content (others_moved), and a claim of it makes its holder no writer of a checkout."""
     with suppress(SakoError):  # a scope entry that escapes is a ledger finding, never records work
         return bool(row.touches) and all(scope(t)[:1] == (KIT,) for t in row.touches)
     return False
@@ -901,37 +902,21 @@ def own_line(roots: Roots, config: dict, rows: list[Row]) -> str:
     return "your rows: " + ("; ".join(parts) or "none")
 
 
-def progress(roots: Roots, entry: dict, seen: dict, deadline: float) -> str:
-    """A peer's commits since its start revision and the uncommitted paths in its own checkout,
-    read with Git, which writes nothing there. Each checkout is read once, all by the deadline."""
-    if "work_root" not in entry:  # a hand-made entry
-        return ""
-    root, rev = Path(str(entry["work_root"])), str(entry.get("work_start_rev") or "")
-    where = "in this checkout" if root == roots.work else f"in {root.as_posix()}"
-    left = lambda: max(deadline - time.monotonic(), 0)  # seconds; at 0 Git times out at once
-    try:
-        # a removed checkout; without its .git, Git would read the repository around the folder
-        if not (root / ".git").exists():
-            return f"; {where}: the checkout is gone"
-        if root not in seen:
-            seen[root] = [p for p in product(dirty_paths(root, left())) if not p.endswith("/")]
-        # a start before the first commit recorded HEAD
-        count = git(root, "rev-list", "--count", "HEAD" if rev == "HEAD" else f"{rev}..HEAD",
-                    check=False, timeout=left()) or "0"
-    except subprocess.TimeoutExpired:
-        return f"; {where}: not read in time"
-    except SakoError:
-        return f"; {where}: the checkout cannot be read"
-    paths = seen[root]
-    named = ", ".join(paths[:3]) + (f" and {len(paths) - 3} more" if len(paths) > 3 else "")
-    return (f"; {where}: {count} commit(s) since its start, {len(paths)} uncommitted path(s)"
-            + (f" ({named})" if paths else ""))
+def writer_here(roots: Roots, rows: list[Row], live: list[dict], marker: str | None,
+                skip: str | None = None) -> Row | None:
+    """A product claim that another live session started in this checkout holds, which makes that
+    session this checkout's one writer; a claim on records only makes none. Skip names a holder a
+    takeover replaces."""
+    here = {key_of(e.get("marker")) for e in live
+            if e.get("marker") != marker and e.get("work_root") == str(roots.work)} - {skip}
+    return next((r for r in rows if r.status == "claimed" and holder_key(r.claim) in here
+                 and not records_only(r)), None)
 
 
 def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
-    """Each live peer with its claims and its progress; a start hook prints these, so reading
-    the peers' checkouts stops after 2 seconds in all."""
-    lines, seen, deadline = [], {}, time.monotonic() + 2
+    """Each live peer with its checkout and its claims, from the presence entries and the claim
+    column; SAKO reads no peer's Git state."""
+    lines = []
     for entry in read_presence(roots):
         if entry.get("marker") == me:
             continue
@@ -942,13 +927,17 @@ def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
             "  [from the claim column]" if held else "no claim"
         until = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry["seen"] + LEASE)) \
             if entry.get("unverified") else ""
+        root = str(entry.get("work_root") or "")  # none in a hand-made entry
+        place = "; in this checkout" if root == str(roots.work) \
+            else f"; in {Path(root).as_posix()}" if root else ""
         lines.append(f"  peer {entry.get('marker')} "
                      f"(session ID ends {str(entry.get('session_id', '?'))[-8:]}) on "
                      f"{entry.get('branch')} since {entry.get('started')}"
                      + (f", unverified from here (counts as live until {until})" if until else "")
-                     + progress(roots, entry, seen, deadline) + f" -> {where}")
-    return ["live peers (disjoint: share the tree; overlap: wait or negotiate; "
-            "no claim: ask before touching shared paths):"] + lines if lines else []
+                     + f"{place} -> {where}")
+    return ["live peers (a checkout has one writer, the peer whose product claim was made in it; "
+            "to write product files beside one, work in your own worktree):"] + lines \
+        if lines else []
 
 
 def fingerprint(root: Path, relative: str) -> str:
@@ -1007,68 +996,73 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
 
 
 def others_moved(roots: Roots, entry: dict | None, moved: list[str], changed: dict[str, str],
-                 rows: list[Row], live: list[dict]) -> bool:
-    """True when only others moved checked content since the start, by edits left uncommitted
-    before it (committed since or not) or by edits or commits in the scope of a row a live peer
-    here claimed, or closed no earlier than the minute the file last changed. Any other commit,
-    and a merge, pull or checkout of older commits, is this session's, whoever made it, as is an
-    unknown start."""
-    rev, marker = str((entry or {}).get("work_start_rev") or ""), (entry or {}).get("marker")
-    here = {key_of(e["marker"]) for e in live
-            if e.get("marker") != marker and e.get("work_root") == str(roots.work)}
+                 visitor: bool) -> bool:
+    """True when only others moved checked content since the start: this checkout's writer, for a
+    session that is not it, or edits left uncommitted before the start, committed since or not.
+    Any other commit, and a merge, pull or checkout of older commits, is this session's, whoever
+    made it, as is an unknown start."""
+    if visitor:
+        return True
+    rev = str((entry or {}).get("work_start_rev") or "")
     committed = set(git(roots.work, "diff", "--no-renames", "--name-only", rev, "HEAD",
                         check=False).splitlines()) if rev else set()
     # others' edits left uncommitted before the start; a later edit is in changed
     committed -= set((entry or {}).get("dirty_at_start") or {})
-    return not any(path.startswith("(") or (path in committed and path not in changed)
-                   or (path in changed and not any(
-                       holder_key(r.claim) in here and covers(r, path, roots.work) for r in rows))
-                   for path in moved)
+    return not any(path.startswith("(") or path in committed or path in changed for path in moved)
+
+
+def closed_at(row: Row) -> float:
+    """A done row's close, in seconds since the epoch, through the end of its minute; 0 when its
+    receipt names none."""
+    found = re.findall(r"; closed ([\dT:-]{16}[+-]\d{4})", row.evidence)
+    with suppress(ValueError):
+        return datetime.strptime(found[-1], "%Y-%m-%dT%H:%M%z").timestamp() + 59 if found else 0
+    return 0
+
+
+def visiting(roots: Roots, rows: list[Row], live: list[dict], marker: str | None) -> Row | None:
+    """The claim of this checkout's writer when this session is not it: another live session
+    started here holds a product claim and this one holds none. The product changes here are then
+    the writer's to record and prove."""
+    mine = any(r.status == "claimed" and not records_only(r) for r in my_rows(rows, marker))
+    return None if mine else writer_here(roots, rows, live, marker)
 
 
 def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | None,
              live: list[dict]) -> tuple[list[str], list[str], dict[str, str], str, dict[str, Row]]:
-    """The Recorded rule: (unrecorded, not-counted notes, changed, start note, late). Late maps
-    each unrecorded, uncommitted file changed after you or a live peer here closed its task to
-    that task."""
+    """The Recorded rule: (unrecorded, not-counted notes, changed, start note, late). A checkout
+    has one writer. With a live one here that is not this session, the changes here are the
+    writer's; otherwise a change counts unless a task another session closed since this one
+    started covers it. Late maps each unrecorded, uncommitted file changed after you closed its
+    task to that task."""
     changed, note = session_changes(roots, entry)
-    own = [r for r in my_rows(rows, marker)]
-    peers = {key_of(e["marker"]): e for e in live if e.get("marker") != marker}
-    here = {key for key, e in peers.items() if e.get("work_root") == str(roots.work)}
-    # the closes a rewrite can follow: yours, and those of a live peer here
-    closes = [r for r in rows if r.doc == DONE and (r in own or holder_key(r.claim) in here)]
+    own, writer = my_rows(rows, marker), visiting(roots, rows, live, marker)
+    since = (entry or {}).get("started_at")
     unrecorded, exempt, late = [], {}, {}
     for path, label in sorted(changed.items()):
-        # only a close on or after it excuses a commit
-        day = label.split()[4] if label.startswith("in commit") else ""
+        committed = label.startswith("in commit")
         # a file changed after a close is not its task's
-        if any(covers(row, path, None if day else roots.work) for row in own):
+        root = None if committed else roots.work
+        if any(covers(row, path, root) for row in own):
             continue
-        holder = next((r for r in rows if not (day and r.doc == DONE)
-                       and holder_key(r.claim) in peers and covers(r, path, roots.work)), None)
-        if holder and holder_key(holder.claim) in here:
-            kind = "unverified" if peers[holder_key(holder.claim)].get("unverified") else "live"
-            exempt.setdefault(f"in {holder.id}'s scope, "
-                              f"{'closed' if holder.doc == DONE else 'claimed'} by {kind} peer "
-                              f"{holder.claim.split()[0]} in this checkout", []).append(path)
+        if writer:
+            exempt.setdefault(f"this checkout's writer, {writer.claim.split()[0]} with {writer.id},"
+                              " records the product changes here", []).append(path)
             continue
-        closer = next((r for r in reversed(rows) if day and r.doc == DONE and r.claim
-                       and holder_key(r.claim) != key_of(marker)
-                       and max(re.findall(r"; closed (\d{4}-\d\d-\d\d)[T\d:+-]*;", r.evidence),
-                               default="") >= day and covers(r, path)), None)
+        # an older close excuses nothing made since
+        closer = next((r for r in reversed(rows) if r.doc == DONE and r.claim
+                       and holder_key(r.claim) != key_of(marker) and isinstance(since, int)
+                       and closed_at(r) >= since and covers(r, path, root)), None)
         if closer:
-            exempt.setdefault(f"committed under {closer.id}, "
-                              f"closed by {closer.claim.split()[0]}", []).append(path)
+            exempt.setdefault((f"committed under {closer.id}" if committed
+                               else f"in {closer.id}'s scope") +
+                              f", closed by {closer.claim.split()[0]}", []).append(path)
             continue
-        if holder:
-            label = (label + "; " if label else "") \
-                + f"claimed by {holder.claim.split()[0]} in another worktree, " \
-                  "whose work counts here once merged"
         # a stash, a Git hook, a formatter or an editor save can rewrite closed work later
-        elif not day and (after := next((r for r in reversed(closes) if covers(r, path)), None)):
+        if not committed and (after := next((r for r in reversed(own) if r.doc == DONE
+                                             and covers(r, path)), None)):
             late[path] = after
-            who = "you" if after in own else f"peer {after.claim.split()[0]}"
-            label = (label + "; " if label else "") + f"changed after {who} closed {after.id}"
+            label = (label + "; " if label else "") + f"changed after you closed {after.id}"
         unrecorded.append(f"{path} ({label})" if label else path)
     notes = [f"not counted: {', '.join(paths[:3])}"
              f"{f' and {len(paths) - 3} more' if len(paths) > 3 else ''}: {why}"
@@ -1267,11 +1261,13 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
         if closed and config["verify_command"] else []
     if moved:
         state, why = evidence_state(roots, config)
-        # A claim still held explains a stale check, and so do changes only others made,
-        # so a close whose receipt shows a pass, or records work, stays proven.
-        # The pass is the gate's check, right after the close time; a named check's never counts.
+        # A claim still held explains a stale check, and so do changes only others made, such as
+        # this checkout's writer when this session is not it, so a close whose receipt shows a
+        # pass, or records work, stays proven. The pass is the gate's check, right after the
+        # close time; a named check's never counts.
         excused = any(covers(r, path) for r in held for path in moved) or (
-            state != "fresh" and others_moved(roots, entry, moved, changed, rows, live))
+            state != "fresh" and others_moved(roots, entry, moved, changed,
+                                              bool(visiting(roots, rows, live, marker))))
         unproven = [r.id for r in closed if not excused or not (
             records_only(r) or re.search(r"; closed [^;]*; check pass ", r.evidence))]
         if state != "fresh" and unproven:
@@ -2043,6 +2039,16 @@ def overlapping_claim(rows: list[Row], row: Row, mine: str, replaced: str | None
     return ""
 
 
+def second_writer(roots: Roots, row: Row, other: Row) -> str:
+    """The refusal of a product claim in a checkout that has its writer, with the way on."""
+    name = row.id.lower()
+    return (f"{row.id} would make a second writer in this checkout: {other.claim.split()[0]} "
+            f"holds {other.id} ({', '.join(other.touches)}) here, and a checkout has one writer. "
+            "Work in your own worktree (git worktree add "
+            f"{shlex.quote(f'../{roots.main.name}-{name}')} -b {name}, then start your session "
+            "there and claim), or wait for it to close")
+
+
 def add_task(rows: list[Row], active: Path, text: str, records: str,
              args: argparse.Namespace) -> int:
     source = cell(args.source, "--source") if args.source is not None else ""
@@ -2085,11 +2091,12 @@ def add_task(rows: list[Row], active: Path, text: str, records: str,
 
 
 def edit_task(rows: list[Row], row: Row, active: Path, text: str, args: argparse.Namespace,
-              mine: str, live: set[str], seen: set[str]) -> int:
+              mine: str, live: set[str], seen: set[str], writer: str = "") -> int:
     """Change a row's Scope, After, Done when or Status in place; Task and Pri stay hand edits.
     Only its holder edits a claimed row, and nothing is written unless the edited row passes the
     row checks, waits for no task that waits for it and, while it stays claimed, passes claim's
-    overlap rule for each path new to its scope."""
+    overlap rule for each path new to its scope and its one-writer rule: writer is that refusal
+    when this checkout has another writer."""
     if (args.scope, args.widen, args.after, args.done_when, args.park, args.open) \
             == (None, None, None, None, None, False):
         raise SakoError("edit needs --scope, --widen, --after, --done-when, --park or --open")
@@ -2140,6 +2147,9 @@ def edit_task(rows: list[Row], row: Row, active: Path, text: str, args: argparse
             new = Row(row.id, "tasks", 0, [], {}, touches=[touch])
             if clash := overlapping_claim(rows, new, mine, None, live, seen):
                 raise SakoError(f"{row.id}'s new path {touch} overlaps {clash}edit without {touch}")
+        # a claim on records only that grows into product files makes its holder a writer
+        if writer and records_only(row) and not records_only(edited):
+            raise SakoError(writer)
     atomic_write(active, "\n".join(lines).rstrip() + "\n")
     said = [f"{key} {value}" for key, value in (("scope", ", ".join(edited.touches)),
             ("after", ", ".join(edited.after) or "none"), ("done when", "replaced"))
@@ -2178,7 +2188,9 @@ def cmd_task(args: argparse.Namespace) -> int:
         raise SakoError(f"{args.task_id} needs exactly one row in {runtime_path(roots, active)}")
     row = matches[0]
     if args.command == "edit":
-        return edit_task(rows, row, active, text, args, mine, live, seen)
+        other = writer_here(roots, rows, present, entry["marker"])
+        return edit_task(rows, row, active, text, args, mine, live, seen,
+                         second_writer(roots, row, other) if other else "")
     if faults := row_faults(row, {r.id for r in rows}):
         raise SakoError(faults[0])
     if waiting := [d for d in row.after if d not in done]:
@@ -2208,6 +2220,10 @@ def cmd_task(args: argparse.Namespace) -> int:
             raise SakoError(f"{row.id}'s scope overlaps {clash}narrow "
                             + (f"a Scope in {runtime_path(roots, active)}" if replaced
                                else f"{row.id}'s scope (edit {row.id} --scope PATH)"))
+        # a claim this session already holds made it a writer before
+        if owner != mine and not records_only(row) and (
+                other := writer_here(roots, rows, present, entry["marker"], replaced)):
+            raise SakoError(second_writer(roots, row, other))
         moving = [o.id for o in rows if o.status == "claimed" and o.id != row.id
                   and holder_key(o.claim) == replaced and scopes_overlap(row, o)]
         # its process was hidden from here
@@ -2234,7 +2250,8 @@ def cmd_task(args: argparse.Namespace) -> int:
     moved = changed_since(roots.work, entry["work_start_rev"], list(config["verify_paths"])) \
         if config["verify_command"] else []
     records = records_only(row) and (not moved or others_moved(
-        roots, entry, moved, session_changes(roots, entry)[0], rows, present))
+        roots, entry, moved, session_changes(roots, entry)[0],
+        bool(visiting(roots, rows, present, entry["marker"]))))
     if moved and not records:
         state, why = evidence_state(roots, config)
         if state != "fresh":

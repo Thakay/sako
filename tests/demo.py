@@ -38,7 +38,7 @@ receipt, commits, and a fresh session picks up the next task from the files.
 
 class Demo:
     def __init__(self, root: Path, intro: str = INTRO):
-        self.root, self.lines = root, [intro]
+        self.root, self.where, self.lines = root, root, [intro]
 
     def normalize(self, text: str) -> str:
         text = text.replace(str(self.root.parent), "/work").replace(str(fixture.SAKO), "../sako/sako.py")
@@ -53,7 +53,7 @@ class Demo:
         self.lines.append(text)
 
     def run(self, shown: str, args: list[str], stdin: str | None = None, expect: int = 0) -> str:
-        result = subprocess.run(args, cwd=self.root, env=ENV, input=stdin, capture_output=True, text=True)
+        result = subprocess.run(args, cwd=self.where, env=ENV, input=stdin, capture_output=True, text=True)
         output = (result.stdout + result.stderr).rstrip()
         if result.returncode != expect:
             raise SystemExit(f"{shown}: exit {result.returncode}, expected {expect}\n{output}")
@@ -62,8 +62,14 @@ class Demo:
         return output
 
     def sako(self, *args: str, expect: int = 0) -> str:
-        return self.run("python3 .sako/sako.py " + " ".join(f'"{a}"' if " " in a else a for a in args),
-                        [sys.executable, ".sako/sako.py", *args], expect=expect)
+        # in a linked worktree, the command line its start context prints: the main checkout's kit
+        kit = ".sako/sako.py" if self.where == self.root else (self.root / ".sako/sako.py").as_posix()
+        return self.run(f"python3 {self.normalize(kit)} " + " ".join(f'"{a}"' if " " in a else a for a in args),
+                        [sys.executable, kit, *args], expect=expect)
+
+    def cd(self, where: Path) -> None:
+        self.where = where
+        self.say("```text\n$ cd " + self.normalize(where.as_posix()) + "\n```")
 
     def hook(self, event: str, session: str, expect: int = 0) -> str:
         payload = json.dumps({"session_id": session, "hook_event_name": event})
@@ -146,34 +152,31 @@ or measure parallel speed. Every command output comes from SAKO or Git. Paths,
 dates and times are normalized, and a test checks this transcript for drift.
 
 The request: "Add a greeting by name and show how to use it."
-One session handles the code; another handles the usage guide. After the
-checks pass and the work is committed, a fresh session sees the next task.
-The [README illustration](assets/readme/working-together.svg) uses results
-captured from this run.
+One session handles the code in the main checkout. Another handles the usage
+guide in a worktree of its own, since a checkout has one writer. Both use one
+task file. After the checks pass and the work is merged, a fresh session sees
+the next task. The [README illustration](assets/readme/working-together.svg)
+uses results captured from this run.
 """
 
 
 def coordination() -> tuple[str, dict[str, str]]:
     with tempfile.TemporaryDirectory(prefix="sako-coordination-") as workspace:
-        root = Path(workspace) / "greeting"
+        root, side = Path(workspace) / "greeting", Path(workspace) / "greeting-t-2"
         root.mkdir()
         fixture.git(root, "init", "-q", "-b", "main")
+        check = ("import subprocess, sys\nout = subprocess.run([sys.executable, 'greeting.py', 'Ada'], "
+                 "capture_output=True, text=True).stdout.strip()\nassert out{}, out\nprint('greeting check passed')\n")
         fixture.write(root, {"greeting.py": "import sys\nprint('Hello')\n",
                              "USAGE.md": "# Greeting\nUsage instructions go here.\n",
-                             "check.py": "from pathlib import Path\nimport subprocess, sys\n"
-                             "out = subprocess.run([sys.executable, 'greeting.py', 'Ada'], "
-                             "capture_output=True, text=True).stdout.strip()\n"
-                             "assert out == 'Hello, Ada!', out\n"
-                             "assert 'python3 greeting.py Ada' in Path('USAGE.md').read_text()\n"
-                             "assert 'Hello, Ada!' in Path('USAGE.md').read_text()\n"
-                             "print('greeting and usage checks passed')\n"})
+                             "check.py": check.format(".startswith('Hello')")})
         subprocess.run(["git", "add", "-A"], cwd=root, env=ENV, check=True)
         subprocess.run(["git", "commit", "-qm", "A greeting project"], cwd=root, env=ENV, check=True)
         demo, agents = Demo(root, COORDINATION_INTRO), [fixture.fake_agent() for _ in range(3)]
         captured = {}
         try:
             demo.say("## 1. Prepare the work\n\nInstall without hooks so every session command is visible. "
-                     "The project supplies a check for the greeting and its usage guide.")
+                     "The project supplies a check for the greeting.")
             demo.run("python3 ../sako/sako.py init --client none",
                      [sys.executable, str(fixture.SAKO), "init", "--client", "none"])
             fixture.write(root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "check.py"],
@@ -181,7 +184,7 @@ def coordination() -> tuple[str, dict[str, str]]:
             demo.say('Set `"verify_command": ["python3", "check.py"]` in `.sako/config.json`. '
                      'The two tasks cover different files in the same repository.')
             demo.sako("add", "Greet a visitor by name", "--done-when", "The greeting prints Hello, Ada!",
-                      "--scope", "greeting.py")
+                      "--scope", "greeting.py", "check.py")
             demo.sako("add", "Show how to use the greeting", "--done-when", "The guide shows a command and its output",
                       "--scope", "USAGE.md")
             demo.say("## 2. Check in and claim work\n\nIn the already open code session, run `start` to "
@@ -190,30 +193,46 @@ def coordination() -> tuple[str, dict[str, str]]:
             demo.sako("start", "--session", "demo-code")
             captured["code_claim"] = demo.sako("claim", "T-1", "--session", "demo-code").split(";")[0]
             demo.say("The already open docs session checks in while the code session is still active. "
-                     "Its context shows the peer and points to the remaining task.")
+                     "Its context shows the peer and points to the remaining task. A checkout has one writer, "
+                     "so its claim here is refused, and the refusal names the Git command for a worktree.")
             ENV["SAKO_AGENT_PID"] = str(agents[1])
             demo.sako("start", "--session", "demo-docs")
+            demo.sako("claim", "T-2", "--session", "demo-docs", expect=3)
+            demo.say("The docs session makes that worktree, checks in from it and claims its task. Every "
+                     "worktree uses the main checkout's `.sako/`, so both claims live in one task file.")
+            demo.git("worktree", "add", "-q", "../greeting-t-2", "-b", "t-2")
+            demo.cd(side)
+            demo.sako("start", "--session", "demo-docs")
             captured["docs_claim"] = demo.sako("claim", "T-2", "--session", "demo-docs").split(";")[0]
-            demo.say("Both claims now live in the shared task file. "
-                     "Each session edits its own file: the code prints `Hello, Ada!`, "
-                     "and the guide shows the command and output.\n\n## 3. Check and finish together")
-            fixture.write(root, {"greeting.py": "import sys\nprint(f'Hello, {sys.argv[1]}!')\n",
-                                 "USAGE.md": "# Greeting\n\nRun `python3 greeting.py Ada`.\n\n"
+            demo.say("## 3. Check and finish\n\nThe docs session writes the command and its output into the "
+                     "guide, runs the project's check in its worktree, closes its task and commits on its branch.")
+            fixture.write(side, {"USAGE.md": "# Greeting\n\nRun `python3 greeting.py Ada`.\n\n"
                                  "Output: `Hello, Ada!`\n"})
-            output = demo.sako("verify")
-            captured["check"] = output.splitlines()[0]
+            demo.sako("verify")
             demo.sako("close", "T-2", "--session", "demo-docs", "--evidence",
                       "USAGE.md shows the command and expected greeting; check.py passes")
+            demo.git("add", "--", "USAGE.md")
+            demo.git("commit", "-qm", "Show how to use the greeting")
+            demo.sako("check", "--gate", "--session", "demo-docs")
+            demo.say("In the main checkout, the code session makes the greeting print `Hello, Ada!`, has the "
+                     "check ask for exactly that, and finishes the same way.")
+            demo.cd(root)
             ENV["SAKO_AGENT_PID"] = str(agents[0])
+            fixture.write(root, {"greeting.py": "import sys\nprint(f'Hello, {sys.argv[1]}!')\n",
+                                 "check.py": check.format(" == 'Hello, Ada!'")})
+            output = demo.sako("verify")
+            captured["check"] = output.splitlines()[0]
             demo.sako("close", "T-1", "--session", "demo-code", "--evidence",
                       "greeting.py prints Hello, Ada!; check.py passes")
-            demo.say("Both sessions use the same passing check of the final files. "
-                     "The scripted code session commits the agreed changes. SAKO never commits for it.")
-            demo.git("add", "--", "greeting.py", "USAGE.md")
-            demo.git("commit", "-qm", "Add the named greeting and usage guide")
+            demo.git("add", "--", "greeting.py", "check.py")
+            demo.git("commit", "-qm", "Greet a visitor by name")
+            demo.say("The scripted code session merges the docs branch. SAKO never commits or merges for it. "
+                     "The merge moves the checked content, so the gate asks for a fresh check before this "
+                     "session stops.")
+            demo.git("merge", "-q", "--no-edit", "t-2")
+            demo.sako("check", "--gate", "--session", "demo-code", expect=2)
+            demo.sako("verify")
             demo.sako("check", "--gate", "--session", "demo-code")
-            ENV["SAKO_AGENT_PID"] = str(agents[1])
-            demo.sako("check", "--gate", "--session", "demo-docs")
             demo.say("Each completed task leaves a receipt with its evidence and check result.")
             receipts = demo.run("tail -2 .sako/work/DONE.md", ["tail", "-2", ".sako/work/DONE.md"])
             captured["receipts"] = str(len([row for row in receipts.splitlines() if row.startswith("| T-")]))
@@ -222,7 +241,6 @@ def coordination() -> tuple[str, dict[str, str]]:
             demo.sako("add", "Handle a missing name", "--done-when", "A missing name prints a usage hint",
                       "--scope", "greeting.py")
             demo.sako("end", "--session", "demo-docs")
-            ENV["SAKO_AGENT_PID"] = str(agents[0])
             demo.sako("end", "--session", "demo-code")
             ENV["SAKO_AGENT_PID"] = str(agents[2])
             demo.say("A fresh agent session is opened in the coding tool. It runs `start` to check in "
