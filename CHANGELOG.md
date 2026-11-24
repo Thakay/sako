@@ -5,7 +5,32 @@ Notable changes to SAKO, one entry per release. The format follows
 [Semantic Versioning](https://semver.org/). SAKO is alpha software, so commands and
 file formats can change in any 0.x release.
 
-## [Unreleased]
+## [0.8.1] - 2026-11-23
+
+A fix release. It closes the two known issues of 0.8.0 and settles what the reviews
+of that release left open. The gate tells a commit made in a checkout from a merged
+one, and a claim you still hold excuses a stale check only for what it covers. It
+adds no command, flag or config key, and task records from 0.8.0 still parse. SAKO
+remains alpha software.
+
+From your project's Git repository, install with `uvx sako@0.8.1 init`, or update an
+existing installation with `uvx sako@0.8.1 init --update`.
+
+To update from 0.8.0, follow these steps:
+
+1. Commit the files of every closed task first. A seal that 0.8.0 made for a
+   symlink, a folder or a nested repository is not honored afterwards.
+2. Update with no active work, in the main checkout. The hook command is the same
+   as in 0.8.0, so Codex keeps its trust in SAKO's hooks. In the shared footprint,
+   each branch has its own copy of the kit, so commit the updated files under
+   `.sako/` and bring that commit into every branch before a session works there.
+3. End any session left open across the update, then start it again with the same
+   ID, which keeps its claims and takes a new start record. Do it at a clean point,
+   since its changes from before the new start no longer count. Until then the gate
+   judges that session as 0.8.0 did, and a note says that Git's reflog does not
+   reach its start.
+4. Run `verify` when a check is configured. The new version makes every recorded
+   pass stale.
 
 ### Fixed
 
@@ -135,6 +160,16 @@ file formats can change in any 0.x release.
   renews in the same instant. That session then reads as ended until it starts again,
   which takes a new start record. It needs a session unseen for a week to act in the
   instant another one starts.
+
+### Validation
+
+- Both suites pass on Python 3.10 and 3.12 locally, with 331 tests and 22 scenarios;
+  these counts overlap.
+- Each of the four changes was reviewed alone and the whole release once more, by a
+  reviewer that did not write it. What those reviews found and this release does not
+  fix is in the known issues above or on the limits page.
+- This release was not run by hand on native Windows. The last such run was of
+  0.7.1.
 
 ## [0.8.0] - 2026-11-19
 
@@ -711,3 +746,4 @@ Install from your project's Git repository with `uvx sako init`. To update later
 [0.7.0]: https://github.com/Thakay/sako/releases/tag/v0.7.0
 [0.7.1]: https://github.com/Thakay/sako/releases/tag/v0.7.1
 [0.8.0]: https://github.com/Thakay/sako/releases/tag/v0.8.0
+[0.8.1]: https://github.com/Thakay/sako/releases/tag/v0.8.1
