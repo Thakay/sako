@@ -104,6 +104,10 @@ file formats can change in any 0.x release.
 - A presence entry that names no checkout, as a hand-made one, no longer shows a
   question mark for it. `status` says that no start record applies, and a product
   claim says to run `start` here first.
+- A top-level checked file whose name starts with an opening bracket is a file like
+  any other. Proven had taken it for the stand-in it uses when a start revision is
+  unknown, so such a file left dirty before your start blocked a pause beside a claim
+  you still hold.
 
 ### Known issues
 

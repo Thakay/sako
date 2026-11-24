@@ -2133,6 +2133,38 @@ class Gate(unittest.TestCase):
         self.assertIn("already has a done row from another session", refusal.stderr)
         self.assertFalse(record.exists(), "only a close that writes its receipt records the pass it names")
 
+    def test_a_top_level_file_whose_name_starts_with_a_bracket_is_a_file_and_no_unknown_start(self):
+        """The list of moved paths holds one stand-in for an unknown start, which only its whole text matches."""
+        self.steered_check(paths=())
+        fixture.write(self.root, {"(peer).txt": "left by someone else before the start\n"})
+        self.start("s1")
+        self.close_the_first()
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-11", "--session", "s1"))
+        fixture.write(self.root, {"src/lib.py": "x = 1\n"})
+        self.assertEqual(self.stop("s1")[::2], (0, ""), "the file was dirty before the start and no one moved it since")
+
+    @unittest.skipIf(sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+                     "needs a file its owner cannot read")
+    def test_a_sealed_file_that_is_committed_is_not_read_again_for_its_old_seal(self):
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        # written well before the index, so Git trusts what it recorded and reads no content again
+        was = (self.root / "src/app.py").stat()
+        os.utime(self.root / "src/app.py", ns=(was.st_atime_ns, was.st_mtime_ns - 60 * 10 ** 9))
+        for args in (("verify",), ("close", "T-1", "--evidence", "Prints 2")):
+            self.assertEqual(self.run_in(self.root, *args, session="s1")[0], 0)
+        self.assertEqual(self.seals(), {"T-1": {"src/app.py": sako.fingerprint(self.root, "src/app.py")}})
+        fixture.commit_all(self.root, "Print two")
+        fixture.git(self.root, "config", "core.trustctime", "false")
+        fixture.succeeds(fixture.installed_copy(self.root, "end", "--session", "s1"))
+        self.start("s1")
+        (self.root / "src/app.py").chmod(0)
+        try:
+            self.assertEqual(self.stop("s1")[::2], (0, ""), "it is clean, so the seal left from its close asks no read")
+        finally:
+            (self.root / "src/app.py").chmod(0o644)
+
     def test_committed_names_new_files_so_generated_ones_are_not_committed(self):
         self.start("s1")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))

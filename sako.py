@@ -32,6 +32,8 @@ VERSION = "0.8.0"
 TASK_ID = re.compile(r"\bT-\d+\b")
 MARKER = re.compile(r"sk-\d{4}-[0-9a-f]{12}")
 DONE = "done"
+# stands in the list of moved paths when the start revision is unknown, and is matched whole
+UNKNOWN = "(unknown starting revision; assuming changes)"
 EMPTY_CELL = ("", "\u2014", "-", "\u2013")
 PRIORITIES = ("P1", "P2", "P3")
 COLUMNS = {"tasks": ("ID", "Pri", "Task", "Done when", "Status", "Scope", "After", "Source"),
@@ -847,7 +849,7 @@ def changed_since(root: Path, start_rev: str, paths: list[str]) -> list[str]:
     """Paths changed since start_rev, committed, merged or not, plus new untracked files."""
     if not start_rev or not git(root, "rev-parse", "-q", "--verify", f"{start_rev}^{{commit}}",
                                 check=False):
-        return ["(unknown starting revision; assuming changes)"]
+        return [UNKNOWN]
     # both paths of a rename, as dirty_paths lists them
     changed = set(git(root, "diff", "-z", "--no-renames", "--name-only", start_rev, "--",
                       *paths).split("\0"))
@@ -1051,7 +1053,7 @@ def unexplained(roots: Roots, config: dict, entry: dict | None, moved: list[str]
     # others' edits left uncommitted before the start; a later edit is in changed
     committed -= set((entry or {}).get("dirty_at_start") or {})
     moves = [path for path in moved
-             if path.startswith("(") or path in committed or path in changed]
+             if path == UNKNOWN or path in committed or path in changed]
     mine = [path for path in moves if not any(covers(r, path) for r in held)]
     # only its own work under a claim still held makes a stale check expected, so without it the
     # last pass explains nothing, and a failing run on unchanged content still asks for the check
@@ -1064,7 +1066,7 @@ def unexplained(roots: Roots, config: dict, entry: dict | None, moved: list[str]
         return mine
     # file by file, so a deleted verify_paths entry under the claim is no error here
     return [path for path in mine
-            if path.startswith("(") or checked_as(roots.work, path) != then.get(path, "")]
+            if path == UNKNOWN or checked_as(roots.work, path) != then.get(path, "")]
 
 
 def visiting(roots: Roots, rows: list[Row], live: list[dict], marker: str | None) -> Row | None:
@@ -1090,8 +1092,9 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
     since, done = (entry or {}).get("started_at"), set((entry or {}).get("done_at_start") or ())
     # by task, the closes made in this checkout, each with what it sealed here
     seals = {t: s for t, s in read_json(roots.local / "seals.json").items() if isinstance(s, dict)}
-    closes = {r.id for r in own if r.doc == DONE}
-    sealed = {t: {p for p, f in s.items() if (p in changed or t in closes)
+    # of its own closes only what is still uncommitted, so no clean file is read for an old seal
+    closes, dirty = {r.id for r in own if r.doc == DONE}, set(dirty_paths(roots.work))
+    sealed = {t: {p for p, f in s.items() if (p in changed or t in closes and p in dirty)
                   and fingerprint(roots.work, p) == f} for t, s in seals.items()}
     unrecorded, exempt, shared = {}, {}, False
     for path, label in sorted(changed.items()):
