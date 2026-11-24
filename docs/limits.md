@@ -1,7 +1,7 @@
 # Limits
 
-What SAKO cannot do or can get wrong, and what to do about it. Behavior is defined
-in [the method](../SAKO.md); evidence is in [validation](validation.md).
+What SAKO cannot do or can get wrong, and what to do about it. Behavior is in
+[the method](../SAKO.md), evidence in [validation](validation.md).
 
 ## Environment
 
@@ -15,20 +15,20 @@ that `python --version` in Git Bash shows 3.10 or newer, since the python.org
 installer leaves Python off the path unless you tick that box and the Microsoft
 Store's placeholder only prints a message. From PowerShell, `verify` can find WSL's
 `bash`, so give Git's `bash.exe` by its full path. A failed `init --repo URL` on
-Windows can leave read-only Git files in `.sako/`; delete the folder before trying
-again. WSL and native Windows on one clone count as two checkouts whose locks do not
-interlock, so use one of them per clone.
+Windows can leave read-only Git files in `.sako/`; delete the folder and retry. WSL
+and native Windows on one clone count as two checkouts whose locks do not interlock,
+so use one of them per clone.
 
 ## Local coordination
 
-The ledger lock serializes SAKO's own writes across the worktrees, not code edits,
-hand edits of the records, commits, the staging area or other clones, so run shared
-Git operations one at a time. On Windows, a read during another session's `close`
-can show the task in both records for a moment, so check again.
+The ledger lock serializes SAKO's own writes across worktrees, not code edits, hand
+edits of the records, commits, the staging area or other clones, so run shared Git
+operations one at a time. On Windows, a read during another session's `close` can
+briefly show the task in both records, so check again.
 
-A pass from another checkout that counts here, even a removed worktree's while its
-folder in `.sako/state/` remains, proves nothing about that checkout's ignored files
-and dependencies. The gate judges only the checkout it runs in.
+A pass from another checkout that counts here, even a removed worktree's kept in
+`.sako/state/`, proves nothing about that checkout's ignored files and dependencies.
+The gate judges only the checkout it runs in.
 
 In a shared checkout the gate sees what changed, not who changed it. Only the
 checkout's writer is asked about every product change there, whoever made it.
@@ -45,7 +45,8 @@ commit here, and where Git's reflog does not reach your start, as for a start by
 another checkout, a session back from an end or a lapsed lease, or an update from
 0.7.1 can leave two in one; the ledger check names them, and each gate shows the
 other's files until one moves. Each start in another checkout takes a new start
-record.
+record. A start hook counts as a start where its shell is, since what folder its
+event names after a `cd`, a compact or a resume is not verified.
 
 In the shared footprint each branch keeps its own `.sako/`, so worktrees on
 different branches can allocate the same task ID, cannot see each other's claims,
@@ -54,8 +55,8 @@ writer at a time; two machines writing at once collide on numbers and see each
 other's claims as stale. A team that needs more can
 [move to a tracker](move-to-a-tracker.md).
 
-A live session quiet for two hours reads as ended, and others can then take over
-its claims with a reason. A crashed session, or one without hooks that never ran
+A live session quiet for two hours reads as ended, so others can take over its
+claims with a reason. A crashed session, or one without hooks that never ran
 `end`, reads as live for two hours and locks product claims in its checkout until
 then, or until the owner confirms it stopped and someone runs
 `end --session <its ID>`. A copy of `.sako/state/` with new file times revives its
@@ -77,14 +78,14 @@ outside the covered files, services, secrets and the environment, so cover
 manifests and lockfiles, and check external behavior yourself. With
 `core.fileMode` set to false, a change to only the executable bit of a file clean at
 the start makes the check stale without counting as your change, so run `verify`
-after one. Large trees slow hashing, `start` and the gate, and no large-repository
-benchmark exists; narrow `verify_paths` if they are slow.
+after one. Large trees slow hashing, `start` and the gate, and none was benchmarked;
+narrow `verify_paths` if they are slow.
 
 Whether a closed task still covers an uncommitted file goes by what the file holds,
 not by when it was written. A task closed by hand, by an earlier release, in or
 from another checkout or before `.sako/state/` was deleted has no seal here, so it
-covers its files only once committed. A file stashed while another task closes in
-the checkout loses its seal and counts as unrecorded once popped.
+covers its files only once committed. A file stashed while another task closes here
+loses its seal and counts as unrecorded once popped.
 
 The gate judges ownership at the stop, not at each write, so a late claim covers
 earlier edits and a task you closed covers your later commits in its scope. It
@@ -124,15 +125,15 @@ create applications or commit.
 | Dashboards or web boards | Decisions cannot be made from `next` and `status` in a real project |
 | A required decision file | Conflicting recorded defaults cause repeated observed errors |
 | A global install or host plugin | Several maintained installations need coordinated updates |
-| Automatic records commits in the repo footprint | Real use shows that the manual records commit at finish hurts |
-| A records location outside the project | Someone needs ledgers that the repo footprint's remote cannot serve |
+| Automatic records commits in the repo footprint | Real use shows the manual records commit at finish hurts |
+| A records location outside the project | Someone needs ledgers the repo footprint's remote cannot serve |
 | User-level hooks for worktrees a harness creates | Harness-made worktrees need the gate and a per-worktree `init` is not possible |
 | Sync through a hidden ref on the code's remote | Sharing through a second remote proves too heavy |
 | Hooks in tracked client settings, for the shared footprint | A shared clone needs the gate before its own `init`, and both clients' review of committed hooks is verified |
-| Bare-repository layouts | Someone with a bare or separate-Git-folder layout asks for it |
+| Bare or separate-Git-folder layouts | Someone asks for one |
 | A `sako` command on your PATH that runs the project's copy | People often type `uvx sako <verb>` or install the package as a tool |
 | Liveness read from the agent's process, or a lease length you set | The two-hour lease misjudges live or ended sessions in real use |
-| Hooks for Codex on Windows, which runs them in PowerShell | Codex for Windows can be tried, or a Windows Codex user asks |
-| Python 3.9, which a stock Mac ships | A macOS user on Apple's `python3` asks for it |
+| Hooks for Codex on Windows | Codex for Windows can be tried, or a Windows Codex user asks |
+| Python 3.9 | A macOS user on Apple's `python3` asks for it |
 
 A [proposal](../CONTRIBUTING.md#propose-a-change) for one shows the observed need.

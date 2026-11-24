@@ -77,6 +77,33 @@ file formats can change in any 0.x release.
   uncommitted, is now asked for whether or not it was dirty at your start. No other
   session is asked for it, and a file changed since the seal stays under Recorded, as
   before. 0.8.0 had this gap.
+- The finding for two writers in one checkout says who acts. It names the writer whose
+  start there is the newest, by the start time its presence entry holds, to park, open
+  or close its product claims or to commit and move to a worktree of its own. It also
+  names the `end --session` command for that session, for use once the owner confirms
+  it stopped. It named no one before. So when a writer from another checkout started
+  there, the writer that was there first was blocked with no word on who moves, and a
+  writer beside one that crashed within its lease had no way out. It still blocks each
+  writer's stop. When two writers share the newest start time, it names neither, as
+  before.
+- A file no longer shares a fingerprint with a symlink, a plain folder or a nested
+  repository. A file that held `link:` and a link's target, the word `folder`, or
+  `commit:` and a commit had the same fingerprint as that link, folder or repository,
+  so a start record or a seal missed the swap. A file's own fingerprint is as before,
+  so what 0.8.0 recorded for files still matches. What 0.8.0 recorded for a symlink, a
+  folder or a nested repository no longer matches. Under a start record from 0.8.0,
+  such a path counts as changed until the first start after the update takes a new
+  record. Under a seal from 0.8.0, it counts as unrecorded until it is committed, as
+  the files of a task closed before the update do.
+- In the shared footprint the refusal of a second writer says to commit the records
+  first. The new worktree's branch takes its own copy of them from the last commit, so
+  a row added or claimed since was missing there.
+- When files changed after their close belong to more than one closed task, the
+  Recorded fix offers each task's commit with that task's own files. It offered only
+  the first task's before.
+- A presence entry that names no checkout, as a hand-made one, no longer shows a
+  question mark for it. `status` says that no start record applies, and a product
+  claim says to run `start` here first.
 
 ### Known issues
 
@@ -84,6 +111,20 @@ file formats can change in any 0.x release.
   Recorded covers a committed file by the task's scope alone. The seal that tells a
   closed task's uncommitted files from later edits lasts only until the file is
   committed. 0.8.0 had the same gap. The limits page states it.
+- A hook judges the checkout its shell is in, not the folder its event names, so a
+  start hook run from another checkout, as after a `cd` and a compact, moves the
+  session's start record and its writer status there. What Claude Code and Codex name
+  in the event after a `cd`, a compact or a resume is not verified, so SAKO does not
+  follow it. 0.8.0 had the same gap. The limits page states it.
+- A seal is kept by checkout and task ID. So a new worktree that reuses a removed
+  one's name inherits its seals, and in the shared footprint a task with the same ID
+  on another branch can use a seal made for the first. A seal covers only a file in
+  the task's scope that holds exactly the sealed bytes, so either case needs the same
+  bytes under the same name.
+- A `start` that deletes presence unseen for a week can delete an entry its session
+  renews in the same instant. That session then reads as ended until it starts again,
+  which takes a new start record. It needs a session unseen for a week to act in the
+  instant another one starts.
 
 ## [0.8.0] - 2026-11-19
 

@@ -144,6 +144,24 @@ class Findings(unittest.TestCase):
         with self.assertRaisesRegex(sako.SakoError, "escapes"):
             sako.scope("../x")
 
+    def test_two_writers_name_the_newest_start_to_act_and_neither_when_no_one_start_is_newest(self) -> None:
+        rows = tasks(row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"),
+                     row("T-2", status="claimed", claim="sk-0101-bbbbbbbbbbbb", touches="`docs/`"))
+
+        def finding(*starts) -> str:  # each writer's entry with the start time it holds, if any
+            writers = {key: (dict({"session_id": f"id {key[0]}"}, **({} if at is None else {"started_at": at})), [held])
+                       for key, at, held in zip(("aaaaaaaaaaaa", "bbbbbbbbbbbb"), starts, rows)}
+            return sako.ledger_findings(rows, None, None, writers)[1][0]
+
+        head = ("this checkout has 2 writers, sk-0101-aaaaaaaaaaaa with T-1 and sk-0101-bbbbbbbbbbbb with T-2, but a checkout "
+                "has one; ")
+        acts = " parks, opens or closes its product claims, or commits and moves to a worktree of its own"
+        self.assertEqual(finding(200, 100), f"{head}sk-0101-aaaaaaaaaaaa started here last, so it{acts}; once the owner "
+                                            "confirms that session stopped, end it (end --session 'id a')")
+        for starts in ((100, 100), (None, 100), (100, "noon")):
+            with self.subTest(starts=starts):
+                self.assertEqual(finding(*starts), f"{head}one of them{acts}", "the start time alone picks, or nothing does")
+
     def test_records_only_means_every_scope_entry_lies_in_the_kit_folder(self) -> None:
         for touches, expected in (("`.sako/work/notes/`", True), ("`.sako`, `./.sako/work/plan.md`", True),
                                   ("`.sako/work/`, `src/`", False), ("`.sakonotes/`", False), ("`.`", False),

@@ -428,7 +428,8 @@ def row_faults(row: Row, known: set[str]) -> list[str]:
 
 def ledger_findings(rows: list[Row], live_markers: set[str] | None = None,
                     bystander: str | None = None,
-                    writers: dict[str, list[Row]] | None = None) -> tuple[list[str], list[str]]:
+                    writers: dict[str, tuple[dict, list[Row]]] | None = None
+                    ) -> tuple[list[str], list[str]]:
     """Consistency findings over the records, each with its fix, as two lists; never edits rows.
     The second holds the notes, findings only about sessions other than the bystander (the asking
     session, whose key may be given): their stale claims, the overlaps none of its claims is in,
@@ -464,11 +465,17 @@ def ledger_findings(rows: list[Row], live_markers: set[str] | None = None,
                     + (f"yours (edit {own} --scope PATH)" if own else "the scopes"))
     if writers and len(writers) > 1:  # left by a hand edit, a lapse or end and return, an update
         named = listing([f"{held[0].claim.split()[0]} with {', '.join(r.id for r in held)}"
-                         for held in writers.values()])
+                         for _, held in writers.values()])
+        # the one to act started here last, by the start time the entries hold, unless two share it
+        when = lambda entry: t if isinstance(t := entry.get("started_at"), int) else -1
+        (before, _), (entry, held) = sorted(writers.values(), key=lambda w: when(w[0]))[-2:]
+        last = when(entry) > when(before) >= 0
         (out if bystander in writers else others).append(
-            f"this checkout has {len(writers)} writers, {named}, but a checkout has one; one of "
-            "them parks, opens or closes its product claims, or commits and moves to a worktree "
-            "of its own")
+            f"this checkout has {len(writers)} writers, {named}, but a checkout has one; "
+            + (f"{held[0].claim.split()[0]} started here last, so it" if last else "one of them")
+            + " parks, opens or closes its product claims, or commits and moves to a worktree of "
+            "its own" + (f"; once the owner confirms that session stopped, end it (end --session "
+                         f"{shlex.quote(str(entry.get('session_id') or 'ID'))})" if last else ""))
     return out, others
 
 
@@ -884,22 +891,22 @@ def own_line(roots: Roots, config: dict, rows: list[Row]) -> str:
     return "your rows: " + ("; ".join(parts) or "none")
 
 
-def writers(roots: Roots, rows: list[Row], live: list[dict]) -> dict[str, list[Row]]:
-    """By session key, the product claims of each live session that last started in this checkout,
+def writers(roots: Roots, rows: list[Row], live: list[dict]) -> dict[str, tuple[dict, list[Row]]]:
+    """By key, the entry and product claims of each live session that last started in this checkout,
     which make it a writer there; a claim on records only makes none. A checkout has one writer."""
-    here = {key_of(e.get("marker")) for e in live if e.get("work_root") == str(roots.work)}
+    here = {key_of(e.get("marker")): e for e in live if e.get("work_root") == str(roots.work)}
     held: dict[str, list[Row]] = {}
     for row in rows:
         if row.status == "claimed" and holder_key(row.claim) in here and not records_only(row):
             held.setdefault(holder_key(row.claim), []).append(row)
-    return held
+    return {key: (here[key], claims) for key, claims in held.items()}
 
 
 def writer_here(roots: Roots, rows: list[Row], live: list[dict], marker: str | None,
                 skip: str | None = None) -> Row | None:
     """A product claim of this checkout's writer when that is another session than this one. Skip
     names a holder a takeover replaces."""
-    return next((held[0] for key, held in writers(roots, rows, live).items()
+    return next((held[0] for key, (_, held) in writers(roots, rows, live).items()
                  if key not in (key_of(marker), skip)), None)
 
 
@@ -927,19 +934,20 @@ def peer_lines(roots: Roots, rows: list[Row], me: str | None) -> list[str]:
 
 def fingerprint(root: Path, relative: str) -> str:
     """What a path holds now: a file's bytes and executable bit, a symlink's target, the commit of a
-    submodule or nested repository, a plain folder, whose files Git lists apart, or absent."""
-    path = root / relative
+    submodule or nested repository, a plain folder, whose files Git lists apart, or absent. Only a
+    file's is a bare hash, the one 0.8.0 wrote, so no file can pass for another kind."""
+    path, kind = root / relative, ""
     if path.is_symlink():
-        data = b"link:" + os.readlink(path).encode("utf-8", "surrogateescape")
+        kind, data = "link:", os.readlink(path).encode("utf-8", "surrogateescape")
     elif path.is_file():
         # the bit Git tracks, which the stamp counts too
         data = path.read_bytes() + (b"\0exec" if path.stat().st_mode & 0o100 else b"")
     elif path.is_dir():  # in a plain folder, Git would name the enclosing repository's HEAD
-        data = b"commit:" + git(path, "rev-parse", "HEAD", check=False).encode() \
-            if (path / ".git").exists() else b"folder"
+        kind, data = ("commit:", git(path, "rev-parse", "HEAD", check=False).encode()) \
+            if (path / ".git").exists() else ("folder:", b"")
     else:
         return "absent"
-    return hashlib.sha256(data).hexdigest()[:16]
+    return kind + hashlib.sha256(data).hexdigest()[:16]
 
 
 # a checkout's HEAD reflog, newest entry first: the commit, its date, the entry's time, the action
@@ -1299,12 +1307,15 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
         fix = (f"if this change is {task.id} ({task.task}), claim it: "
                f"{sako} claim {task.id} --session {session}; "
                f"otherwise record it: {fix}") if task else fix
-        if late:
-            done = next(iter(late.values()))
-            files = " ".join(shlex.quote(p) for p, row in late.items() if row is done)
-            fix = (f"if the content is still {done.id}'s work, commit it under that task once "
-                   f"commits are allowed (git add -- {files}, then git commit -m "
-                   f"{shlex.quote(done.task)}); for new work: {fix}")
+        if late:  # each closed task with its own files, in the order first named
+            tasks = {row.id: row for row in late.values()}
+            offers = [f"(git add -- {' '.join(shlex.quote(p) for p in late if late[p].id == t)}, "
+                      f"then git commit -m {shlex.quote(row.task)})" for t, row in tasks.items()]
+            fix = (f"if the content is still {next(iter(tasks))}'s work, commit it under that task "
+                   f"once commits are allowed {offers[0]}"
+                   + "".join(f"; if it is still {task}'s, under that one {offer}"
+                             for task, offer in zip(list(tasks)[1:], offers[1:]))
+                   + f"; for new work: {fix}")
         problems.append(("Recorded: " + (f"{note}: uncommitted and" if note else
                                          "changed this session but") +
                          " covered by no task you claimed or closed: " + ", ".join(shown[:8]) +
@@ -1406,8 +1417,8 @@ def render_status(roots: Roots, config: dict, session_id: str | None) -> str:
         rev, seen = entry.get("work_start_rev"), entry["seen"]
         you = f"you: {marker} since {entry['started']} on {entry['branch']}; " + (
             f"work started at {rev[:9]}" if rev is not None else
-            f"last started in {Path(entry.get('work_root') or '?').as_posix()}, so no start record "
-            "applies here")
+            (f"last started in {Path(root).as_posix()}, so " if (root := entry.get("work_root"))
+             else "") + "no start record applies here")  # a hand-made entry names no checkout
         # status renews nothing, so a lapsed lease shows here until a command that acts renews it
         lines.append(you if abs(time.time() - seen) < LEASE else
                      f"{you}; last seen {minute(seen)}, past the lease, so your claims read as "
@@ -2110,12 +2121,14 @@ def overlapping_claim(rows: list[Row], row: Row, mine: str, replaced: str | None
 
 def second_writer(roots: Roots, row: Row, other: Row) -> str:
     """The refusal of a product claim in a checkout that has its writer, with the way on."""
-    name = row.id.lower()
+    name, shared = row.id.lower(), read_json(roots.home / MANIFEST).get("footprint") == "shared"
     return (f"{row.id} would make a second writer in this checkout: {other.claim.split()[0]} "
             f"holds {other.id} ({', '.join(other.touches)}) here, and a checkout has one writer. "
             "Work in your own worktree (git worktree add "
             f"{shlex.quote(f'../{roots.main.name}-{name}')} -b {name}, then run uvx sako init "
-            "in it to wire its hooks, and start a session there to claim), or wait for it to close")
+            "in it to wire its hooks, and start a session there to claim), or wait for it to close"
+            + (". In the shared footprint that branch takes its own copy of the records, so commit "
+               "them first" if shared else ""))
 
 
 def elsewhere(roots: Roots, row: Row, entry: dict, held: list[str]) -> str:
@@ -2123,8 +2136,11 @@ def elsewhere(roots: Roots, row: Row, entry: dict, held: list[str]) -> str:
     in, where the claim would make it a writer; empty when it last started here. Held names the
     product claims that keep it a writer there, so it is not sent to start here beside them."""
     last, session = entry.get("work_root"), shlex.quote(str(entry.get("session_id") or "ID"))
+    if not last:  # a hand-made entry names no checkout
+        return f"{row.id} would make this session a writer, but it has not started here; run " \
+            f"start here first (start --session {session})"
     return "" if last == str(roots.work) else (
-        f"{row.id} would make this session a writer in {Path(last or '?').as_posix()}, where it "
+        f"{row.id} would make this session a writer in {Path(last).as_posix()}, where it "
         "last started, not here. Run the command there" + (
             f", where {', '.join(held)} keeps it a writer" if held else
             f", or run start here first (start --session {session})"))

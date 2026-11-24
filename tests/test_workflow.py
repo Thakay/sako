@@ -848,7 +848,7 @@ class Workflow(unittest.TestCase):
         context = self.assert_ok(fixture.cli(self.root, "start", session="reader"))
         for view, out in (("start", context), ("status", self.assert_ok(self.run_cli("status", session="reader")))):
             with self.subTest(view=view):
-                self.assertIn(f" on side since ", out)
+                self.assertIn(" on side since ", out)
                 self.assertRegex(out, rf"(?m)^  peer {sako.marker_for('peer-side')} .*; in {re.escape(side.as_posix())} -> no claim$")
                 self.assertRegex(out, rf"(?m)^  peer {sako.marker_for('peer-here')} .*; in this checkout -> no claim$")
                 self.assertNotIn("commit(s) since its start", out)

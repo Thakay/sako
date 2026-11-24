@@ -299,6 +299,7 @@ class Footprint(KitCase):
         printed = re.search(r"\((git worktree add [^,]*), then run (uvx sako init) in it to wire its hooks, and start a "
                             r"session there to claim\)", refusal.stderr)
         self.assertTrue(printed, refusal.stderr)
+        self.assertTrue(refusal.stderr.endswith("), or wait for it to close\n"), "the shared footprint's step is not said here")
         subprocess.run(shlex.split(printed[1]), cwd=self.root, env=fixture.ENV, check=True, capture_output=True)
         side = self.base / "app-t-2"
         self.assertFalse((side / sako.hook_file("claude")).exists(), "a new worktree has no hooks of its own")
@@ -702,6 +703,27 @@ class SharedFootprint(KitCase):
         self.assertIn(fix, gate.stderr)
         sh(self.root, fix.replace(", then ", " && "))  # the two commands, in order
         fixture.succeeds(fixture.installed(self.root, "check", "--gate", session="sh-s"))
+
+    def test_the_second_writer_refusal_says_to_commit_the_records_first_since_the_new_branch_takes_its_own_copy(self):
+        """A branch made from the last commit holds no row added or claimed since, so the task can be claimed there once
+        the records are committed."""
+        self.share()
+        for task, path in (("App", "src/"), ("Guide", "README.md")):
+            fixture.succeeds(fixture.installed(self.root, "add", task, "--done-when", "Read back", "--scope", path))
+        for session in ("writer", "second"):
+            fixture.succeeds(fixture.installed(self.root, "start", session=session))
+        fixture.succeeds(fixture.installed(self.root, "claim", "T-1", session="writer"))
+        refusal = fixture.installed(self.root, "claim", "T-2", session="second")
+        self.assertEqual(refusal.returncode, 3, refusal.stderr)
+        self.assertTrue(refusal.stderr.endswith(", or wait for it to close. In the shared footprint that branch takes its own "
+                                                "copy of the records, so commit them first\n"), refusal.stderr)
+        sh(self.root, "git add -- .sako/work/TASKS.md && git commit -qm 'SAKO records' -- .sako/work/TASKS.md")
+        subprocess.run(shlex.split(re.search(r"\((git worktree add .*?),", refusal.stderr)[1]), cwd=self.root,
+                       env=fixture.ENV, check=True, capture_output=True)
+        side = self.base / "app-t-2"
+        fixture.succeeds(fixture.seed(side))
+        fixture.succeeds(fixture.installed(side, "start", session="second"))
+        fixture.succeeds(fixture.installed(side, "claim", "T-2", session="second"))
 
     def test_the_shared_records_commit_line_commits_only_the_records_by_name(self):
         self.share()

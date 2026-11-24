@@ -712,6 +712,37 @@ class Gate(unittest.TestCase):
         self.assertIn(f"not here. Run the command there, where T-2 keeps it a writer\n", refusal.stderr,
                       "with a product claim it is not sent to start here, which would make a second writer beside s1")
 
+    def test_a_start_hook_starts_the_session_where_its_shell_is_whatever_folder_its_event_names(self):
+        """A documented limit (docs/limits.md). What the clients name after a cd, a compact or a resume is not verified, so
+        the hook does not follow the event's folder."""
+        linked = self.base / "linked"
+        fixture.git(self.root, "worktree", "add", "-q", str(linked))
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        payload = {"session_id": "s1", "hook_event_name": "SessionStart", "source": "compact", "cwd": str(self.root)}
+        code, out, err = fixture.cli(linked, "hook", stdin=json.dumps(payload))
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(f" work {linked.resolve().as_posix()} (", out.splitlines()[0], "the checkout of the shell")
+        self.assertIn(f"; last started in {linked.resolve().as_posix()}, so no start record applies here\n",
+                      self.run_in(self.root, "status", session="s1")[1], "the start record and the writer's place moved")
+
+    def test_an_entry_that_names_no_checkout_is_said_to_have_none_and_no_question_mark_stands_for_one(self):
+        """A hand-made entry has no work_root, since every release since 0.6.0 writes one."""
+        path = fixture.entry_path(self.root, "s1")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"marker": sako.marker_for("s1"), "session_id": "s1",
+                                    "started": "2026-01-01T09:00:00+0000", "branch": "main"}))
+        code, out, err = self.run_in(self.root, "status", session="s1")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(f"\nyou: {sako.marker_for('s1')} since 2026-01-01T09:00:00+0000 on main; no start record applies here\n",
+                      out)
+        refusal = fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1")
+        self.assertEqual(refusal.returncode, 3, refusal.stdout + refusal.stderr)
+        self.assertEqual(refusal.stderr, "sako: T-1 would make this session a writer, but it has not started here; run start "
+                                         "here first (start --session s1)\n")
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+
     def test_a_close_run_where_the_session_did_not_last_start_seals_nothing_there(self):
         """Another session writes there, so a file of its own in the closed task's scope stays its own to record."""
         side = self.base / "side"
@@ -830,15 +861,20 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.seals(), {"T-2": {}}, "a records task seals no product file, and its close is named")
 
     def test_two_writers_in_one_checkout_are_named_however_they_arose(self):
-        finding = (f"this checkout has 2 writers, {sako.marker_for('s1')} with T-1 and {sako.marker_for('s2')} with T-2, but a "
-                   "checkout has one; one of them parks, opens or closes its product claims, or commits and moves to a "
-                   "worktree of its own")
-        for way in ("an end and a resume", "a lapsed lease", "a hand edit"):
+        """The writer whose start record here is newer, by the start time its entry holds, is named to act, with the end
+        that removes it once the owner confirms it stopped. A return after an end takes a new start record; one after a
+        lapse keeps its own."""
+        for way, last in (("an end and a resume", "s1"), ("a lapsed lease", "s2"), ("a hand edit", "s2")):
+            finding = (f"this checkout has 2 writers, {sako.marker_for('s1')} with T-1 and {sako.marker_for('s2')} with T-2, "
+                       f"but a checkout has one; {sako.marker_for(last)} started here last, so it parks, opens or closes its "
+                       "product claims, or commits and moves to a worktree of its own; once the owner confirms that session "
+                       f"stopped, end it (end --session {last})")
             with self.subTest(way):
                 fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(fixture.row("T-1"),
                                                                                 fixture.row("T-2", touches="`docs/`"))})
                 self.start("s1")
                 self.start("s2")
+                fixture.started_ago(self.root, "s2" if last == "s1" else "s1")  # a minute apart, whatever the clock does
                 if way == "a hand edit":  # as two disjoint claims an update from 0.7.1 can bring into one checkout
                     fixture.claim(self.root, "T-1", "s1")
                     fixture.claim(self.root, "T-2", "s2", touches="`docs/`")
@@ -867,6 +903,29 @@ class Gate(unittest.TestCase):
                     fixture.succeeds(fixture.installed_copy(self.root, "end", "--session", session))
                 fixture.git(self.root, "checkout", "--", "src/app.py")
                 (self.root / "docs/x.md").unlink()
+
+    def test_a_writer_from_elsewhere_that_starts_here_is_named_to_act_and_the_end_named_frees_the_writer_left_blocked(self):
+        """A session that holds a product claim in its own worktree and starts where another writes makes two writers. The
+        finding names the newcomer to act, since it started there last. Once it crashes inside its lease, the writer that
+        was there first ends it, on the owner's word, with the command the finding names."""
+        side = self.base / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        self.start("s1")
+        fixture.started_ago(self.root, "s1")  # a minute before the other's start here, whatever the clock does
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        self.start("s2", where=side)
+        fixture.succeeds(fixture.installed_copy(side, "claim", "T-2", "--session", "s2"))
+        self.start("s2")  # here, with the claim it made there
+        named = (f"; {sako.marker_for('s2')} started here last, so it parks, opens or closes its product claims, or commits "
+                 "and moves to a worktree of its own; once the owner confirms that session stopped, end it (end --session s2)\n")
+        for session in ("s1", "s2"):
+            code, _, err = self.stop(session)
+            self.assertEqual(code, 2, err)
+            self.assertIn(named, err, "each writer is told the same one acts")
+        ending = re.search(r"end it \((end --session \S+)\)", err)[1].split()
+        fixture.succeeds(fixture.installed_copy(self.root, *ending))  # s2 crashed and runs nothing more
+        self.assertNotIn("writers", self.run_in(self.root, "check")[1])
+        self.assertEqual(self.stop("s1")[:2], (0, ""), "the writer that was there first goes on")
 
     def test_not_counted_notes_name_three_paths_then_how_many_more_under_the_verdict_with_one_caveat_after_them(self):
         self.start("s1")
@@ -1334,6 +1393,61 @@ class Gate(unittest.TestCase):
         fixture.commit_all(self.root, "A package")
         self.assertEqual(self.stop("s1")[:2], (0, ""))
 
+    def test_no_file_shares_a_fingerprint_with_a_folder_or_a_nested_repository_and_a_files_own_stays_as_0_8_0_wrote_it(self):
+        """Only a file's fingerprint is a bare hash, the one a start record or a seal of 0.8.0 holds, so no file matches a
+        plain folder or a nested repository, whatever text it holds."""
+        (self.root / "pkg").mkdir()
+        fixture.write(self.root, {"pkg/__init__.py": "x = 1\n", "folder.txt": "folder"})
+        nested = self.root / "tools"
+        nested.mkdir()
+        fixture.git(nested, "init", "-q", "-b", "main")
+        head = fixture.commit_all(nested, "Nested")
+        fixture.write(self.root, {"commit.txt": f"commit:{head}"})
+        prints = {name: sako.fingerprint(self.root, name) for name in ("pkg", "folder.txt", "tools", "commit.txt")}
+        self.assertNotEqual(prints["pkg"], prints["folder.txt"])
+        self.assertNotEqual(prints["tools"], prints["commit.txt"])
+        (self.root / "folder.txt").chmod(0o755)  # executable, where the platform keeps the bit
+        for name in ("src/app.py", "folder.txt"):
+            path = self.root / name
+            data = path.read_bytes() + (b"\0exec" if path.stat().st_mode & 0o100 else b"")
+            self.assertEqual(sako.fingerprint(self.root, name), hashlib.sha256(data).hexdigest()[:16], name)
+
+    def test_a_folder_dirty_at_the_start_that_becomes_a_file_holding_the_word_folder_counts_as_changed(self):
+        fixture.write(self.root, {"src/tool": "print(1)\n"})
+        fixture.commit_all(self.root, "A tool")
+        (self.root / "src/tool").unlink()  # a package of the same name, uncommitted at the start
+        fixture.write(self.root, {"src/tool/__init__.py": "print(1)\n"})
+        self.start("s1")
+        (self.root / "src/tool/__init__.py").unlink()
+        (self.root / "src/tool").rmdir()
+        fixture.write(self.root, {"src/tool": "folder"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("src/tool (edited after start; already dirty at start)", err)
+
+    @unittest.skipUnless(fixture.symlinks(), "creating symlinks needs a privilege here")
+    def test_a_link_swapped_for_a_file_that_holds_its_target_after_link_is_a_change_to_a_start_record_and_to_a_seal(self):
+        """A symlink's fingerprint names its kind, so a file that holds link: and the target differs from it."""
+        (self.root / "docs").mkdir()
+        (self.root / "docs/alias.md").symlink_to("guide.md")  # dirty at the start
+        self.start("s1")
+        (self.root / "docs/alias.md").unlink()
+        fixture.write(self.root, {"docs/alias.md": "link:guide.md"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("covered by no task you claimed or closed: docs/alias.md (edited after start; already dirty at start)", err)
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        (self.root / "src/alias.py").symlink_to("app.py")
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Linked", "--session", "s1"))
+        self.assertIn("src/alias.py", self.seals()["T-1"])
+        (self.root / "src/alias.py").unlink()
+        fixture.write(self.root, {"src/alias.py": "link:app.py"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("src/alias.py (changed after you closed T-1)", err)
+        self.assertNotIn("Committed: T-1", err, "the seal no longer matches, so the file is not the closed task's to commit")
+
     def test_a_file_stashed_while_another_task_closes_loses_its_seal(self):
         """A documented limit (docs/limits.md). A close keeps an earlier seal only while its file stays uncommitted with
         the sealed bytes, so the seals stay as many as the uncommitted files."""
@@ -1387,6 +1501,24 @@ class Gate(unittest.TestCase):
                       "once commits are allowed (git add -- src/app.py src/lib.py, then git commit -m 'Invented task'); for new "
                       f"work: {sako.PYTHON} .sako/sako.py add \"WHAT CHANGED\" --done-when \"HOW TO CHECK IT\" --scope notes.txt, "
                       "then claim it; for a change that is not yours", err, "only the files in the closed task's scope")
+
+    def test_files_rewritten_after_the_closes_of_two_tasks_are_each_offered_their_commit_under_their_own_task(self):
+        fixture.write(self.root, {".sako/work/TASKS.md": fixture.ledger(
+            fixture.row("T-1", "Change the app", touches="`src/`"), fixture.row("T-2", "Write the notes", touches="`docs/`"))})
+        self.start("s1")
+        for task, path in (("T-1", "src/app.py"), ("T-2", "docs/x.md")):
+            fixture.succeeds(fixture.installed_copy(self.root, "claim", task, "--session", "s1"))
+            fixture.write(self.root, {path: "first\n"})
+            fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+            fixture.succeeds(fixture.installed_copy(self.root, "close", task, "--evidence", "Written", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "formatted\n", "docs/x.md": "formatted\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("covered by no task you claimed or closed: docs/x.md (changed after you closed T-2), src/app.py (changed "
+                      "after you closed T-1)\n    fix: if the content is still T-2's work, commit it under that task once commits "
+                      "are allowed (git add -- docs/x.md, then git commit -m 'Write the notes'); if it is still T-1's, under that "
+                      f"one (git add -- src/app.py, then git commit -m 'Change the app'); for new work: {sako.PYTHON} .sako/sako.py "
+                      "add ", err)
 
     def test_covers_reads_the_scope_first_then_for_an_uncommitted_file_a_done_rows_seal(self):
         row = sako.parse_rows({"done": fixture.done_file("| T-5 | Notes | Written | Wrote it [sk-0101-aaaaaaaaaaaa; closed "
