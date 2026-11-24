@@ -146,14 +146,16 @@ class Roots:
 
 
 def git(root: Path, *args: str, check: bool = True, timeout: float | None = None) -> str:
-    # paths come back as UTF-8, unquoted, whatever the locale
+    # UTF-8 whatever the locale. A listing of files asks for -z, without which Git quotes a name
+    # with a double quote, a backslash or a control character; it is not trimmed, so each name
+    # keeps a space at its start or end.
     env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
     result = subprocess.run(["git", "-c", "core.quotePath=false", "-C", str(root), *args],
                             capture_output=True, encoding="utf-8", errors="surrogateescape",
                             env=env, timeout=timeout)
     if check and result.returncode:
         raise SakoError(f"git {' '.join(args)} in {root}: {result.stderr.strip() or 'failed'}")
-    return result.stdout.strip()
+    return result.stdout if "-z" in args else result.stdout.strip()
 
 
 def resolve_roots(start: Path) -> Roots:
@@ -686,7 +688,7 @@ def covered_files(root: Path, paths: list[str]) -> list[str]:
     for path in paths or [""]:
         if path and not (root / path).exists():
             raise SakoError(f"verify_paths entry {path!r} does not exist in the product")
-        found = product(git(root, "ls-files", "-coz", "--exclude-standard", "--",
+        found = product(git(root, "ls-files", "-co", "-z", "--exclude-standard", "--",
                             *([path] if path else [])).split("\0"))
         if path and not found:
             raise SakoError(f"verify_paths entry {path!r} matches no tracked or untracked file")
@@ -837,8 +839,8 @@ def changed_since(root: Path, start_rev: str, paths: list[str]) -> list[str]:
                                 check=False):
         return ["(unknown starting revision; assuming changes)"]
     # both paths of a rename, as dirty_paths lists them
-    changed = set(git(root, "diff", "--no-renames", "--name-only", start_rev, "--",
-                      *paths).splitlines())
+    changed = set(git(root, "diff", "-z", "--no-renames", "--name-only", start_rev, "--",
+                      *paths).split("\0"))
     new = git(root, "ls-files", "-z", "--others", "--exclude-standard", "--", *paths).split("\0")
     # a nested repository is no checked content
     return product(changed | {p for p in new if not p.endswith("/")})
@@ -994,16 +996,17 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
     # A commit made here counts whatever its date says, as after a clock that stepped back. One a
     # merge, pull, checkout or reset brought keeps the date it got where it was made, and only
     # that date tells it from one made before the start, which counts for no one here.
-    log = git(roots.work, "log", "--no-renames", "--name-only", "--format=%x00%H %h %ct %ad %s",
-              "--date=short-local", f"--since=@{min([since, *made.values()])}",
+    log = git(roots.work, "log", "-z", "--no-renames", "--name-only", "--date=short-local",
+              "--format=%x00%H %h %ct %ad %s", f"--since=@{min([since, *made.values()])}",
               f"{rev}..HEAD" if known else "HEAD", check=False)
     mine, theirs = {}, {}
-    for block in log.split("\0")[1:]:
-        subject, *paths = block.strip("\n").split("\n")
+    # with -z, a commit is a NUL, its line, a NUL and any paths after a newline, each ended by a NUL
+    for block in ("\0" + log).split("\0\0")[1:]:
+        subject, _, listed = block.partition("\0")
         # the author's day, local like a receipt's; a rebase keeps it
         commit, short, date, day, title = (subject.split(" ", 4) + [""])[:5]
         counted = mine if commit in made else theirs if int(date) >= since else {}
-        for path in product(set(paths) - start.keys()):
+        for path in product(set(listed[1:].split("\0")) - start.keys()):
             counted.setdefault(path, f'in commit {short} of {day} "{title}"')
     # a path in a commit made here is yours, and an uncommitted change keeps its own label
     return {**theirs, **mine, **changed}, "", set(theirs) - set(mine), blind and bool(theirs)
@@ -1021,8 +1024,8 @@ def unexplained(roots: Roots, config: dict, entry: dict | None, moved: list[str]
     if visitor:
         return []
     rev = str((entry or {}).get("work_start_rev") or "")
-    committed = set(git(roots.work, "diff", "--no-renames", "--name-only", rev, "HEAD",
-                        check=False).splitlines()) if rev else set()
+    committed = set(git(roots.work, "diff", "-z", "--no-renames", "--name-only", rev, "HEAD",
+                        check=False).split("\0")) if rev else set()
     # others' edits left uncommitted before the start; a later edit is in changed
     committed -= set((entry or {}).get("dirty_at_start") or {})
     moves = [path for path in moved
@@ -1056,16 +1059,18 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
     changed, start note, sealed). A checkout has one writer. With a live one here that is not this
     session, the changes here are the writer's; otherwise a change counts unless a task another
     session closed since this one started covers it, one closed here for a change made here, since
-    a checkout shows what changed, not who changed it. Sealed maps each task to its changed files
-    that still hold what its close sealed in this checkout."""
+    a checkout shows what changed, not who changed it. Sealed maps each task to the changed files
+    that still hold what its close sealed in this checkout, and for this session's own closes every
+    such file, since a new start record, as after an end, lists them as dirty at start."""
     changed, note, merged, blind = session_changes(roots, entry)
     own, writer = my_rows(rows, marker), visiting(roots, rows, live, marker)
     # a task done at the start excuses nothing; an earlier release's record names none as done
     since, done = (entry or {}).get("started_at"), set((entry or {}).get("done_at_start") or ())
     # by task, the closes made in this checkout, each with what it sealed here
     seals = {t: s for t, s in read_json(roots.local / "seals.json").items() if isinstance(s, dict)}
-    sealed = {t: {p for p, f in s.items() if p in changed and fingerprint(roots.work, p) == f}
-              for t, s in seals.items()}
+    closes = {r.id for r in own if r.doc == DONE}
+    sealed = {t: {p for p, f in s.items() if (p in changed or t in closes)
+                  and fingerprint(roots.work, p) == f} for t, s in seals.items()}
     unrecorded, exempt, shared = {}, {}, False
     for path, label in sorted(changed.items()):
         committed = label.startswith("in commit")
@@ -1250,8 +1255,8 @@ def changes_line(roots: Roots, rows: list[Row], entry: dict | None, marker: str 
 
 
 def generated(root: Path, paths: list[str]) -> str:
-    new = git(root, "ls-files", "--others", "--exclude-standard", "--", *paths).splitlines() \
-        if paths else []
+    new = [p for p in git(root, "ls-files", "-z", "--others", "--exclude-standard", "--",
+                          *paths).split("\0") if p] if paths else []
     return (f" New files among them ({', '.join(new[:4])}): delete or ignore any "
             "that is generated, such as build output or a cache.") if new else ""
 
@@ -1316,9 +1321,10 @@ def gate(roots: Roots, config: dict, session_id: str | None) -> tuple[int, str]:
                             + f", and the check is {state}: {why}"
                             f"\n    fix: {sako} verify, fix what it reports, then stop again.")
     dirty = set(product(dirty_paths(roots.work)))
-    for row in closed:
-        pending = [path for path in sorted(changed) if path in dirty
-                   and covers(row, path, sealed) and not any(covers(r, path) for r in held)]
+    for row in closed:  # with what its seal still holds, dirty at the start or not
+        pending = [path for path in sorted(set(changed) | sealed.get(row.id, set()))
+                   if path in dirty and covers(row, path, sealed)
+                   and not any(covers(r, path) for r in held)]
         if pending:
             # no task ID in product history
             quoted, message = " ".join(map(shlex.quote, pending)), shlex.quote(row.task)

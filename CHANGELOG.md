@@ -57,6 +57,28 @@ file formats can change in any 0.x release.
 - The two-session demo pinned its commit dates, which hid the merged commit from the
   code session's gate. Its commits now get the real time, with their hashes
   normalized, and its last gates show the merged guide as not counted.
+- A file name that Git quotes, one with a double quote, a backslash or a control
+  character, is read whole. Each listing of files that SAKO reads from Git now asks
+  for raw names, as the list of uncommitted files already did. A commit of such a file
+  had been named in quotes, so no scope covered it, Recorded named it in a form no fix
+  command takes, and Proven could miss it. A name that starts or ends with a space
+  keeps the space too, so a file whose name starts with one is no longer left out of
+  the check. A name with an accented letter was already read whole. 0.8.0 and every
+  earlier release had these gaps.
+- Committed asks for closed work left uncommitted through an end and a resume. The
+  new start record lists its files as dirty at your start, so they no longer counted
+  as your changes, and the gate could clear with the work uncommitted. A file that one
+  of your own closes sealed in the checkout, that still holds the sealed bytes and is
+  uncommitted, is now asked for whether or not it was dirty at your start. No other
+  session is asked for it, and a file changed since the seal stays under Recorded, as
+  before. 0.8.0 had this gap.
+
+### Known issues
+
+- A task you closed covers your later commits in its scope, new work included, since
+  Recorded covers a committed file by the task's scope alone. The seal that tells a
+  closed task's uncommitted files from later edits lasts only until the file is
+  committed. 0.8.0 had the same gap. The limits page states it.
 
 ## [0.8.0] - 2026-11-19
 

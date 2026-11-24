@@ -177,9 +177,9 @@ After.
 
 To release a claim no agent will resume, open or park it with `edit`. A resume keeps
 the session ID, marker key and claims, but after an end, as when the client exits, or
-a start in another checkout, it takes a new start record and the gate counts only
-later changes. In Claude Code, `/clear` and a fork start a new session with its own
-ID.
+a start in another checkout, it takes a new start record, and Recorded and Proven
+count from there. In Claude Code, `/clear` and a fork start a new session with its
+own ID.
 
 A session counts as live for two hours, its lease, after its last hook or command
 that acts as it, on every platform. `status`, `next` and a plain `check` also show

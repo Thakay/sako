@@ -130,6 +130,33 @@ class Gate(unittest.TestCase):
         self.assertIn("your rows: T-1 (claimed, no handoff) touches src/\n", self.run_in(self.root, "status", session="s1")[1])
         self.assertIn("ledger: consistent", self.run_in(self.root, "check")[1], "the same ID brings its claim back to life")
 
+    def test_closed_work_left_uncommitted_through_an_end_and_a_resume_is_still_asked_to_be_committed(self):
+        """The new start record lists the closed task's file as dirty at start, so the seal is what shows it is that
+        task's work."""
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-1", "--evidence", "Prints 2", "--session", "s1"))
+        for event in ("SessionEnd", "SessionStart"):
+            self.assertEqual(fixture.hook(self.root, event, "s1")[0], 0)
+        self.assertIn("src/app.py", sako.my_entry(sako.resolve_roots(self.root), "s1")["dirty_at_start"])
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertTrue(err.startswith("SAKO gate: 1 problem(s) before you stop:\n  Committed: T-1 is closed but its changes "
+                                       "are not committed: src/app.py\n"), err)
+        self.start("s2")  # its own closed task covers the file by its scope, but its close sealed none of it
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "More app", "--done-when", "Runs", "--scope", "src/"))
+        for args in (("claim", "T-10"), ("close", "T-10", "--evidence", "Read the app")):
+            fixture.succeeds(fixture.installed_copy(self.root, *args, "--session", "s2"))
+        self.assertEqual(self.stop("s2")[:2], (0, ""), "another session is not asked")
+        fixture.write(self.root, {"src/app.py": "print(3)\n"})
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("covered by no task you claimed or closed: src/app.py (edited after start; already dirty at start; "
+                      "changed after you closed T-1)\n", err, "content moved since the seal is Recorded's business")
+        self.assertNotIn("Committed:", err)
+
     def test_a_session_that_changed_nothing_passes(self):
         fixture.write(self.root, {"src/wip.py": "draft\n", ".sako/work/TASKS.md": fixture.ledger(
             fixture.row("T-1", status="claimed", claim="sk-0101-aaaaaaaaaaaa"), fixture.row("T-2", touches="`docs/`"))})
@@ -599,6 +626,55 @@ class Gate(unittest.TestCase):
             self.assertIn("(git add -- 'src/app (v2).py', then git commit -m 'Invented task'); for new work: ", err)
             self.assertIn("--scope 'zeta (draft).txt', then claim it", err,
                           "the fix for new work names a file no closed task covers")
+
+    def test_a_committed_file_name_that_git_quotes_is_covered_by_its_scope_and_named_whole(self):
+        """Git quotes a name with a double quote, a backslash or a control character unless asked for raw names (-z),
+        and core.quotePath=false stops that only for bytes past ASCII, such as an accented letter. Run in process, since
+        Windows reads a child's output back in its code page."""
+        names = ["café.py", "a b.py"] + ([] if fixture.WINDOWS else ['q"t.py', "back\\slash.py", "tab\tx.py", "zz "])
+        gate = lambda: sako.gate(sako.resolve_roots(self.root), sako.load_config(self.root / ".sako"), "s1")
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
+        fixture.write(self.root, {f"src/{name}": "x = 1\n" for name in names})
+        fixture.commit_all(self.root, "Odd names")
+        self.assertEqual(self.stop("s1")[:2], (0, ""), "each committed name is in T-1's scope")
+        notes = sorted(f"notes/{name}" for name in names)
+        fixture.write(self.root, {path: "notes\n" for path in notes})
+        code, err = gate()
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"covered by no task you claimed or closed: {', '.join(notes)}\n", err)
+        self.assertIn(f"New files among them ({', '.join(notes[:4])}): delete or ignore", err)
+        fixture.commit_all(self.root, "Odd notes")
+        short, day = sako.git(self.root, "log", "-1", "--format=%h %ad", "--date=short-local").split()  # as the gate reads it
+        code, err = gate()
+        self.assertEqual(code, 2, err)
+        self.assertIn("covered by no task you claimed or closed: "
+                      + ", ".join(f'{path} (in commit {short} of {day} "Odd notes")' for path in notes) + "\n", err,
+                      "no task covers them, so each is named as it is")
+
+    def test_the_check_and_proven_read_whole_a_name_that_git_quotes_or_that_starts_with_a_space(self):
+        """A listing asked for with -z is kept whole. Trimmed, a name that starts with a space fell out of the check, and a
+        merged file outside the claims still held whose name Git quotes or trims was named wrongly under Proven."""
+        odd = [" notes.md"] + ([] if fixture.WINDOWS else ['q"t.md'])
+        fixture.write(self.root, {".sako/config.json": json.dumps({"verify_command": [sys.executable, "-c", "pass"]}),
+                                  **{name: "draft\n" for name in odd}})
+        fixture.commit_all(self.root, "Notes")
+        fixture.succeeds(fixture.installed_copy(self.root, "verify"))
+        fixture.write(self.root, {" notes.md": "edited\n"})
+        self.assertIn("evidence: stale", self.run_in(self.root, "check")[1], "the check covers the name with its space")
+        fixture.git(self.root, "checkout", "-qb", "side")  # made before the session, so dated before its start
+        fixture.write(self.root, {name: "edited\n" for name in odd})
+        env = dict(fixture.ENV, GIT_COMMITTER_DATE="2001-01-01T00:00:00Z", GIT_AUTHOR_DATE="2001-01-01T00:00:00Z")
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qam", "Edited notes"], env=env, check=True)
+        fixture.git(self.root, "checkout", "-q", "main")
+        self.start("s1")
+        for args in (("claim", "T-2"), ("close", "T-2", "--evidence", "Notes"), ("claim", "T-1")):
+            fixture.succeeds(fixture.installed_copy(self.root, *args, "--session", "s1"))
+        fixture.git(self.root, "merge", "-q", "--ff-only", "side")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"Proven: T-2 closed after checked content changed since you started, in {', '.join(odd)} outside "
+                      "the claims you still hold, and the check is stale", err)
 
     def test_where_a_session_has_no_start_record_only_uncommitted_checked_content_counts_as_moved(self):
         """A session's hooks can run in a checkout it did not last start in, where its start revision does not apply."""
