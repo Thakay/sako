@@ -7,11 +7,11 @@ file formats can change in any 0.x release.
 
 ## [0.8.1] - 2026-11-23
 
-A fix release. It closes the two known issues of 0.8.0 and settles what the reviews
-of that release left open. The gate tells a commit made in a checkout from a merged
-one, and a claim you still hold excuses a stale check only for what it covers. It
-adds no command, flag or config key, and task records from 0.8.0 still parse. SAKO
-remains alpha software.
+A fix release. It settles the two known issues of 0.8.0 and what the reviews of that
+release left open. The gate tells a commit made in a checkout from a merged one, so
+a task closed in another checkout no longer excuses your own commit, and a claim you
+still hold excuses a stale check only for what it covers. It adds no command, flag
+or config key, and task records from 0.8.0 still parse. SAKO remains alpha software.
 
 From your project's Git repository, install with `uvx sako@0.8.1 init`, or update an
 existing installation with `uvx sako@0.8.1 init --update`.
