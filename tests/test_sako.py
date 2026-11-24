@@ -161,6 +161,19 @@ class Findings(unittest.TestCase):
         for starts in ((100, 100), (None, 100), (100, "noon")):
             with self.subTest(starts=starts):
                 self.assertEqual(finding(*starts), f"{head}one of them{acts}", "the start time alone picks, or nothing does")
+        third = tasks(*(row(f"T-{n}", status="claimed", claim=f"sk-0101-{letter * 12}", touches=f"`part{n}/`")
+                        for n, letter in ((1, "a"), (2, "b"), (3, "c"))))
+        for first in (None, True):  # one unknown start among three, the lowest of them when sorted
+            entries = [{"session_id": "s1", **({} if first is None else {"started_at": first})},
+                       {"session_id": "s2", "started_at": 100}, {"session_id": "s3", "started_at": 200}]
+            found = sako.ledger_findings(third, None, None, {letter * 12: (entry, [held]) for letter, entry, held
+                                                             in zip("abc", entries, third)})[1][0]
+            self.assertIn("; one of them parks, opens or closes", found, "one unknown start, so no writer is picked")
+            self.assertNotIn("end --session", found)
+        nameless = sako.ledger_findings(rows, None, None, {"aaaaaaaaaaaa": ({"started_at": 200}, [rows[0]]),
+                                                           "bbbbbbbbbbbb": ({"started_at": 100}, [rows[1]])})[1][0]
+        self.assertEqual(nameless, f"{head}sk-0101-aaaaaaaaaaaa started here last, so it{acts}",
+                         "an entry that names no session gets no command, which could end another one")
 
     def test_records_only_means_every_scope_entry_lies_in_the_kit_folder(self) -> None:
         for touches, expected in (("`.sako/work/notes/`", True), ("`.sako`, `./.sako/work/plan.md`", True),

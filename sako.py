@@ -468,16 +468,20 @@ def ledger_findings(rows: list[Row], live_markers: set[str] | None = None,
     if writers and len(writers) > 1:  # left by a hand edit, a lapse or end and return, an update
         named = listing([f"{held[0].claim.split()[0]} with {', '.join(r.id for r in held)}"
                          for _, held in writers.values()])
-        # the one to act started here last, by the start time the entries hold, unless two share it
-        when = lambda entry: t if isinstance(t := entry.get("started_at"), int) else -1
-        (before, _), (entry, held) = sorted(writers.values(), key=lambda w: when(w[0]))[-2:]
-        last = when(entry) > when(before) >= 0
+        # the one to act started here last, by the start time each entry holds, when every time is
+        # known and no two share the newest
+        when = lambda entry: t if type(t := entry.get("started_at")) is int else -1
+        ranked = sorted(writers.values(), key=lambda w: when(w[0]))
+        (before, _), (entry, held) = ranked[-2:]
+        last = when(entry) > when(before) and when(ranked[0][0]) >= 0
+        named_id = entry.get("session_id")  # a command only for a session the entry names
         (out if bystander in writers else others).append(
             f"this checkout has {len(writers)} writers, {named}, but a checkout has one; "
             + (f"{held[0].claim.split()[0]} started here last, so it" if last else "one of them")
             + " parks, opens or closes its product claims, or commits and moves to a worktree of "
             "its own" + (f"; once the owner confirms that session stopped, end it (end --session "
-                         f"{shlex.quote(str(entry.get('session_id') or 'ID'))})" if last else ""))
+                         f"{shlex.quote(named_id)})"
+                         if last and isinstance(named_id, str) and named_id else ""))
     return out, others
 
 
@@ -1089,7 +1093,8 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
     changed, note, merged, blind = session_changes(roots, entry)
     own, writer = my_rows(rows, marker), visiting(roots, rows, live, marker)
     # a task done at the start excuses nothing; an earlier release's record names none as done
-    since, done = (entry or {}).get("started_at"), set((entry or {}).get("done_at_start") or ())
+    since, done = (entry or {}).get("started_at"), (entry or {}).get("done_at_start")
+    done = {task for task in done if isinstance(task, str)} if isinstance(done, list) else set()
     # by task, the closes made in this checkout, each with what it sealed here
     seals = {t: s for t, s in read_json(roots.local / "seals.json").items() if isinstance(s, dict)}
     # of its own closes only what is still uncommitted, so no clean file is read for an old seal

@@ -84,17 +84,16 @@ file formats can change in any 0.x release.
   it stopped. It named no one before. So when a writer from another checkout started
   there, the writer that was there first was blocked with no word on who moves, and a
   writer beside one that crashed within its lease had no way out. It still blocks each
-  writer's stop. When two writers share the newest start time, it names neither, as
-  before.
+  writer's stop. When two writers share the newest start time, or any writer's start
+  time is unknown, it names neither, as before.
 - A file no longer shares a fingerprint with a symlink, a plain folder or a nested
   repository. A file that held `link:` and a link's target, the word `folder`, or
   `commit:` and a commit had the same fingerprint as that link, folder or repository,
   so a start record or a seal missed the swap. A file's own fingerprint is as before,
   so what 0.8.0 recorded for files still matches. What 0.8.0 recorded for a symlink, a
-  folder or a nested repository no longer matches. Under a start record from 0.8.0,
-  such a path counts as changed until the first start after the update takes a new
-  record. Under a seal from 0.8.0, it counts as unrecorded until it is committed, as
-  the files of a task closed before the update do.
+  folder or a nested repository no longer matches, so a seal 0.8.0 made for one is
+  not honored after the update. Commit such closed work before you update, as the
+  update steps say, since the first start afterwards lists it as dirty at your start.
 - In the shared footprint the refusal of a second writer says to commit the records
   first. The new worktree's branch takes its own copy of them from the last commit, so
   a row added or claimed since was missing there.

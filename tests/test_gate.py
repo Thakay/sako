@@ -2165,6 +2165,18 @@ class Gate(unittest.TestCase):
         finally:
             (self.root / "src/app.py").chmod(0o644)
 
+    def test_a_start_record_whose_list_of_done_tasks_is_damaged_still_lets_the_gate_judge(self):
+        """An unexpected error in the Stop hook lets the stop through, so a damaged field must not raise one."""
+        self.start("s1")
+        path = fixture.entry_path(self.root, "s1")
+        for damaged in (7, {"T-1": 1}, [["T-1"], 3]):
+            with self.subTest(damaged=damaged):
+                path.write_text(json.dumps(dict(json.loads(path.read_text()), done_at_start=damaged)))
+                fixture.write(self.root, {"notes.txt": "unrecorded\n"})
+                code, _, err = self.stop("s1")
+                self.assertEqual(code, 2, err)
+                self.assertIn("Recorded: changed this session but covered by no task you claimed or closed: notes.txt", err)
+
     def test_committed_names_new_files_so_generated_ones_are_not_committed(self):
         self.start("s1")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
