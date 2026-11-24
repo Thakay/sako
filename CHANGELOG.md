@@ -45,12 +45,17 @@ file formats can change in any 0.x release.
   start excuses its merged work, and the two-session demo clears at real speed. A
   commit made here counts whatever date it carries, so the gate no longer searches
   the minute before the start. A commit that came from elsewhere counts only when it
-  was made since your start, because only its date tells it from an older one.
-- A start record from 0.8.0, kept through a resume, names no reflog entry and no
-  done tasks. Until the session takes a new one, every commit counts as merged and
-  any task another session closed may excuse it, which names nothing wrongly, and a
-  note says that Git's reflog here does not reach your start. The same note comes
-  when the reflog's entries expired or reflogs are turned off.
+  was made since your start, because only its date tells it from an older one. That
+  date is read two seconds early, for a wall clock that steps back, as WSL's does.
+- A start record from 0.8.0 names no reflog entry and no done tasks, so the first
+  start on it takes a new start record. Until then, and where the reflog's entries
+  expired or reflogs are turned off, every commit is judged by its date, from a
+  minute before the start as 0.8.0 did, and any task another session closed may
+  excuse it. That names nothing wrongly, and a note says that Git's reflog here does
+  not reach your start.
+- Edits made while finishing a merge by hand count. Recorded had read no path from a
+  merge commit, so a resolution that differs from both parents, or a file added with
+  it, passed unseen. 0.8.0 had this gap.
 - A close names its task in the checkout's seals even when it seals no file, so the
   gate knows the task closed there. The note that a shared checkout shows what
   changed, not who changed it, now follows only a change made here.

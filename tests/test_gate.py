@@ -384,6 +384,126 @@ class Gate(unittest.TestCase):
                 self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"),
                                  (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}{merged}", ""))
 
+    def test_a_fast_forward_to_a_tip_dated_before_the_start_hides_no_commit_made_here_beneath_it(self):
+        """Git's --since stops at the first older commit, so the gate compares the dates itself."""
+        self.start("s1")
+        since = json.loads(fixture.entry_path(self.root, "s1").read_text())["started_at"]
+        fixture.write(self.root, {"docs/mine.md": "this session's own notes\n"})
+        fixture.commit_all(self.root, "My notes")
+        side = self.base / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        fixture.write(side, {"docs/late.md": "from a clock that runs behind\n"})
+        stepped = f"@{since - 30} +0000"
+        env = dict(fixture.ENV, GIT_COMMITTER_DATE=stepped, GIT_AUTHOR_DATE=stepped)
+        for args in (("add", "-A"), ("commit", "-qm", "Late notes")):
+            subprocess.run(["git", "-C", str(side), *args], env=env, check=True)
+        fixture.git(self.root, "merge", "-q", "--ff-only", "side")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertRegex(err, r'covered by no task you claimed or closed: docs/mine\.md \(in commit [0-9a-f]+ of [\d-]+ '
+                              r'"My notes"\)\n', "the older tip above it is no reason to stop the walk")
+        self.assertNotIn("docs/late.md", err, "a commit from elsewhere dated before the start counts for no one here")
+
+    def test_a_merged_commit_dated_a_second_before_the_start_counts_as_after_a_clock_that_stepped_back(self):
+        """A wall clock that steps back dates a commit made just after the start before it."""
+        self.start("s1")
+        since = json.loads(fixture.entry_path(self.root, "s1").read_text())["started_at"]
+        side = self.base / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        self.start("peer", where=side)
+        fixture.succeeds(fixture.installed_copy(side, "claim", "T-2", "--session", "peer"))
+        fixture.write(side, {"docs/peer.md": "the peer's notes\n"})
+        fixture.succeeds(fixture.installed_copy(side, "close", "T-2", "--evidence", "Wrote notes", "--session", "peer"))
+        stepped = f"@{since - 1} +0000"
+        env = dict(fixture.ENV, GIT_COMMITTER_DATE=stepped, GIT_AUTHOR_DATE=stepped)
+        for args in (("add", "-A"), ("commit", "-qm", "Peer notes")):
+            subprocess.run(["git", "-C", str(side), *args], env=env, check=True)
+        fixture.git(self.root, "merge", "-q", "--ff-only", "side")
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"),
+                         (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}\nnot counted: docs/peer.md: merged "
+                             f"under T-2, closed by {sako.marker_for('peer')}\n", ""))
+
+    def test_a_merge_finished_by_hand_counts_what_its_own_commit_changed(self):
+        """A merge commit made here holds the resolution, which no parent holds, and a file added with it."""
+        side = self.base / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        fixture.write(self.root, {"docs/guide.md": "the guide, from main before the start\n"})
+        fixture.commit_all(self.root, "A guide")
+        self.start("s1")
+        self.start("peer", where=side)
+        fixture.succeeds(fixture.installed_copy(side, "claim", "T-2", "--session", "peer"))
+        fixture.write(side, {"docs/guide.md": "the guide, from the peer\n", "docs/peer.md": "the peer's notes\n"})
+        fixture.succeeds(fixture.installed_copy(side, "close", "T-2", "--evidence", "Wrote the guide", "--session", "peer"))
+        fixture.commit_all(side, "Peer guide")
+        merge = subprocess.run(["git", "-C", str(self.root), "merge", "--no-edit", "side"], env=fixture.ENV,
+                               capture_output=True, text=True)
+        self.assertEqual(merge.returncode, 1, merge.stdout + merge.stderr)
+        fixture.write(self.root, {"docs/guide.md": "a third text, written while resolving\n",
+                                  "docs/extra.md": "added with the merge\n"})
+        fixture.commit_all(self.root, "Resolve the guide")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertRegex(err, r'covered by no task you claimed or closed: docs/extra\.md \(in commit [0-9a-f]+ of [\d-]+ '
+                              r'"Resolve the guide"\), docs/guide\.md \(in commit [0-9a-f]+ of [\d-]+ "Resolve the guide"\)\n')
+        self.assertIn(f"\nnot counted: docs/peer.md: merged under T-2, closed by {sako.marker_for('peer')}\n", err,
+                      "the file the merge only brought is still the peer's")
+
+    def test_a_close_marks_its_task_as_closed_in_the_checkout_it_runs_in_wherever_its_session_last_started(self):
+        self.start("peer")
+        self.start("s1")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "peer"))
+        fixture.write(self.root, {"docs/peer.md": "the peer's notes\n"})
+        fixture.commit_all(self.root, "Peer notes")
+        side = self.base / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        self.start("peer", where=side)
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Wrote notes", "--session", "peer"))
+        self.assertEqual(self.seals(), {"T-2": {}}, "it seals no file where its session did not last start, and is listed")
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"),
+                         (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}\nnot counted: docs/peer.md: committed "
+                             f"under T-2, closed by {sako.marker_for('peer')}\nnote: a shared checkout shows what changed, "
+                             "not who changed it.\n", ""))
+
+    def test_without_the_reflog_a_commit_dated_just_before_the_start_still_counts(self):
+        """The reflog tells a commit made here whatever its date. Without it the minute before the start stays."""
+        self.start("s1")
+        path = fixture.entry_path(self.root, "s1")
+        entry = json.loads(path.read_text())
+        path.write_text(json.dumps({k: v for k, v in entry.items() if k != "reflog_at_start"}))
+        fixture.write(self.root, {"docs/mine.md": "this session's own notes\n"})
+        stepped = f"@{entry['started_at'] - 2} +0000"
+        env = dict(fixture.ENV, GIT_COMMITTER_DATE=stepped, GIT_AUTHOR_DATE=stepped)
+        for args in (("add", "-A"), ("commit", "-qm", "My notes")):
+            subprocess.run(["git", "-C", str(self.root), *args], env=env, check=True)
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("covered by no task you claimed or closed: docs/mine.md (in commit", err)
+        self.assertIn("note: Git's reflog here does not reach your start", err)
+
+    def test_a_cherry_pick_an_amend_and_a_rebase_each_make_a_commit_here_that_a_task_closed_elsewhere_excuses_not(self):
+        fixture.git(self.root, "checkout", "-qb", "spare")
+        fixture.write(self.root, {"docs/spare.md": "spare notes\n"})
+        fixture.commit_all(self.root, "Spare notes")
+        fixture.git(self.root, "checkout", "-q", "main")
+        self.start("s1")
+        self.peer_closes_docs()
+        fixture.git(self.root, "cherry-pick", "spare")
+        fixture.write(self.root, {"docs/amended.md": "a draft\n"})
+        fixture.commit_all(self.root, "A draft")
+        fixture.write(self.root, {"docs/amended.md": "amended notes\n"})
+        fixture.git(self.root, "add", "-A")
+        fixture.git(self.root, "commit", "-q", "--amend", "-m", "Amended notes")
+        fixture.git(self.root, "checkout", "-qb", "topic", "HEAD~1")
+        fixture.write(self.root, {"docs/topic.md": "topic notes\n"})
+        fixture.commit_all(self.root, "Topic notes")
+        fixture.git(self.root, "rebase", "-q", "main")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        for name, title in (("amended", "Amended notes"), ("spare", "Spare notes"), ("topic", "Topic notes")):
+            self.assertRegex(err, rf'docs/{name}\.md \(in commit [0-9a-f]+ of [\d-]+ "{title}"\)', "made here, so T-2, "
+                             "closed in the peer's worktree, excuses none of it")
+        self.assertNotIn("merged under T-2", err)
+
     def test_amended_rebased_picked_and_reverted_commits_name_each_path_once_by_the_commit_that_holds_it(self):
         fixture.git(self.root, "checkout", "-qb", "base")  # made before the session, then rebased onto
         fixture.write(self.root, {"src/base.py": "x = 0\n"})
@@ -605,7 +725,7 @@ class Gate(unittest.TestCase):
             code, out, err = self.run_in(side, *args, session="s1")
             self.assertEqual(code, 0, out + err)
         sealed = [json.loads(path.read_text()) for path in (self.root / ".sako/state").rglob("seals.json")]
-        self.assertEqual(sealed, [{}], "the close wrote that checkout's seals, with nothing in them")
+        self.assertEqual(sealed, [{"T-1": {}}], "the close is listed in that checkout's seals and seals no file there")
         code, _, err = self.stop("s2", where=side)
         self.assertEqual(code, 2, err)
         self.assertIn("covered by no task you claimed or closed: src/util.py\n", err)

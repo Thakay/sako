@@ -634,9 +634,12 @@ def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) 
     """This session's entry as it would be written. Its start record (start revision, files dirty
     at start, start time, the newest entry of the checkout's HEAD reflog, the tasks then done)
     belongs to the checkout it last started in, so a resume there keeps it; a start in another
-    one, after end, or after its entry was deleted unseen takes a new one."""
+    one, after end, after its entry was deleted unseen, or on an earlier release's entry takes a
+    new one."""
     previous = previous or {}
-    kept = previous if previous.get("work_root") == str(roots.work) else {}
+    # one an earlier release wrote names no reflog entry and no done tasks, so it is not kept
+    kept = previous if previous.get("work_root") == str(roots.work) \
+        and "reflog_at_start" in previous else {}
     new, done = not kept.get("started_at"), kept.get("done_at_start")
     with suppress(SakoError):  # records that cannot be read leave none, as an earlier release did
         done = [r.id for r in read_ledger(roots, load_config(roots.kit)) if r.doc == DONE] if new \
@@ -995,19 +998,30 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
     blind, made = made is None, made or {}
     # A commit made here counts whatever its date says, as after a clock that stepped back. One a
     # merge, pull, checkout or reset brought keeps the date it got where it was made, and only
-    # that date tells it from one made before the start, which counts for no one here.
-    log = git(roots.work, "log", "-z", "--no-renames", "--name-only", "--date=short-local",
-              "--format=%x00%H %h %ct %ad %s", f"--since=@{min([since, *made.values()])}",
-              f"{rev}..HEAD" if known else "HEAD", check=False)
-    mine, theirs = {}, {}
-    # with -z, a commit is a NUL, its line, a NUL and any paths after a newline, each ended by a NUL
-    for block in ("\0" + log).split("\0\0")[1:]:
-        subject, _, listed = block.partition("\0")
-        # the author's day, local like a receipt's; a rebase keeps it
-        commit, short, date, day, title = (subject.split(" ", 4) + [""])[:5]
-        counted = mine if commit in made else theirs if int(date) >= since else {}
-        for path in product(set(listed[1:].split("\0")) - start.keys()):
-            counted.setdefault(path, f'in commit {short} of {day} "{title}"')
+    # that date tells it from one made before the start, which counts for no one here. It is read
+    # two seconds early, since a wall clock that steps back, as WSL's does by most of a second,
+    # dates a commit made just after the start before it. Without the reflog a commit made here
+    # is judged so too, a minute early as before. The dates are compared here, since Git's
+    # --since stops at the first older commit and would hide a newer one beneath it; it bounds
+    # the walk only where the start is unknown.
+    since -= 60 if blind else 2
+    span = [f"{rev}..HEAD"] if known else [f"--since=@{min([since, *made.values()])}", "HEAD"]
+    # for a merge commit --cc lists what differs from every parent, as a resolution by hand
+    log = git(roots.work, "log", "-z", "--cc", "--no-renames", "--name-only",
+              "--date=short-local", "--format=%x00/%H %h %ct %ad %s", *span, check=False)
+    mine, theirs, counted, label, first = {}, {}, {}, "", False
+    # With -z a commit's line and each of its paths end in a NUL. The line starts with a slash, as
+    # no path does, and the first path follows a newline, or an empty item for a merge commit.
+    for item in log.split("\0"):
+        if item.startswith("/"):
+            # the author's day, local like a receipt's; a rebase keeps it
+            commit, short, date, day, title = (item[1:].split(" ", 4) + [""])[:5]
+            counted = mine if commit in made else theirs if int(date) >= since else {}
+            label, first = f'in commit {short} of {day} "{title}"', True
+            continue
+        first, item = False, item[1:] if first and item else item
+        for path in product({item} - start.keys()):
+            counted.setdefault(path, label)
     # a path in a commit made here is yours, and an uncommitted change keeps its own label
     return {**theirs, **mine, **changed}, "", set(theirs) - set(mine), blind and bool(theirs)
 
@@ -2343,8 +2357,8 @@ def cmd_task(args: argparse.Namespace) -> int:
     dirty = {p: fingerprint(roots.work, p) for p in product(dirty_paths(roots.work))
              if covers(row, p) or any(p in s for s in seals.values())}
     # and nothing where this session did not last start, since another session writes there
-    if "dirty_at_start" in entry:
-        seals[row.id] = {p: f for p, f in dirty.items() if covers(row, p) and start.get(p) != f}
+    seals[row.id] = {p: f for p, f in dirty.items() if covers(row, p) and start.get(p) != f} \
+        if "dirty_at_start" in entry else {}
     atomic_write(here, json.dumps({t: {p: f for p, f in s.items() if dirty.get(p) == f}
                                    for t, s in seals.items()}, indent=1) + "\n")
     dropped = []
