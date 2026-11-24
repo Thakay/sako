@@ -15,7 +15,7 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Handoff | A paused task's notes, in `.sako/work/T-<n>-<slug>/handoff.md` |
 | Hook | A client's automatic call into SAKO when a session starts, stops or ends |
 | Kit | The files SAKO owns and updates: the runtime `.sako/sako.py`, the method `.sako/SAKO.md`, `.sako/install.json` and the skill copies |
-| Last pass | What each checked file held at a checkout's last passing check, kept in its state beside the stamp. A failing run leaves it, and a close there whose receipt shows a pass, even another checkout's, replaces it. It never makes the check fresh; the Proven rule compares the files you moved with it |
+| Last pass | What each checked file held at a checkout's last passing check, kept in its state beside the stamp. A failing run leaves it, and a close there whose receipt shows a pass, even another checkout's, replaces it. It never makes the check fresh; while a claim you still hold covers a file you moved, the Proven rule compares your other moved files with it |
 | Lease | The two hours a session counts as live after its last hook or command that acts as it; `status`, `next` and a plain `check` renew nothing, and `end` or the end hook ends it |
 | Ledger | The task records in `.sako/work/`: `TASKS.md` for active work, `DONE.md` for finished work |
 | Marker | A session's name in claims and receipts, such as `sk-0115-7a281dacac30`, made of the month and day of its start and a key derived from its session ID; the start context prints yours |
@@ -27,7 +27,7 @@ The words SAKO uses, in one place. The other pages use them in this sense.
 | Presence | SAKO's record of which sessions are live, which protects live claims |
 | Receipt | What `close` writes for a finished task: the completion condition, the evidence, the claim's marker and time, the close time and what the check said |
 | Scope | The path prefixes a task may change |
-| Seal | A fingerprint of each uncommitted file in a task's scope that counts as the session's change, which `close` keeps in the checkout's state. The closed task covers such a file while it still matches |
+| Seal | A fingerprint of each uncommitted file in a task's scope that counts as the session's change, which `close` keeps in the checkout's state. The closed task covers such a file while it still matches. The close is listed there even when it seals no file, which tells Recorded that the task closed in that checkout |
 | Session | A conversation opened in an agent client; `start` registers it with SAKO and `end` removes its presence record |
 | Source | The exact reference to the planner item a task came from, such as `PLAN.md#N1` |
 | Stamp | The record of a passing check on a fingerprint of the checked content |

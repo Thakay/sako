@@ -423,30 +423,28 @@ class Gate(unittest.TestCase):
                          (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}\nnot counted: docs/peer.md: merged "
                              f"under T-2, closed by {sako.marker_for('peer')}\n", ""))
 
-    def test_a_merge_finished_by_hand_counts_what_its_own_commit_changed(self):
-        """A merge commit made here holds the resolution, which no parent holds, and a file added with it."""
-        side = self.base / "side"
-        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
-        fixture.write(self.root, {"docs/guide.md": "the guide, from main before the start\n"})
-        fixture.commit_all(self.root, "A guide")
+    def test_a_clean_merge_of_two_sides_that_each_changed_one_file_before_the_start_counts_nothing(self):
+        """Git merges the two changes on its own, so the merge commit holds no one's edit, though the file differs from
+        both parents. Asked for a merge commit's combined changes, Git would name it."""
+        old = dict(fixture.ENV, GIT_COMMITTER_DATE="2001-01-01T00:00:00Z", GIT_AUTHOR_DATE="2001-01-01T00:00:00Z")
+
+        def commit_old(text, message):
+            fixture.write(self.root, {"src/app.py": text})
+            for args in (("add", "-A"), ("commit", "-qm", message)):
+                subprocess.run(["git", "-C", str(self.root), *args], env=old, check=True)
+
+        lines = [f"line {n}\n" for n in range(1, 9)]
+        commit_old("".join(lines), "Eight lines")
+        fixture.git(self.root, "checkout", "-qb", "feature")
+        commit_old("".join(["first, on feature\n", *lines[1:]]), "The first line")
+        fixture.git(self.root, "checkout", "-q", "main")
+        commit_old("".join([*lines[:-1], "last, on main\n"]), "The last line")
+        fixture.git(self.root, "checkout", "-q", "feature")
         self.start("s1")
-        self.start("peer", where=side)
-        fixture.succeeds(fixture.installed_copy(side, "claim", "T-2", "--session", "peer"))
-        fixture.write(side, {"docs/guide.md": "the guide, from the peer\n", "docs/peer.md": "the peer's notes\n"})
-        fixture.succeeds(fixture.installed_copy(side, "close", "T-2", "--evidence", "Wrote the guide", "--session", "peer"))
-        fixture.commit_all(side, "Peer guide")
-        merge = subprocess.run(["git", "-C", str(self.root), "merge", "--no-edit", "side"], env=fixture.ENV,
-                               capture_output=True, text=True)
-        self.assertEqual(merge.returncode, 1, merge.stdout + merge.stderr)
-        fixture.write(self.root, {"docs/guide.md": "a third text, written while resolving\n",
-                                  "docs/extra.md": "added with the merge\n"})
-        fixture.commit_all(self.root, "Resolve the guide")
-        code, _, err = self.stop("s1")
-        self.assertEqual(code, 2, err)
-        self.assertRegex(err, r'covered by no task you claimed or closed: docs/extra\.md \(in commit [0-9a-f]+ of [\d-]+ '
-                              r'"Resolve the guide"\), docs/guide\.md \(in commit [0-9a-f]+ of [\d-]+ "Resolve the guide"\)\n')
-        self.assertIn(f"\nnot counted: docs/peer.md: merged under T-2, closed by {sako.marker_for('peer')}\n", err,
-                      "the file the merge only brought is still the peer's")
+        fixture.git(self.root, "merge", "-q", "--no-edit", "main")
+        self.assertEqual((self.root / "src/app.py").read_text(), "".join(["first, on feature\n", *lines[1:-1], "last, on main\n"]))
+        self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"),
+                         (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}\n", ""))
 
     def test_a_close_marks_its_task_as_closed_in_the_checkout_it_runs_in_wherever_its_session_last_started(self):
         self.start("peer")
@@ -550,11 +548,17 @@ class Gate(unittest.TestCase):
                 if way == "an entry from 0.8.0":
                     path.write_text(json.dumps({k: v for k, v in entry.items() if k not in ("reflog_at_start",
                                                                                             "done_at_start")}))
-                    code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
-                    self.assertEqual(code, 0, out + err)
-                    self.assertTrue(out.endswith(f"\nnot counted: docs/mine.md: merged under T-2, closed by "
-                                                 f"{sako.marker_for('peer')}\n{note}"), "with no list of done tasks, "
-                                    "every task another session closed excuses, so nothing is named wrongly")
+                    done = self.root / ".sako/work/DONE.md"
+                    receipts = done.read_text()  # closed long before the start, whatever the minute says now
+                    done.write_text(re.sub(r"; closed \d{4}-\d\d-\d\dT\d\d:\d\d", "; closed 2001-01-01T00:00", receipts))
+                    path.write_text(json.dumps({k: v for k, v in entry.items() if k not in ("reflog_at_start",
+                                                                                            "done_at_start")}))
+                    code, _, err = self.stop("s1")
+                    self.assertEqual(code, 2, err)
+                    self.assertIn("covered by no task you claimed or closed: docs/mine.md (in commit", err, "with no list of "
+                                  "done tasks the receipt's minute decides, as in 0.8.0, and T-2 closed before the start")
+                    self.assertIn(note, err)
+                    done.write_text(receipts)
                     path.write_text(json.dumps(entry))
                     continue
                 if way == "an expired reflog":
@@ -2164,6 +2168,27 @@ class Gate(unittest.TestCase):
             self.assertEqual(self.stop("s1")[::2], (0, ""), "it is clean, so the seal left from its close asks no read")
         finally:
             (self.root / "src/app.py").chmod(0o644)
+
+    def test_a_start_record_that_names_no_done_tasks_goes_by_the_minute_in_each_receipt(self):
+        """A start while the records cannot be read leaves no list, and a later start keeps that record."""
+        self.start("s0")
+        fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s0"))
+        fixture.write(self.root, {"docs/old.md": "earlier notes\n"})
+        fixture.succeeds(fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Wrote notes", "--session", "s0"))
+        fixture.commit_all(self.root, "Earlier notes")
+        done = self.root / ".sako/work/DONE.md"  # closed here, long before the next session starts
+        done.write_text(re.sub(r"; closed \d{4}-\d\d-\d\dT\d\d:\d\d", "; closed 2001-01-01T00:00", done.read_text()))
+        self.start("s1")
+        path = fixture.entry_path(self.root, "s1")
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), done_at_start=None)))
+        self.start("s1")
+        self.assertIsNone(json.loads(path.read_text())["done_at_start"], "a resume keeps the record as it is")
+        fixture.write(self.root, {"docs/mine.md": "this session's own notes\n"})
+        fixture.commit_all(self.root, "My notes")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("covered by no task you claimed or closed: docs/mine.md (in commit", err,
+                      "T-2 closed here before the start, so it excuses nothing made since")
 
     def test_a_start_record_whose_list_of_done_tasks_is_damaged_still_lets_the_gate_judge(self):
         """An unexpected error in the Stop hook lets the stop through, so a damaged field must not raise one."""

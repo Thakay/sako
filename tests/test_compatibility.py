@@ -582,9 +582,9 @@ class Compatibility(unittest.TestCase):
         self.assertIn(f"T-1 is claimed by {marker}, which is not a live session", self.cli("check", expected=1))
         self.cli("start", session="upgraded")
         entry = json.loads(path.read_text())
-        self.assertEqual(entry["marker"], marker, "a start on an earlier release's entry keeps its marker")
-        self.assertNotEqual(entry["started_at"], 1, "and takes a new start record, since the old one names no reflog entry")
-        self.assertEqual((type(entry["reflog_at_start"]), entry["done_at_start"]), (str, []))
+        self.assertEqual((entry["marker"], entry["started_at"]), (marker, 1), "a resume keeps its marker and start record")
+        self.assertEqual((entry["reflog_at_start"], entry["done_at_start"]), (None, None),
+                         "which names no reflog entry and no done tasks, so the gate judges it as that release did")
         self.assertFalse({"pid", "ns", "seen", "start_root"} & set(entry), "and writes no process, no last-seen field and "
                                                                            "no second checkout")
         older(int(time.time()) - sako.KEPT - 60)

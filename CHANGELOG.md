@@ -47,15 +47,13 @@ file formats can change in any 0.x release.
   the minute before the start. A commit that came from elsewhere counts only when it
   was made since your start, because only its date tells it from an older one. That
   date is read two seconds early, for a wall clock that steps back, as WSL's does.
-- A start record from 0.8.0 names no reflog entry and no done tasks, so the first
-  start on it takes a new start record. Until then, and where the reflog's entries
-  expired or reflogs are turned off, every commit is judged by its date, from a
-  minute before the start as 0.8.0 did, and any task another session closed may
-  excuse it. That names nothing wrongly, and a note says that Git's reflog here does
-  not reach your start.
-- Edits made while finishing a merge by hand count. Recorded had read no path from a
-  merge commit, so a resolution that differs from both parents, or a file added with
-  it, passed unseen. 0.8.0 had this gap.
+- A start record from 0.8.0 names no reflog entry and no done tasks, and a resume
+  keeps it. For it the gate judges as 0.8.0 did. Every commit counts by its date,
+  from a minute before the start, and a task counts as closed since the start by the
+  minute in its receipt. A note says that Git's reflog here does not reach your
+  start. The same holds for commits where the reflog's entries expired or reflogs
+  are turned off, and for done tasks where a start could not read the records. End
+  such a session and start it again to take a record the new rules can use.
 - A close names its task in the checkout's seals even when it seals no file, so the
   gate knows the task closed there. The note that a shared checkout shows what
   changed, not who changed it, now follows only a change made here.
@@ -75,8 +73,7 @@ file formats can change in any 0.x release.
   as your changes, and the gate could clear with the work uncommitted. A file that one
   of your own closes sealed in the checkout, that still holds the sealed bytes and is
   uncommitted, is now asked for whether or not it was dirty at your start. No other
-  session is asked for it, and a file changed since the seal stays under Recorded, as
-  before. 0.8.0 had this gap.
+  session is asked for it. 0.8.0 had this gap.
 - The finding for two writers in one checkout says who acts. It names the writer whose
   start there is the newest, by the start time its presence entry holds, to park, open
   or close its product claims or to commit and move to a worktree of its own. It also
@@ -110,6 +107,16 @@ file formats can change in any 0.x release.
 
 ### Known issues
 
+- A squash merge, a cherry-pick, a rebase or `git am` of another session's closed
+  work makes a commit in your checkout, and Git keeps no trace that tells it from
+  your own work. That task then excuses it only when it closed in the same checkout,
+  so the gate can name those files for you. The limits page states it.
+- Edits made while finishing a merge by hand are not counted, since Recorded reads no
+  path from a merge commit. Asked for a merge commit's changes, Git also names every
+  file it merged on its own. 0.8.0 had the same gap.
+- Closed work that you edit after its close and leave uncommitted through an end and
+  a start is no longer counted, since the new start record lists it as dirty at your
+  start. 0.8.0 had the same gap.
 - A task you closed covers your later commits in its scope, new work included, since
   Recorded covers a committed file by the task's scope alone. The seal that tells a
   closed task's uncommitted files from later edits lasts only until the file is

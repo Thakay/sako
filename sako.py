@@ -25,6 +25,7 @@ import time
 import tempfile
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 VERSION = "0.8.0"
@@ -647,12 +648,9 @@ def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) 
     """This session's entry as it would be written. Its start record (start revision, files dirty
     at start, start time, the newest entry of the checkout's HEAD reflog, the tasks then done)
     belongs to the checkout it last started in, so a resume there keeps it; a start in another
-    one, after end, after its entry was deleted unseen, or on an earlier release's entry takes a
-    new one."""
+    one, after end, or after its entry was deleted unseen takes a new one."""
     previous = previous or {}
-    # one an earlier release wrote names no reflog entry and no done tasks, so it is not kept
-    kept = previous if previous.get("work_root") == str(roots.work) \
-        and "reflog_at_start" in previous else {}
+    kept = previous if previous.get("work_root") == str(roots.work) else {}
     new, done = not kept.get("started_at"), kept.get("done_at_start")
     with suppress(SakoError):  # records that cannot be read leave none, as an earlier release did
         done = [r.id for r in read_ledger(roots, load_config(roots.kit)) if r.doc == DONE] if new \
@@ -1020,12 +1018,13 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
     # the walk only where the start is unknown.
     since -= 60 if blind else 2
     span = [f"{rev}..HEAD"] if known else [f"--since=@{min([since, *made.values()])}", "HEAD"]
-    # for a merge commit --cc lists what differs from every parent, as a resolution by hand
-    log = git(roots.work, "log", "-z", "--cc", "--no-renames", "--name-only",
+    # a merge commit lists no path; asked for its combined changes, Git would name every file
+    # both parents changed, merged by hand or not
+    log = git(roots.work, "log", "-z", "--no-renames", "--name-only",
               "--date=short-local", "--format=%x00/%H %h %ct %ad %s", *span, check=False)
     mine, theirs, counted, label, first = {}, {}, {}, "", False
     # With -z a commit's line and each of its paths end in a NUL. The line starts with a slash, as
-    # no path does, and the first path follows a newline, or an empty item for a merge commit.
+    # no path does, and the first path follows a newline.
     for item in log.split("\0"):
         if item.startswith("/"):
             # the author's day, local like a receipt's; a rebase keeps it
@@ -1073,6 +1072,16 @@ def unexplained(roots: Roots, config: dict, entry: dict | None, moved: list[str]
             if path == UNKNOWN or checked_as(roots.work, path) != then.get(path, "")]
 
 
+def closed_at(row: Row) -> float:
+    """A done row's close, in seconds since the epoch, from the start of the minute its receipt
+    names, in the receipt's own offset; 0 when it names none. It decides what closed since the
+    start only for a start record that names no done tasks, as 0.8.0 decided it."""
+    found = re.findall(r"; closed ([\dT:-]{16}[+-]\d{4})", row.evidence)
+    with suppress(ValueError):
+        return datetime.strptime(found[-1], "%Y-%m-%dT%H:%M%z").timestamp() if found else 0
+    return 0
+
+
 def visiting(roots: Roots, rows: list[Row], live: list[dict], marker: str | None) -> Row | None:
     """The claim of this checkout's writer when this session is not it, as anywhere it did not last
     start, even with a product claim. The product changes here are then the writer's to record and
@@ -1092,9 +1101,11 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
     such file, since a new start record, as after an end, lists them as dirty at start."""
     changed, note, merged, blind = session_changes(roots, entry)
     own, writer = my_rows(rows, marker), visiting(roots, rows, live, marker)
-    # a task done at the start excuses nothing; an earlier release's record names none as done
     since, done = (entry or {}).get("started_at"), (entry or {}).get("done_at_start")
-    done = {task for task in done if isinstance(task, str)} if isinstance(done, list) else set()
+    # A task done at the start excuses nothing. A record that names none, as one 0.8.0 wrote or
+    # one taken while the records could not be read, goes by the minute in each receipt instead.
+    listed = isinstance(done, list)
+    done = {task for task in done if isinstance(task, str)} if listed else set()
     # by task, the closes made in this checkout, each with what it sealed here
     seals = {t: s for t, s in read_json(roots.local / "seals.json").items() if isinstance(s, dict)}
     # of its own closes only what is still uncommitted, so no clean file is read for an old seal
@@ -1117,7 +1128,8 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
         merge = committed and path in merged
         closer = next((r for r in reversed(rows) if r.doc == DONE and r.claim
                        and holder_key(r.claim) != key_of(marker) and isinstance(since, int)
-                       and r.id not in done and (merge or r.id in seals)
+                       and (r.id not in done if listed else closed_at(r) >= since)
+                       and (merge or r.id in seals)
                        and covers(r, path, held)), None)
         if closer:
             exempt.setdefault((f"merged under {closer.id}" if merge else f"committed under "
