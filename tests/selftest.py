@@ -182,9 +182,9 @@ def lapse(root: Path, session: str, ago: int | None = None) -> dict:
 
 
 def started_ago(root: Path, session: str, seconds: int = 60) -> None:
-    """Move a session's start time back a minute, so a task another session closes now counts as
-    closed since it started, as it would in a longer session. A receipt keeps its close to the
-    minute, and that minute counts from its start. Rewriting the entry also renews it."""
+    """Move a session's start time back a minute, as in a longer session. A test of a defect that
+    0.8.0 had only for a close in a later minute than the start uses it, so it fails on 0.8.0.
+    Rewriting the entry also renews it."""
     path = entry_path(root, session)
     entry = json.loads(path.read_text())
     path.write_text(json.dumps(dict(entry, started_at=entry["started_at"] - seconds)))
@@ -627,7 +627,6 @@ def scenario_neutral_package_and_shared_host_sessions(ws: Path) -> None:
     succeeds(installed(repo, "start", session="host-first"))
     succeeds(installed(repo, "claim", "T-1", session="host-first"))
     peer = succeeds(installed(repo, "start", session="host-second"))
-    started_ago(repo, "host-second")  # so the first's close, made in this minute, comes after its start
     expect(f"peer {marker('host-first')}" in peer, "the second conversation sees the first as a live peer")
     refusal = installed(repo, "claim", "T-1", "--takeover", "Inspect existing work", session="host-second")
     expect(refusal.returncode == 3 and f"T-1 is held by {marker('host-first')}, a live session last seen " in refusal.stderr,

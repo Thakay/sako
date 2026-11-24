@@ -155,10 +155,15 @@ class Words(unittest.TestCase):
         detail = self.section("The gate and checks in detail")
         self.assertIn("It counts no file under `.sako/`, so a scope there only locks paths against other claims", detail)
         self.assertIn("The first line of `check --gate` is its verdict, and its exit code decides", detail)
+        self.assertIn("A task another session closed since you started excuses merged changes in its scope, and those made "
+                      "here only if it closed here.", detail)
         limits = self.text("docs/limits.md")
         for words in ("The gate judges only the checkout it runs in", "In a shared checkout the gate sees what changed, not who "
                       "changed it.", "Closing a task scoped `.` makes the Committed fix stage every uncommitted change made "
-                      "here between your start and its close, a peer's included", "Recorded cannot tell who made a commit",
+                      "here between your start and its close, a peer's included", "Recorded cannot tell who made a commit "
+                      "here, so a task another session closed here since you started excuses your commit in its scope.",
+                      "where Git's reflog does not reach your start, as for a start by 0.8.0, every commit counts as merged, "
+                      "with a note.",
                       "A close seals what each of its files holds, whoever wrote it, so read `git diff` before following a "
                       "Committed fix.", "Whether a closed task still covers an uncommitted file goes by what the file "
                       "holds, not by when it was written."):
@@ -229,11 +234,12 @@ class Words(unittest.TestCase):
                       "a writer's start in another checkout, a session back from an end or a lapsed lease",
                       "the ledger check names them, and each gate shows the other's files until one moves.",
                       "Each start in another checkout takes a new start record",
-                      "A task a peer closes in the minute you started excuses nothing.",
                       "A crashed session, or one without hooks that never ran `end`, reads as live for two hours and locks "
                       "product claims in its checkout until then",
                       "A copy of `.sako/state/` with new file times revives its sessions."):
             self.assertIn(words, limits)
+        for page in Links().pages():  # the start record names the tasks then done, so no minute decides
+            self.assertNotIn("in the minute you started", " ".join(page.read_text(encoding="utf-8").split()), page)
 
     def test_a_writer_is_the_session_that_last_started_in_a_checkout_and_a_new_worktree_is_wired_by_init(self):
         beside = self.section("Working beside other sessions")

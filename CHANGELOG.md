@@ -31,6 +31,32 @@ file formats can change in any 0.x release.
   you still hold covers a moved file and every other checked file you moved still
   holds what the last pass checked, and its receipt then says "no automated check
   (records only)". With no such claim it asks for the check as before.
+- A task another session closed since you started no longer excuses your own commit
+  in its scope when it closed in another checkout. The gate reads the checkout's Git
+  reflog to tell a commit made here, by a commit, an amend, a cherry-pick, a revert,
+  a rebase or `git am`, from one that a merge, pull, checkout or reset brought. A
+  merged commit that such a task covers still does not count, and its note says
+  "merged under T-n". In one shared checkout the gate still cannot tell whose commit
+  it is, so a task another session closed there excuses a commit made there in its
+  scope, as the limits page says. 0.8.0 had this gap and named it in its known issues.
+- Whether a task closed since you started is no longer decided by the minute in its
+  receipt. The start record keeps the tasks done at your start, and a task excuses
+  only when it is not among them, so one a peer closes in the same minute as your
+  start excuses its merged work, and the two-session demo clears at real speed. A
+  commit made here counts whatever date it carries, so the gate no longer searches
+  the minute before the start. A commit that came from elsewhere counts only when it
+  was made since your start, because only its date tells it from an older one.
+- A start record from 0.8.0, kept through a resume, names no reflog entry and no
+  done tasks. Until the session takes a new one, every commit counts as merged and
+  any task another session closed may excuse it, which names nothing wrongly, and a
+  note says that Git's reflog here does not reach your start. The same note comes
+  when the reflog's entries expired or reflogs are turned off.
+- A close names its task in the checkout's seals even when it seals no file, so the
+  gate knows the task closed there. The note that a shared checkout shows what
+  changed, not who changed it, now follows only a change made here.
+- The two-session demo pinned its commit dates, which hid the merged commit from the
+  code session's gate. Its commits now get the real time, with their hashes
+  normalized, and its last gates show the merged guide as not counted.
 
 ## [0.8.0] - 2026-11-19
 

@@ -231,7 +231,7 @@ close work you did not build, name its builder in the receipt.
 
 ## The gate and checks in detail
 
-Read this when a gate finding or a check result needs explaining. The stamp of
+Read this when a gate finding or check result needs explaining. The stamp of
 `verify` covers the content, paths, symlink text and executable bit of unignored
 files under `verify_paths`. An empty list covers everything outside `.sako/`,
 documentation included, so name product subtrees if documentation-only work should
@@ -241,18 +241,18 @@ and a named check is evidence, never a gate rule.
 
 The gate judges the checkout it runs in, for a hook the session's current
 checkout. It counts no file under `.sako/`, so a scope there only locks paths
-against other claims. Work in another linked worktree, even a nested one, counts
-here once merged; until then, a gate run there judges its uncommitted files, and its
-commits if you last started there.
+against other claims. Work in another linked worktree counts here once merged; until
+then, a gate run there judges its uncommitted files, and its commits if you last
+started there.
 
 **Recorded** counts files edited since the session started or committed since then,
 deletions and both sides of a rename; a file already dirty at start counts only when
 it changes again. While another live session is this checkout's writer and you are
-not, the changes here are its to answer for. A change that a task another session
-closed since you started covers does not count either. `close` seals each
-uncommitted file in the task's scope that counts as your change. The closed task
-covers a committed file by its scope and an uncommitted one while it holds the
-sealed bytes, so a stash and its pop change nothing.
+not, the changes here are its to answer for. A task another session closed since you
+started excuses merged changes in its scope, and those made here only if it closed
+here. `close` seals each uncommitted file in its scope that counts as your change.
+The closed task covers a committed file by its scope and an uncommitted one while it
+holds the sealed bytes, so a stash and pop change nothing.
 
 **Proven** wants a fresh check once checked content moved since your start. A close
 whose receipt shows the gate's check pass stays proven while a claim you still hold

@@ -1,6 +1,5 @@
 """The finish gate: Recorded, Proven and Committed, each finding with its rule and its fix."""
 
-from datetime import datetime, timezone
 from pathlib import Path
 import argparse
 import contextlib
@@ -14,7 +13,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
@@ -267,6 +265,12 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.stop("s1")[0], 0, "a second start keeps the first snapshot")
 
     def test_commits_since_start_count_and_older_merged_commits_do_not(self):
+        fixture.git(self.root, "checkout", "-qb", "side")  # made before the session, so it is dated before its start
+        fixture.write(self.root, {"src/side.py": "x = 1\n"})
+        env = dict(fixture.ENV, GIT_COMMITTER_DATE="2001-01-01T00:00:00Z", GIT_AUTHOR_DATE="2001-01-01T00:00:00Z")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], env=env, check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "old work"], env=env, check=True)
+        fixture.git(self.root, "checkout", "-q", "main")
         self.start("s1")
         fixture.write(self.root, {"src/app.py": "print(3)\n"})
         fixture.commit_all(self.root, "an unrecorded change")
@@ -274,14 +278,32 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 2, err)
         self.assertRegex(err, r'src/app\.py \(in commit [0-9a-f]+ of \d{4}-\d\d-\d\d "an unrecorded change"\)')
         fixture.git(self.root, "reset", "-q", "--hard", "HEAD~1")
-        fixture.git(self.root, "checkout", "-qb", "side")
-        fixture.write(self.root, {"src/side.py": "x = 1\n"})
-        env = dict(fixture.ENV, GIT_COMMITTER_DATE="2001-01-01T00:00:00Z", GIT_AUTHOR_DATE="2001-01-01T00:00:00Z")
-        subprocess.run(["git", "-C", str(self.root), "add", "-A"], env=env, check=True)
-        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "old work"], env=env, check=True)
-        fixture.git(self.root, "checkout", "-q", "main")
         fixture.git(self.root, "merge", "-q", "--ff-only", "side")
-        self.assertEqual(self.stop("s1")[0], 0, "a pulled commit made before the session is not this session's change")
+        self.assertEqual(self.stop("s1")[0], 0, "a merged commit made before the session is not this session's change")
+
+    def test_a_pull_brings_no_older_commit_and_a_pull_that_rebases_names_your_commits_by_their_new_hashes(self):
+        upstream = self.base / "upstream"
+        fixture.git(self.base, "clone", "-q", str(self.root), str(upstream))
+        old = dict(fixture.ENV, GIT_COMMITTER_DATE="2001-01-01T00:00:00Z", GIT_AUTHOR_DATE="2001-01-01T00:00:00Z")
+        for name in ("one", "two"):  # made upstream before the session, so dated before its start
+            fixture.write(upstream, {f"src/{name}.py": "x = 1\n"})
+            subprocess.run(["git", "-C", str(upstream), "add", "-A"], env=old, check=True)
+            subprocess.run(["git", "-C", str(upstream), "commit", "-qm", f"upstream {name}"], env=old, check=True)
+            if name == "one":
+                self.start("s1")
+                fixture.git(self.root, "pull", "-q", "--no-rebase", str(upstream), "main")
+                self.assertEqual(self.stop("s1")[:2], (0, ""), "a pulled commit made before the start is no one's here")
+                fixture.write(self.root, {"src/app.py": "print(2)\n"})
+                fixture.commit_all(self.root, "an unrecorded change")
+                before = fixture.git(self.root, "rev-parse", "--short", "HEAD")
+        fixture.git(self.root, "pull", "-q", "--rebase", str(upstream), "main")
+        after = fixture.git(self.root, "rev-parse", "--short", "HEAD")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn("covered by no task you claimed or closed: src/app.py (in commit ", err)
+        self.assertIn(f"{after} of ", err, "the commit the rebase made here")
+        self.assertNotIn(before, err, "not the one it replaced")
+        self.assertNotIn("src/two.py", err)
 
     def test_a_commit_that_a_clock_stepping_back_dates_before_the_start_still_counts(self):
         self.start("s1")
@@ -293,6 +315,129 @@ class Gate(unittest.TestCase):
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
         self.assertRegex(err, r'src/app\.py \(in commit [0-9a-f]+ of [\d-]+ "just after the start"\)')
+
+    def peer_closes_docs(self):
+        """A peer in a worktree of its own closes T-2, scoped docs/, and commits its file on its branch, side."""
+        side = self.base / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        self.start("peer", where=side)
+        fixture.succeeds(fixture.installed_copy(side, "claim", "T-2", "--session", "peer"))
+        fixture.write(side, {"docs/peer.md": "the peer's notes\n"})
+        fixture.succeeds(fixture.installed_copy(side, "close", "T-2", "--evidence", "Wrote notes", "--session", "peer"))
+        fixture.commit_all(side, "Peer notes")
+        return f"\nnot counted: docs/peer.md: merged under T-2, closed by {sako.marker_for('peer')}\n"
+
+    def test_a_task_closed_in_another_checkout_excuses_no_commit_made_here_before_or_after_a_merge_of_its_branch(self):
+        """This session's own commit in the scope of a task a peer closed in its own worktree since the start counts,
+        with no merge, after a fast-forward and after a merge commit, while the peer's merged file does not."""
+        self.start("s1")
+        fixture.started_ago(self.root, "s1")
+        merged, base = self.peer_closes_docs(), fixture.git(self.root, "rev-parse", "HEAD")
+        for merge in ("", "--ff-only", "--no-ff"):
+            with self.subTest(merge=merge or "none"):
+                fixture.git(self.root, "reset", "-q", "--hard", base)
+                if merge:
+                    fixture.git(self.root, "merge", "-q", "--no-edit", merge, "side")
+                fixture.write(self.root, {"docs/mine.md": f"this session's own notes {merge}\n"})
+                fixture.commit_all(self.root, "My notes")  # directly in this checkout, with no task
+                code, _, err = self.stop("s1")
+                self.assertEqual(code, 2, err)
+                self.assertRegex(err, r'covered by no task you claimed or closed: docs/mine\.md \(in commit [0-9a-f]+ of '
+                                      r'[\d-]+ "My notes"\)\n')
+                self.assertEqual(merged in err, bool(merge), err)
+                self.assertNotIn("a shared checkout", err)
+
+    def test_a_merge_of_a_branch_whose_task_closed_since_the_start_counts_none_of_its_files_in_the_same_minute(self):
+        self.start("s1")
+        merged, base = self.peer_closes_docs(), fixture.git(self.root, "rev-parse", "HEAD")
+        for merge in ("--ff-only", "--no-ff"):
+            with self.subTest(merge=merge):
+                fixture.git(self.root, "reset", "-q", "--hard", base)
+                fixture.git(self.root, "merge", "-q", "--no-edit", merge, "side")
+                self.assertEqual(self.run_in(self.root, "check", "--gate", session="s1"),
+                                 (0, f"SAKO gate: clear in {self.root.resolve().as_posix()}{merged}", ""))
+
+    def test_amended_rebased_picked_and_reverted_commits_name_each_path_once_by_the_commit_that_holds_it(self):
+        fixture.git(self.root, "checkout", "-qb", "base")  # made before the session, then rebased onto
+        fixture.write(self.root, {"src/base.py": "x = 0\n"})
+        env = dict(fixture.ENV, GIT_COMMITTER_DATE="2001-01-01T00:00:00Z", GIT_AUTHOR_DATE="2001-01-01T00:00:00Z")
+        subprocess.run(["git", "-C", str(self.root), "add", "-A"], env=env, check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "old base"], env=env, check=True)
+        fixture.git(self.root, "checkout", "-q", "main")
+        self.start("s1")
+        fixture.write(self.root, {"src/a.py": "a = 1\n"})
+        replaced = [fixture.commit_all(self.root, "one")]
+        fixture.git(self.root, "commit", "-q", "--amend", "-m", "one, amended")
+        fixture.write(self.root, {"src/b.py": "b = 1\n"})
+        replaced += [fixture.git(self.root, "rev-parse", "HEAD"), fixture.commit_all(self.root, "two")]
+        fixture.git(self.root, "rebase", "-q", "base")
+        fixture.git(self.root, "revert", "--no-edit", "HEAD")
+        fixture.git(self.root, "checkout", "-qb", "extra", "HEAD~2")
+        fixture.write(self.root, {"src/c.py": "c = 1\n"})
+        replaced.append(fixture.commit_all(self.root, "three"))
+        fixture.git(self.root, "checkout", "-q", "main")
+        fixture.git(self.root, "cherry-pick", replaced[-1])
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        finding = err.split("covered by no task you claimed or closed: ")[1].split("\n")[0]
+        self.assertEqual(re.findall(r"src/\w+\.py", finding), ["src/a.py", "src/b.py", "src/c.py"], finding)
+        for commit in replaced:
+            self.assertNotIn(commit[:7], err, "a commit no longer on this branch is not named")
+
+    def test_where_the_reflog_does_not_reach_the_start_every_commit_counts_as_merged_and_the_gate_says_so(self):
+        """An entry 0.8.0 wrote keeps no reflog entry and no done tasks, a reflog can expire, and reflogs can be off."""
+        side = self.base / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        self.start("peer", where=side)
+        for args in (("claim", "T-2"), ("close", "T-2", "--evidence", "Outlined the docs")):
+            fixture.succeeds(fixture.installed_copy(side, *args, "--session", "peer"))
+        self.start("s1")  # T-2 is done at its start
+        path = fixture.entry_path(self.root, "s1")
+        entry = json.loads(path.read_text())
+        fixture.write(self.root, {"docs/mine.md": "this session's own notes\n"})
+        fixture.commit_all(self.root, "My notes")
+        note = ("note: Git's reflog here does not reach your start, so your commits are judged as merged ones, which a task "
+                "another session closed can excuse.\n")
+        for way in ("an entry from 0.8.0", "an expired reflog", "reflogs turned off"):
+            with self.subTest(way):
+                if way == "an entry from 0.8.0":
+                    path.write_text(json.dumps({k: v for k, v in entry.items() if k not in ("reflog_at_start",
+                                                                                            "done_at_start")}))
+                    code, out, err = self.run_in(self.root, "check", "--gate", session="s1")
+                    self.assertEqual(code, 0, out + err)
+                    self.assertTrue(out.endswith(f"\nnot counted: docs/mine.md: merged under T-2, closed by "
+                                                 f"{sako.marker_for('peer')}\n{note}"), "with no list of done tasks, "
+                                    "every task another session closed excuses, so nothing is named wrongly")
+                    path.write_text(json.dumps(entry))
+                    continue
+                if way == "an expired reflog":
+                    fixture.git(self.root, "reflog", "expire", "--expire=now", "--all")
+                else:
+                    (self.root / ".git/logs/HEAD").unlink(missing_ok=True)
+                    fixture.git(self.root, "config", "core.logAllRefUpdates", "false")
+                    fixture.write(self.root, {"docs/later.md": "more notes\n"})
+                    fixture.commit_all(self.root, "More notes")
+                code, _, err = self.stop("s1")
+                self.assertEqual(code, 2, err)
+                self.assertRegex(err, r"covered by no task you claimed or closed: (docs/later\.md \(in commit [^)]+\), )?"
+                                      r"docs/mine\.md \(in commit ", "T-2 was done at the start, so it excuses nothing")
+                self.assertTrue(err.endswith(note), err)
+
+    def test_the_start_record_keeps_the_newest_reflog_entry_and_the_tasks_then_done_through_a_resume(self):
+        fixture.write(self.root, {".sako/work/DONE.md": fixture.done_file(
+            fixture.row("T-5", status="done", claim="sk-0101-aaaaaaaaaaaa"))})
+        newest = fixture.git(self.root, "log", "-g", "-1", "--format=%H %ct %gd %gs", "--date=unix", "HEAD")
+        self.start("s1")
+        fixture.write(self.root, {"src/app.py": "print(2)\n"})
+        fixture.commit_all(self.root, "Print two")
+        self.start("s1")  # a resume keeps the start record
+        entry = sako.my_entry(sako.resolve_roots(self.root), "s1")
+        self.assertEqual((entry["reflog_at_start"], entry["done_at_start"]), (newest, ["T-5"]))
+        self.assertTrue(newest.endswith(" commit (initial): fixture"), newest)
+        linked = self.base / "linked"
+        fixture.git(self.root, "worktree", "add", "-q", str(linked))
+        elsewhere = sako.my_entry(sako.resolve_roots(linked), "s1")
+        self.assertFalse({"reflog_at_start", "done_at_start"} & set(elsewhere), "the record applies where it was taken")
 
     def test_renames_and_deletions_name_both_sides(self):
         fixture.succeeds(fixture.installed_copy(self.root, "add", "Move the app", "--done-when", "Runs", "--scope", "src/main.py"))
@@ -322,7 +467,6 @@ class Gate(unittest.TestCase):
         linked = self.base / "linked"
         fixture.git(self.root, "worktree", "add", "-q", str(linked))
         self.start("s2", where=linked)
-        fixture.started_ago(self.root, "s2")  # so a task closed in this minute is closed since it started
         self.start("peer2")
         fixture.succeeds(fixture.installed_copy(self.root, "add", "Linked docs", "--done-when", "x", "--scope", "notes/"))
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-10", "--session", "peer2"))
@@ -342,8 +486,9 @@ class Gate(unittest.TestCase):
         fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Notes written", "--session", "peer2"))
         code, out, err = self.run_in(linked, "check", "--gate", session="s2")
         self.assertEqual(code, 0, out + err)
-        self.assertIn(f"not counted: notes/z.md: committed under T-10, closed by {sako.marker_for('peer2')}", out,
-                      "once its task closed, merged work is not this session's to record")
+        self.assertIn(f"not counted: notes/z.md: merged under T-10, closed by {sako.marker_for('peer2')}\n", out,
+                      "once its task closed, merged work is not this session's to record, in the minute it started too")
+        self.assertNotIn("a shared checkout", out, "the commit came from another checkout")
 
     def test_a_session_is_a_writer_only_in_the_checkout_it_last_started_in(self):
         side = self.base / "side"
@@ -427,7 +572,6 @@ class Gate(unittest.TestCase):
         self.start("s1")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
         self.start("s2", where=side)
-        fixture.started_ago(self.root, "s2")
         fixture.succeeds(fixture.installed_copy(side, "claim", "T-2", "--session", "s2"))
         fixture.write(side, {"src/util.py": "x = 1\n"})  # the writer there, outside its claim
         for args in (("verify",), ("close", "T-1", "--evidence", "Prints 1")):
@@ -487,7 +631,7 @@ class Gate(unittest.TestCase):
         closing = fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Planned", "--session", "s1")
         (self.root / "docs/draft.md").chmod(0o644)
         self.assertEqual(closing.returncode, 0, closing.stdout + closing.stderr)
-        self.assertEqual(self.seals(), {}, "a records task seals no product file")
+        self.assertEqual(self.seals(), {"T-2": {}}, "a records task seals no product file, and its close is named")
 
     def test_two_writers_in_one_checkout_are_named_however_they_arose(self):
         finding = (f"this checkout has 2 writers, {sako.marker_for('s1')} with T-1 and {sako.marker_for('s2')} with T-2, but a "
@@ -530,7 +674,6 @@ class Gate(unittest.TestCase):
 
     def test_not_counted_notes_name_three_paths_then_how_many_more_under_the_verdict_with_one_caveat_after_them(self):
         self.start("s1")
-        fixture.started_ago(self.root, "s1")
         self.start("peer")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "peer"))
         fixture.write(self.root, {f"docs/{name}.md": "notes\n" for name in "abcde"})
@@ -666,7 +809,6 @@ class Gate(unittest.TestCase):
 
     def test_a_commit_recorded_under_another_sessions_closed_task_is_not_this_sessions(self):
         self.start("s1")
-        fixture.started_ago(self.root, "s1")
         self.start("s2")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s2"))
         fixture.write(self.root, {"docs/x.md": "notes\n"})
@@ -686,7 +828,6 @@ class Gate(unittest.TestCase):
         fixture.write(self.root, {".sako/work/DONE.md": fixture.done_file(fixture.row(
             "T-5", "Broad import", status="done", claim=sako.marker_for("s2", "0101"), touches="`src/`, `docs/`"))})
         self.start("s1")
-        fixture.started_ago(self.root, "s1")
         self.start("s2")
         fixture.write(self.root, {"src/app.py": "print(5)\n"})
         fixture.commit_all(self.root, "work with no task")
@@ -701,27 +842,30 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         self.assertIn("not counted: src/app.py: committed under T-1, closed by sk-", out, "closed since this session started")
 
-    def test_a_task_closed_before_this_session_started_or_in_its_first_minute_covers_no_commit(self):
+    def test_a_task_done_at_the_start_excuses_no_merged_commit_and_one_closed_in_the_minute_of_the_start_does(self):
+        """The start record names the tasks then done, so no clock decides whether a close came since the start."""
+        side = self.base / "side"
+        fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(side))
+        fixture.succeeds(fixture.installed_copy(self.root, "add", "Docs c", "--done-when", "x", "--scope", "docs/c.md"))
+        self.start("peer", where=side)
+        for args in (("claim", "T-2"), ("close", "T-2", "--evidence", "Outlined the docs")):
+            fixture.succeeds(fixture.installed_copy(side, *args, "--session", "peer"))
         self.start("s1")
-        path = fixture.entry_path(self.root, "s1")
-        entry = json.loads(path.read_text())
-        first = entry["started_at"] // 60 * 60  # the start of the minute the session started in, in every zone
-        path.write_text(json.dumps(dict(entry, started_at=first + 30)))
-        fixture.write(self.root, {"src/app.py": "print(5)\n"})
-        fixture.git(self.root, "commit", "-qam", "work with no task")
-        for when, moment in (("three minutes before the start", first - 150), ("after the start, in its minute", first + 45)):
-            with self.subTest(when):
-                closed = time.strftime("%Y-%m-%dT%H:%M%z", time.localtime(moment))
-                fixture.write(self.root, {".sako/work/DONE.md": fixture.done_file(
-                    f"| T-5 | Broad import | Imported | Imported [sk-0101-aaaaaaaaaaaa; closed {closed}; no automated check] "
-                    "| `src/` | - |")})
-                code, _, err = self.stop("s1")
-                self.assertEqual(code, 2, err)
-                self.assertRegex(err, r'covered by no task you claimed or closed: src/app\.py \(in commit [0-9a-f]+ of ')
-                row = sako.parse_rows({"done": (self.root / ".sako/work/DONE.md").read_text()})[0]
-                self.assertEqual(sako.closed_at(row), moment // 60 * 60, "the start of the receipt's minute")
-        row.evidence = "Imported [sk-0101-aaaaaaaaaaaa]"
-        self.assertEqual(sako.closed_at(row), 0, "a receipt that names no close excuses nothing")
+        fixture.write(side, {"docs/b.md": "more docs, with no task\n"})
+        fixture.commit_all(side, "More docs")
+        for args in (("claim", "T-10"), ("close", "T-10", "--evidence", "Wrote c")):
+            if args[0] == "close":
+                fixture.write(side, {"docs/c.md": "c\n"})
+            fixture.succeeds(fixture.installed_copy(side, *args, "--session", "peer"))
+        fixture.commit_all(side, "Docs c")
+        fixture.git(self.root, "merge", "-q", "--ff-only", "side")
+        code, _, err = self.stop("s1")
+        self.assertEqual(code, 2, err)
+        self.assertIn('covered by no task you claimed or closed: docs/b.md (in commit ', err,
+                      "T-2 was done at the start, so it excuses nothing made since, even in its scope")
+        self.assertIn(f"\nnot counted: docs/c.md: merged under T-10, closed by {sako.marker_for('peer')}\n", err,
+                      "T-10 closed since the start, here within its first minute")
+        self.assertEqual(sako.my_entry(sako.resolve_roots(self.root), "s1")["done_at_start"], ["T-2"])
 
     def test_a_task_closed_just_before_a_new_session_started_excuses_none_of_its_commits(self):
         """The everyday case: a close, a new session within the same minute, then that session's own commits."""
@@ -739,17 +883,8 @@ class Gate(unittest.TestCase):
         self.assertRegex(err, r'covered by no task you claimed or closed: src/app\.py \(in commit [0-9a-f]+ of [\d-]+ "work with '
                               r'no task"\)')
 
-    def test_closed_at_reads_the_start_of_the_receipts_minute_in_the_receipts_own_offset(self):
-        moment = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc).timestamp()
-        for closed in ("2026-01-01T09:00+0000", "2026-01-01T14:30+0530", "2026-01-01T02:00-0700"):
-            with self.subTest(closed=closed):
-                row = sako.parse_rows({"done": fixture.done_file(f"| T-5 | Notes | Written | Wrote it [sk-0101-aaaaaaaaaaaa; "
-                                                                 f"closed {closed}; no automated check] | `docs/` | - |")})[0]
-                self.assertEqual(sako.closed_at(row), moment, "one moment, whatever zone the closing session was in")
-
     def test_a_live_writer_is_named_before_a_closed_task_that_also_covers_the_commit(self):
         self.start("s1")
-        fixture.started_ago(self.root, "s1")
         self.start("s2")
         self.start("s3")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s3"))
@@ -773,7 +908,6 @@ class Gate(unittest.TestCase):
         """A documented limit (docs/limits.md). A task scoped . covers every file, so its close counts a peer's closed,
         uncommitted edit as this session's closed work."""
         self.start("s1")
-        fixture.started_ago(self.root, "s1")
         self.start("peer")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "peer"))
         fixture.write(self.root, {"docs/draft.md": "the peer's draft\n"})
@@ -857,7 +991,7 @@ class Gate(unittest.TestCase):
         code, _, err = self.stop("s2")
         self.assertEqual(code, 2, err)
         self.assertIn(f"{unrecorded.rstrip()}{fix}", err, "another session's closed task excuses only what its close sealed, "
-                                                          "even when the clock puts the close in this session's first minute")
+                                                          "and T-1 was done at this session's start")
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
         late = ("\n    fix: if the content is still T-1's work, commit it under that task once commits are allowed (git add -- "
@@ -887,7 +1021,8 @@ class Gate(unittest.TestCase):
         fixture.write(self.root, {"src/app.py": "print(3)\n"})
         fixture.succeeds(fixture.installed_copy(self.root, "verify"))
         fixture.succeeds(fixture.installed_copy(self.root, "close", "T-10", "--evidence", "Prints 3", "--session", "s1"))
-        self.assertEqual(list(self.seals()), ["T-10"], "a close drops the seals whose files were committed or changed since")
+        self.assertEqual({task: set(files) for task, files in self.seals().items()}, {"T-1": set(), "T-10": {"src/app.py"}},
+                         "a close drops the seals whose files were committed or changed since, and keeps each close named")
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)
         self.assertIn("SAKO gate: 1 problem(s) before you stop:\n  Committed: T-10 is closed but its changes are not committed: "
@@ -918,7 +1053,6 @@ class Gate(unittest.TestCase):
 
     def test_a_task_another_session_closed_excuses_a_file_only_while_it_holds_what_the_close_sealed(self):
         self.start("s1")
-        fixture.started_ago(self.root, "s1")
         self.start("s2")
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s2"))
         fixture.write(self.root, {"docs/x.md": "notes\n"})
@@ -945,8 +1079,6 @@ class Gate(unittest.TestCase):
         fixture.git(self.root, "worktree", "add", "-q", "-b", "side", str(linked))
         for session in ("s2", "s3"):
             self.start(session, where=linked)
-        for session in ("s1", "s3"):
-            fixture.started_ago(self.root, session)
         fixture.succeeds(fixture.installed_copy(linked, "claim", "T-2", "--session", "s2"))
         for checkout in (linked, self.root):  # the same bytes in both checkouts
             fixture.write(checkout, {"docs/x.md": "notes\n"})
@@ -982,7 +1114,6 @@ class Gate(unittest.TestCase):
         fixture.write(self.root, {"src/tool": "print(1)\n"})
         fixture.commit_all(self.root, "A tool")
         self.start("s1")
-        fixture.started_ago(self.root, "s1")  # so the second session's task closes since it started
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-1", "--session", "s1"))
         (self.root / "src/tool").unlink()  # the module becomes a package of the same name
         fixture.write(self.root, {"src/tool/__init__.py": "print(1)\n"})
@@ -1020,7 +1151,7 @@ class Gate(unittest.TestCase):
         fixture.succeeds(fixture.installed_copy(self.root, "claim", "T-2", "--session", "s1"))
         fixture.write(self.root, {"docs/x.md": "notes\n"})
         fixture.succeeds(fixture.installed_copy(self.root, "close", "T-2", "--evidence", "Wrote notes", "--session", "s1"))
-        self.assertEqual(list(self.seals()), ["T-2"])
+        self.assertEqual({task: set(files) for task, files in self.seals().items()}, {"T-1": set(), "T-2": {"docs/x.md"}})
         fixture.git(self.root, "stash", "pop", "-q")
         code, _, err = self.stop("s1")
         self.assertEqual(code, 2, err)

@@ -5,7 +5,8 @@ Two session IDs stand in for agent sessions, and SAKO counts each as live for
 two hours after its last command that acts as it. The script runs their
 commands in sequence while both sessions are active; it does not run AI agents
 or measure parallel speed. Every command output comes from SAKO or Git. Paths,
-dates and times are normalized, and a test checks this transcript for drift.
+dates, times and the hashes of the commits made during the run are normalized,
+and a test checks this transcript for drift.
 
 The request: "Add a greeting by name and show how to use it."
 One session handles the code in the main checkout. Another handles the usage
@@ -178,7 +179,7 @@ $ git add -- greeting.py check.py
 $ git commit -qm "Greet a visitor by name"
 ```
 
-The scripted code session merges the docs branch. SAKO never commits or merges for it. The merge moves the checked content, so the gate asks for a fresh check before this session stops.
+The scripted code session merges the docs branch. SAKO never commits or merges for it. The merge moves the checked content, so the gate asks for a fresh check before this session stops. The guide came in by the merge, under a task the docs session closed, so the gate does not count it as this session's change.
 
 ```text
 $ git merge -q --no-edit t-2
@@ -189,6 +190,7 @@ $ python3 .sako/sako.py check --gate --session demo-code
 SAKO gate: 1 problem(s) before you stop:
   Proven: T-1 closed after checked content changed since you started, and the check is stale: checked content moved since the last pass (was def4522f695194ee, now d88520af32737bfb)
     fix: python3 .sako/sako.py verify, fix what it reports, then stop again.
+not counted: USAGE.md: merged under T-2, closed by sk-0115-0d70912d790f
 (exit 2)
 ```
 
@@ -201,6 +203,7 @@ check: PASS in 0s; covered 3 file(s); stamp d88520af32737bfb -> /work/greeting/.
 ```text
 $ python3 .sako/sako.py check --gate --session demo-code
 SAKO gate: clear in /work/greeting
+not counted: USAGE.md: merged under T-2, closed by sk-0115-0d70912d790f
 ```
 
 Each completed task leaves a receipt with its evidence and check result.
@@ -234,7 +237,7 @@ A fresh agent session is opened in the coding tool. It runs `start` to check in 
 
 ```text
 $ python3 .sako/sako.py start --session demo-next
-sako 0.8.0 · work /work/greeting (main, started at 5459a9fc2)
+sako 0.8.0 · work /work/greeting (main, started at 512572f7a)
 This project uses SAKO for task execution. Before a project task, read .sako/SAKO.md down to its Read when needed table, later sections only when they apply, and follow its daily loop. Questions need no task record until they change a file; add and claim come before that change. Project instructions and the owner's choices come first.
 kit: /work/greeting/.sako; method .sako/SAKO.md; records .sako/work/TASKS.md and .sako/work/DONE.md
 commands: python3 /work/greeting/.sako/sako.py <verb> --session demo-next

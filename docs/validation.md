@@ -8,7 +8,7 @@ guarantee for every environment; the [method](../SAKO.md) defines the behavior.
 
 | # | Guarantee | Evidence | Missing |
 |---|---|---|---|
-| 1 | **Three rules and a fix in every finding.** Recorded, Proven and Committed judge what changed in the checkout the gate runs in since the session started, read from Git, the start record, the seals that closes made in that checkout, the presence that names its writer, and the stamp of the gate's check, which a pass in another checkout on identical content can supply, with what each checked file held at the last pass there; a claim the session still holds excuses a stale check only for the files it covers; a named check is evidence, never a rule; faults in the records and overlaps with the session's claims also block; an absent or failing check never records a pass; every finding ends with its exact fix | [test_gate.py](../tests/test_gate.py): each rule and exemption, a checkout's writer, the seals, which ledger findings block, named checks that never block, the fix in every finding, a close refused without fresh evidence, a claim still held that explains only its own files after a merge, an edit or a commit and through a failing check, a stamp from 0.8.0; scenarios `stop_gate`, `verify_evidence`, `invalid_configuration_never_passes`; the [demo](demo.md) | Who made a change, which Git does not show |
+| 1 | **Three rules and a fix in every finding.** Recorded, Proven and Committed judge what changed in the checkout the gate runs in since the session started, read from Git and that checkout's reflog, the start record with the tasks then done, the seals that closes made in that checkout, the presence that names its writer, and the stamp of the gate's check, which a pass in another checkout on identical content can supply, with what each checked file held at the last pass there; a claim the session still holds excuses a stale check only for the files it covers; a named check is evidence, never a rule; faults in the records and overlaps with the session's claims also block; an absent or failing check never records a pass; every finding ends with its exact fix | [test_gate.py](../tests/test_gate.py): each rule and exemption, a checkout's writer, the seals, a commit made here told from a merged or pulled one and the note where the reflog does not reach the start, which ledger findings block, named checks that never block, the fix in every finding, a close refused without fresh evidence, a claim still held that explains only its own files after a merge, an edit or a commit and through a failing check, a stamp from 0.8.0; scenarios `stop_gate`, `verify_evidence`, `invalid_configuration_never_passes`; the [demo](demo.md) | Who made a change, which Git does not show |
 | 2 | **Refuses once, never traps.** A stop is blocked once; a repeated stop, a bug in the hook or a missing kit lets the session go; pausing with a held claim passes; findings about other sessions never block | A repeated stop fails open; claimed, unfinished work passes; handoff advisories and findings about other sessions never block; hooks exit 1, never 2, without the kit; a bug in the hook handler and a hook that cannot start Python let the session go | None |
 | 3 | **A receipt on every finished task.** The completion condition, the evidence, the claim's marker and time, the close time, and what the check said on its own fingerprint, at which commit and, for a pass from another checkout, where, or "no automated check", marked "(records only)" for records work closed without the check; then each fresh named check's pass; never a pass the check did not give | Receipts in each form, records work, a pass from another worktree and named checks included; an interrupted close finishes on repeat; the demo's receipt; scenario `greenfield_discovery_without_automated_check` | None |
 | 4 | **Plain, forgiving records.** Markdown tables with at most eight required columns, read by name; your columns and hand edits survive every write; IDs are never reused while their rows stay; a fault names its file and line | Columns by name in any order, your columns kept through close, hand edits, faults with file and line, a bad value held out of `next`; scenario `ledger_findings`; a test holds the required columns at 8 | None |
@@ -34,8 +34,8 @@ session in a test is live because it just ran a command, and a test makes one la
 by setting its last-seen time back. The skill meets the Agent Skills format. No
 independent agent or outside user has validated adoption judgment.
 
-The last local run was on 2026-11-20, on WSL2 (Ubuntu 24.04, Linux 6.18) with Git
-2.43.0. Both suites pass on Python 3.10.20 and 3.12.3, with 304 unit tests and 22
+The last local run was on 2026-11-23, on WSL2 (Ubuntu 24.04, Linux 6.18) with Git
+2.43.0. Both suites pass on Python 3.10.20 and 3.12.3, with 309 unit tests and 22
 scenarios.
 
 ## Native Windows
@@ -52,7 +52,7 @@ adds, UTF-8 output and paths passed.
 
 | File | What it proves |
 |---|---|
-| [test_gate.py](../tests/test_gate.py) | The three rules and their exemptions, a checkout's writer and two writers named, the start record of the checkout a session last started in, the seals a close keeps, which ledger findings block, records-only closes, named checks that never block, the rule and fix in every finding, the one-time block, a hook failing on its own, the handoff advisories |
+| [test_gate.py](../tests/test_gate.py) | The three rules and their exemptions, a checkout's writer and two writers named, the start record of the checkout a session last started in, a commit made there told from a merged one, the seals a close keeps, which ledger findings block, records-only closes, named checks that never block, the rule and fix in every finding, the one-time block, a hook failing on its own, the handoff advisories |
 | [test_sako.py](../tests/test_sako.py) | The ledger parser and configuration, hand edits, faults with their file and line, `next` ranking; it also runs the scenarios |
 | [test_workflow.py](../tests/test_workflow.py) | Commands end to end: parallel adds and claims, `edit`, repeat intake, prerequisites, interrupted closes, receipts, named checks, a pass from another worktree, the one-writer rule, peer lines, handoff folders, `--session` on every command |
 | [test_footprint.py](../tests/test_footprint.py) | The three footprints and the switches between them, worktrees, and one regression per defect the reviews found |
@@ -73,13 +73,13 @@ with the machine, filesystem, repository, cache and check command.
 
 | Measure | Observed |
 |---|---|
-| No client signal: kit and shared skill, no hooks | 6 files, 159,079 bytes |
-| Codex | 7 files, 160,713 bytes |
-| Claude Code, with its own skill copy | 8 files, 161,789 bytes |
-| Both clients | 9 files, 163,423 bytes |
+| No client signal: kit and shared skill, no hooks | 6 files, 162,124 bytes |
+| Codex | 7 files, 163,758 bytes |
+| Claude Code, with its own skill copy | 8 files, 164,834 bytes |
+| Both clients | 9 files, 166,468 bytes |
 | Installed method, one document | 3,000 whitespace-separated words |
 | Reading for a normal task, lone-session fixture | 1,342 words: skill 168, template preamble 46, start context 133, the method's required part 995 |
-| Runtime source | 2,512 lines, one standard-library Python file, within the 4,000-line cap |
+| Runtime source | 2,548 lines, one standard-library Python file, within the 4,000-line cap |
 | Initial install with no client signal, one sample | 55.5 ms |
 | Fingerprint fixture | 101 covered files, 409,609 bytes |
 | Trials per command | 7, median reported in the next rows |

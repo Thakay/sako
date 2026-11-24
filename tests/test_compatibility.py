@@ -583,6 +583,8 @@ class Compatibility(unittest.TestCase):
         self.cli("start", session="upgraded")
         entry = json.loads(path.read_text())
         self.assertEqual((entry["marker"], entry["started_at"]), (marker, 1), "a resume keeps its marker and start record")
+        self.assertEqual((entry["reflog_at_start"], entry["done_at_start"]), (None, None),
+                         "which names no reflog entry and no done tasks, so the gate takes the side that names nothing wrongly")
         self.assertFalse({"pid", "ns", "seen", "start_root"} & set(entry), "and writes no process, no last-seen field and "
                                                                            "no second checkout")
         older(int(time.time()) - sako.KEPT - 60)

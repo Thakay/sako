@@ -25,7 +25,6 @@ import time
 import tempfile
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 VERSION = "0.8.0"
@@ -631,10 +630,15 @@ def renew(roots: Roots, session_id: str) -> None:
 
 def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) -> dict:
     """This session's entry as it would be written. Its start record (start revision, files dirty
-    at start, start time) belongs to the checkout it last started in, so a resume there keeps it;
-    a start in another one, after end, or after its entry was deleted unseen takes a new one."""
+    at start, start time, the newest entry of the checkout's HEAD reflog, the tasks then done)
+    belongs to the checkout it last started in, so a resume there keeps it; a start in another
+    one, after end, or after its entry was deleted unseen takes a new one."""
     previous = previous or {}
     kept = previous if previous.get("work_root") == str(roots.work) else {}
+    new, done = not kept.get("started_at"), kept.get("done_at_start")
+    with suppress(SakoError):  # records that cannot be read leave none, as an earlier release did
+        done = [r.id for r in read_ledger(roots, load_config(roots.kit)) if r.doc == DONE] if new \
+            else done
     return {
         "marker": previous.get("marker") or marker_for(session_id), "session_id": session_id,
         "started": kept.get("started") or time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -645,6 +649,8 @@ def presence_entry(roots: Roots, session_id: str, previous: dict | None = None) 
         git(roots.work, "rev-parse", "HEAD", check=False),
         "dirty_at_start": kept["dirty_at_start"] if "dirty_at_start" in kept else
         {path: fingerprint(roots.work, path) for path in product(dirty_paths(roots.work))},
+        "reflog_at_start": git(roots.work, *REFLOG, "-1", check=False) if new  # "" for none
+        else kept.get("reflog_at_start"), "done_at_start": done,
     }
 
 
@@ -660,8 +666,9 @@ def my_entry(roots: Roots, session_id: str | None) -> dict | None:
     """This session's entry, without its start record in a checkout other than the one it last
     started in, since the record applies only there."""
     entry = read_entry(entry_path(roots, session_id)) if session_id else {}
+    start = ("started_at", "work_start_rev", "dirty_at_start", "reflog_at_start", "done_at_start")
     return {k: v for k, v in entry.items() if entry.get("work_root") == str(roots.work)
-            or k not in ("started_at", "work_start_rev", "dirty_at_start")} or None
+            or k not in start} or None
 
 
 # ----------------------------------------------------------------------------
@@ -930,12 +937,35 @@ def fingerprint(root: Path, relative: str) -> str:
     return hashlib.sha256(data).hexdigest()[:16]
 
 
-def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], str]:
-    """Paths this session changed, each with a label: dirty now and not as they were at start,
-    or in a commit made since the session started. Without a start record here, as in a checkout
-    other than the one it last started in, every dirty path counts and commits go unchecked; the
-    note says so. A linked worktree nested here (a harness's) is another checkout; its work counts
-    here once merged."""
+# a checkout's HEAD reflog, newest entry first: the commit, its date, the entry's time, the action
+REFLOG = ("log", "-g", "--format=%H %ct %gd %gs", "--date=unix", "HEAD")
+# an action that made its commit here: a commit of any kind, a revert, am, a cherry-pick but its
+# fast-forward, and a step of a rebase or of pull --rebase that writes a commit
+MADE = re.compile(r"(commit( \([\w-]+\))?|revert|am|.+ \((pick|reword|edit|squash|fixup|continue)\)"
+                  r"|cherry-pick(?!: fast-forward$)): ")
+
+
+def made_here(root: Path, mark) -> dict[str, int] | None:
+    """The commits this checkout's own HEAD reflog shows made here since the entry mark names, or in
+    all of it for "", with their dates. None when it cannot tell, as without a mark, or when it does
+    not reach that entry or end at HEAD, as after its entries expired or with reflogs turned off."""
+    if not isinstance(mark, str):  # an earlier release kept none
+        return None
+    lines = [line.rstrip() for line in git(root, *REFLOG, check=False).split("\n") if line]
+    head = git(root, "rev-parse", "-q", "--verify", "HEAD", check=False)
+    if (lines[0].split(" ")[0] if lines else "") != head or mark not in lines + [""]:
+        return None
+    new = [(line.split(" ", 3) + [""])[:4] for line in lines[:lines.index(mark) if mark else None]]
+    return {commit: int(date) for commit, date, _, act in new if date.isdigit() and MADE.match(act)}
+
+
+def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], str, set[str], bool]:
+    """Paths this session changed, each with a label: dirty now and not as they were at start, or
+    in a commit made since the session started. Then the note, the paths only commits made
+    elsewhere changed, and whether the reflog failed to tell, which counts every commit so.
+    Without a start record here, as in a checkout other than the one it last started in, every
+    dirty path counts and commits go unchecked; the note says so. A linked worktree nested here
+    (a harness's) is another checkout; its work counts here once merged."""
     nested = {p.relative_to(roots.work).as_posix() + "/" for p in checkouts(roots)
               if roots.work in p.parents}
     # untracked only: a gitlink counts
@@ -951,7 +981,7 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
                          f"{Path(elsewhere).as_posix()}, so every uncommitted file here counts and "
                          "commits were not checked" if elsewhere != str(roots.work) else
                          "no start record for this session (start did not run, or its entry was "
-                         "swept); commits since you started were not checked")
+                         "swept); commits since you started were not checked"), set(), False
     for path, before in start.items():
         # a nested checkout removed or moved away
         gone = path.endswith("/") and not (roots.work / path).is_dir()
@@ -959,18 +989,24 @@ def session_changes(roots: Roots, entry: dict | None) -> tuple[dict[str, str], s
             changed[path] = "edited after start; already dirty at start"
     rev = str(entry.get("work_start_rev") or "")
     known = rev and git(roots.work, "rev-parse", "-q", "--verify", f"{rev}^{{commit}}", check=False)
-    # a minute early, since a commit made just after the start reads as older than the start when
-    # the wall clock steps back, as WSL's can by a second or two
-    log = git(roots.work, "log", "--no-renames", "--name-only", "--format=%x00%h %ad %s",
-              "--date=short-local",
-              f"--since=@{since - 60}", f"{rev}..HEAD" if known else "HEAD", check=False)
+    made = made_here(roots.work, entry.get("reflog_at_start"))
+    blind, made = made is None, made or {}
+    # A commit made here counts whatever its date says, as after a clock that stepped back. One a
+    # merge, pull, checkout or reset brought keeps the date it got where it was made, and only
+    # that date tells it from one made before the start, which counts for no one here.
+    log = git(roots.work, "log", "--no-renames", "--name-only", "--format=%x00%H %h %ct %ad %s",
+              "--date=short-local", f"--since=@{min([since, *made.values()])}",
+              f"{rev}..HEAD" if known else "HEAD", check=False)
+    mine, theirs = {}, {}
     for block in log.split("\0")[1:]:
         subject, *paths = block.strip("\n").split("\n")
         # the author's day, local like a receipt's; a rebase keeps it
-        short, day, title = (subject.split(" ", 2) + [""])[:3]
+        commit, short, date, day, title = (subject.split(" ", 4) + [""])[:5]
+        counted = mine if commit in made else theirs if int(date) >= since else {}
         for path in product(set(paths) - start.keys()):
-            changed.setdefault(path, f'in commit {short} of {day} "{title}"')
-    return changed, ""
+            counted.setdefault(path, f'in commit {short} of {day} "{title}"')
+    # a path in a commit made here is yours, and an uncommitted change keeps its own label
+    return {**theirs, **mine, **changed}, "", set(theirs) - set(mine), blind and bool(theirs)
 
 
 def unexplained(roots: Roots, config: dict, entry: dict | None, moved: list[str],
@@ -1006,16 +1042,6 @@ def unexplained(roots: Roots, config: dict, entry: dict | None, moved: list[str]
             if path.startswith("(") or checked_as(roots.work, path) != then.get(path, "")]
 
 
-def closed_at(row: Row) -> float:
-    """A done row's close, in seconds since the epoch, from the start of the minute its receipt
-    names, in the receipt's own offset; 0 when it names none. A close in the minute a session
-    started counts as before the start even when it came after, the rarer and safer error."""
-    found = re.findall(r"; closed ([\dT:-]{16}[+-]\d{4})", row.evidence)
-    with suppress(ValueError):
-        return datetime.strptime(found[-1], "%Y-%m-%dT%H:%M%z").timestamp() if found else 0
-    return 0
-
-
 def visiting(roots: Roots, rows: list[Row], live: list[dict], marker: str | None) -> Row | None:
     """The claim of this checkout's writer when this session is not it, as anywhere it did not last
     start, even with a product claim. The product changes here are then the writer's to record and
@@ -1029,15 +1055,18 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
     """The Recorded rule: (unrecorded, each path with the text shown for it, not-counted notes,
     changed, start note, sealed). A checkout has one writer. With a live one here that is not this
     session, the changes here are the writer's; otherwise a change counts unless a task another
-    session closed since this one started covers it. Sealed maps each task to its changed files
+    session closed since this one started covers it, one closed here for a change made here, since
+    a checkout shows what changed, not who changed it. Sealed maps each task to its changed files
     that still hold what its close sealed in this checkout."""
-    changed, note = session_changes(roots, entry)
+    changed, note, merged, blind = session_changes(roots, entry)
     own, writer = my_rows(rows, marker), visiting(roots, rows, live, marker)
-    since = (entry or {}).get("started_at")
+    # a task done at the start excuses nothing; an earlier release's record names none as done
+    since, done = (entry or {}).get("started_at"), set((entry or {}).get("done_at_start") or ())
+    # by task, the closes made in this checkout, each with what it sealed here
     seals = {t: s for t, s in read_json(roots.local / "seals.json").items() if isinstance(s, dict)}
     sealed = {t: {p for p, f in s.items() if p in changed and fingerprint(roots.work, p) == f}
               for t, s in seals.items()}
-    unrecorded, exempt = {}, {}
+    unrecorded, exempt, shared = {}, {}, False
     for path, label in sorted(changed.items()):
         committed = label.startswith("in commit")
         # a closed task covers a committed file by its scope, an uncommitted one by its seal
@@ -1047,15 +1076,19 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
         if writer:
             exempt.setdefault(f"this checkout's writer, {writer.claim.split()[0]} with {writer.id},"
                               " records the product changes here", []).append(path)
+            shared = True
             continue
-        # an older close excuses nothing made since
+        # by a commit made elsewhere, any such task; by a change made here, one closed here
+        merge = committed and path in merged
         closer = next((r for r in reversed(rows) if r.doc == DONE and r.claim
                        and holder_key(r.claim) != key_of(marker) and isinstance(since, int)
-                       and closed_at(r) >= since and covers(r, path, held)), None)
+                       and r.id not in done and (merge or r.id in seals)
+                       and covers(r, path, held)), None)
         if closer:
-            exempt.setdefault((f"committed under {closer.id}" if committed
-                               else f"in {closer.id}'s scope") +
+            exempt.setdefault((f"merged under {closer.id}" if merge else f"committed under "
+                               f"{closer.id}" if committed else f"in {closer.id}'s scope") +
                               f", closed by {closer.claim.split()[0]}", []).append(path)
+            shared |= not merge
             continue
         # content one of your closes sealed, changed since
         if not committed and (after := next((r.id for r in reversed(own)
@@ -1065,7 +1098,9 @@ def recorded(roots: Roots, rows: list[Row], entry: dict | None, marker: str | No
     notes = [f"not counted: {', '.join(paths[:3])}"
              f"{f' and {len(paths) - 3} more' if len(paths) > 3 else ''}: {why}"
              for why, paths in exempt.items()] \
-        + (["note: a shared checkout shows what changed, not who changed it."] if exempt else [])
+        + (["note: a shared checkout shows what changed, not who changed it."] if shared else []) \
+        + (["note: Git's reflog here does not reach your start, so your commits are judged as "
+            "merged ones, which a task another session closed can excuse."] if blind else [])
     return unrecorded, notes, changed, note, sealed
 
 
@@ -2294,17 +2329,18 @@ def cmd_task(args: argparse.Namespace) -> int:
     receipt = (f"{cell(args.evidence, '--evidence')} "
                f"{receipt_part(roots, config, row.claim, records)}")
     # seal the task's uncommitted changes here, so the closed task covers such a file while it
-    # holds these bytes; a seal lasts while its file stays uncommitted and unchanged
+    # holds these bytes; a seal lasts while its file stays uncommitted and unchanged, and the task
+    # stays listed as a close made here, which lets it excuse another session's commit made here
     start, here = entry.get("dirty_at_start") or {}, roots.local / "seals.json"
     seals = {t: s for t, s in read_json(here).items() if isinstance(s, dict)}
     # only this task's files and those sealed before are read, never another session's
     dirty = {p: fingerprint(roots.work, p) for p in product(dirty_paths(roots.work))
              if covers(row, p) or any(p in s for s in seals.values())}
     # and nothing where this session did not last start, since another session writes there
-    seals[row.id] = {p: f for p, f in dirty.items() if covers(row, p) and start.get(p) != f} \
-        if "dirty_at_start" in entry else {}
-    atomic_write(here, json.dumps({t: left for t, s in seals.items() if (
-        left := {p: f for p, f in s.items() if dirty.get(p) == f})}, indent=1) + "\n")
+    if "dirty_at_start" in entry:
+        seals[row.id] = {p: f for p, f in dirty.items() if covers(row, p) and start.get(p) != f}
+    atomic_write(here, json.dumps({t: {p: f for p, f in s.items() if dirty.get(p) == f}
+                                   for t, s in seals.items()}, indent=1) + "\n")
     dropped = []
     if not previous:
         own = {c.lower() for c in COLUMNS["tasks"]}
